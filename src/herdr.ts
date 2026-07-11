@@ -111,7 +111,13 @@ export function herdr<T = unknown>(args: string[], opts: HerdrOpts = {}): Promis
       // herdr may emit trailing non-JSON lines; parse the last JSON object.
       const parsed = parseLastJson(out);
       if (parsed === null) {
-        // Not JSON. Allow raw text on success (e.g. `agent read --format text`).
+        // Some commands (e.g. `pane send-keys`) return empty output on success.
+        // Empty stdout + exit 0 + no stderr => silent success.
+        if (exitCode === 0 && !out.trim() && !stderr.trim()) {
+          finish({ ok: true, data: {} as T });
+          return;
+        }
+        // Allow raw text on success (e.g. `agent read --format text`).
         if (opts.textOk && exitCode === 0 && out.trim()) {
           finish({ ok: true, data: out as unknown as T });
           return;

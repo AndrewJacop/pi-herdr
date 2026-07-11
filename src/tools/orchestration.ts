@@ -66,6 +66,42 @@ async function resolvePaneId(target: string, signal?: AbortSignal): Promise<Resu
   return { ok: true, data: pid };
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Drive a spawned agent through one turn using herdr's transition waits:
+ * wait for `working` (the turn started), then `idle` (the turn finished).
+ * `wait agent-status` waits for a state *change*, which is reliable here because
+ * after a submitted prompt the agent transitions idle -> working -> idle.
+ *
+ * Returns ok on completion, or an error Result whose `message` is "NOT_STARTED"
+ * when the turn never entered working (caller may re-send the prompt).
+ */
+async function driveOneTurn(
+  paneId: string,
+  opts: { deadline: number; workingWindowMs?: number; signal?: AbortSignal },
+): Promise<Result<true>> {
+  const { signal } = opts;
+  const workingBudget = Math.min(
+    opts.workingWindowMs ?? 30_000,
+    Math.max(2_000, opts.deadline - Date.now()),
+  );
+  const working = await herdr(
+    ["wait", "agent-status", paneId, "--status", "working", "--timeout", String(workingBudget)],
+    { timeoutMs: workingBudget + 5_000, signal },
+  );
+  if (!working.ok) {
+    return { ok: false, error: { ...working.error, message: "NOT_STARTED" } };
+  }
+  const idleBudget = Math.max(5_000, opts.deadline - Date.now());
+  const idle = await herdr(
+    ["wait", "agent-status", paneId, "--status", "idle", "--timeout", String(idleBudget)],
+    { timeoutMs: idleBudget + 5_000, signal },
+  );
+  if (!idle.ok) return idle;
+  return { ok: true, data: true };
+}
+
 // ---- registration ----------------------------------------------------------
 
 export function registerOrchestration(pi: ExtensionAPI): void {
@@ -399,40 +435,53 @@ export function registerOrchestration(pi: ExtensionAPI): void {
         return partial("agent start returned no pane id", { name, agent: p.agent, error: startR.data });
       }
 
-      // 2. boot gate: wait briefly for idle (best-effort, ignores errors)
-      await herdr(["wait", "agent-status", paneId, "--status", "idle", "--timeout", "30000"], {
-        timeoutMs: 40_000,
-        signal,
-      });
-
-      // 3. send + submit
-      const sendR = await herdr(["agent", "send", paneId, p.prompt], { timeoutMs: 15_000, signal });
-      if (!sendR.ok) {
-        return partial(
-          `Started agent in pane ${paneId} but failed to send the prompt: ${sendR.error.message}`,
-          { paneId, name, error: sendR.error },
-        );
-      }
-      const enterR = await herdr(["pane", "send-keys", paneId, "Enter"], { timeoutMs: 15_000, signal });
-      if (!enterR.ok) {
-        return partial(
-          `Sent text to pane ${paneId} but failed to submit (Enter): ${enterR.error.message}`,
-          { paneId, name, error: enterR.error },
-        );
-      }
-
-      // 4. wait for working (best-effort — a very short turn may skip it)
-      await herdr(["wait", "agent-status", paneId, "--status", "working", "--timeout", String(Math.min(45_000, left()))], {
-        timeoutMs: left() + 5_000,
-        signal,
-      });
-
-      // 5. wait for idle (the real completion wait)
-      const idleBudget = Math.max(5_000, left());
-      const idleR = await herdr(
-        ["wait", "agent-status", paneId, "--status", "idle", "--timeout", String(idleBudget)],
-        { timeoutMs: idleBudget + 5_000, signal },
+      // 2. boot gate: wait for the boot idle transition. A spawned pi that inherits
+      //    the host's extensions/skills can spend ~40-60s in `unknown` before
+      //    reaching idle, so use a generous timeout and CHECK it (don't send until
+      //    the agent is actually idle/ready).
+      const boot = await herdr(
+        ["wait", "agent-status", paneId, "--status", "idle", "--timeout", "90000"],
+        { timeoutMs: 95_000, signal },
       );
+      if (!boot.ok) {
+        return partial(
+          `Agent in pane ${paneId} did not become idle (boot) within budget: ${boot.error.message}`,
+          { paneId, name, error: boot.error },
+        );
+      }
+      await sleep(1500); // brief settle so the TUI input is ready (PRD §2.2)
+
+      // 3-5. send + submit, then drive the turn (working -> idle). Re-send if the
+      //      turn never starts (the prompt can be lost if sent too early).
+      const turnDeadline = Date.now() + left();
+      let done: Result<true> = {
+        ok: false,
+        error: { code: "TIMEOUT", message: "no send attempt was made" },
+      };
+      for (let attempt = 0; attempt < 3 && Date.now() < turnDeadline; attempt++) {
+        if (attempt > 0) await sleep(2_000); // brief pause before re-sending
+        const sendR = await herdr(["agent", "send", paneId, p.prompt], { timeoutMs: 15_000, signal });
+        if (!sendR.ok) {
+          return partial(
+            `Started agent in pane ${paneId} but failed to send the prompt: ${sendR.error.message}`,
+            { paneId, name, error: sendR.error },
+          );
+        }
+        const enterR = await herdr(["pane", "send-keys", paneId, "Enter"], { timeoutMs: 15_000, signal });
+        if (!enterR.ok) {
+          return partial(
+            `Sent text to pane ${paneId} but failed to submit (Enter): ${enterR.error.message}`,
+            { paneId, name, error: enterR.error },
+          );
+        }
+        done = await driveOneTurn(paneId, {
+          deadline: turnDeadline,
+          workingWindowMs: 30_000,
+          signal,
+        });
+        if (done.ok) break;
+        if (done.error.message !== "NOT_STARTED") break; // only retry when the turn never started
+      }
 
       // 6. read (always attempt, even on timeout, to grab partial output)
       const readR = await herdr<unknown>(
@@ -441,10 +490,10 @@ export function registerOrchestration(pi: ExtensionAPI): void {
       );
       const response = readR.ok ? extractText(readR.data) : "";
 
-      if (!idleR.ok) {
+      if (!done.ok) {
         return partial(
           `Timed out waiting for agent to finish. Partial response from pane ${paneId}:\n${response || "(none)"}`,
-          { paneId, name, response, error: idleR.error },
+          { paneId, name, response, error: done.error },
         );
       }
 

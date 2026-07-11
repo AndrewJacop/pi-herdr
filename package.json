@@ -8,6 +8,11 @@
       "./src/index.ts"
     ]
   },
+  "scripts": {
+    "test": "node tests/smoke.mjs",
+    "test:live": "node tests/live.mjs && node tests/pong.mjs && node tests/delegate.mjs",
+    "typecheck": "tsc --noEmit"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.80.0",
     "typebox": ">=1.1.0"

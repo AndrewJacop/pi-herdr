@@ -102,18 +102,18 @@ type AgentPreset = "pi"|"claude"|"codex"|"omp"|"custom";
 
 ### Phase 1 — Core infra (v1 spine)
 
-- [ ] 1. `package.json` — `name`, `peerDependencies`: `@earendil-works/pi-coding-agent`, `typebox`; `pi.extensions: ["./src/index.ts"]`. `tsconfig.json` (module `nodenext`, strict). `README.md` skeleton.
-- [ ] 2. `src/env.ts` — shared types: `Target`, `AgentStatus`, `Result<T>`, `HerdrErrorCode`, `AgentPreset`, plus an `unwrap<T>()` helper that turns a `Result<T>` into a tool `execute()` return (`{content, details}` on ok; error text + `{error}` details on fail) so no tool repeats this.
-- [ ] 3. `src/herdr.ts` — **the one spawn module** (see Design A below).
-- [ ] 4. `src/launcher.ts` — `expandAgentSpec(spec)` (see Design B below).
-- [ ] 5. `src/config.ts` — resolve binary + presets (see Design C below).
+- [x] 1. `package.json` — `name`, `peerDependencies`: `@earendil-works/pi-coding-agent`, `typebox`; `pi.extensions: ["./src/index.ts"]`. `tsconfig.json` (module `nodenext`, strict). `README.md` skeleton.
+- [x] 2. `src/env.ts` — shared types: `Target`, `AgentStatus`, `Result<T>`, `HerdrErrorCode`, `AgentPreset`, plus an `unwrap<T>()` helper that turns a `Result<T>` into a tool `execute()` return (`{content, details}` on ok; error text + `{error}` details on fail) so no tool repeats this.
+- [x] 3. `src/herdr.ts` — **the one spawn module** (see Design A below).
+- [x] 4. `src/launcher.ts` — `expandAgentSpec(spec)` (see Design B below).
+- [x] 5. `src/config.ts` — resolve binary + presets (see Design C below).
 
 ### Phase 2 — Tier 1 orchestration (v1 deliverable)
 
-- [ ] 6. `src/tools/orchestration.ts` — register the 10 atomic tools (`start/send_prompt/read/wait/list/get/stop/rename/focus/explain`), each a thin wrapper: build argv → `herdr()` → `unwrap()`. `herdr_start_agent` is the template (full param schema in Design D).
-- [ ] 7. `herdr_delegate` composite (see Design E).
-- [ ] 8. `src/index.ts` — `export default function(pi)` that calls `registerOrchestration(pi)` and wires the footer-status hook (`agent_start`/`turn_end` → `herdr agent list` → `ctx.ui.setStatus`).
-- [ ] 9. Smoke-test the Appendix D ping→pong flow via tools from a live `pi -e ./src/index.ts` session.
+- [x] 6. `src/tools/orchestration.ts` — register the 10 atomic tools (`start/send_prompt/read/wait/list/get/stop/rename/focus/explain`), each a thin wrapper: build argv → `herdr()` → `unwrap()`. `herdr_start_agent` is the template (full param schema in Design D).
+- [x] 7. `herdr_delegate` composite (see Design E).
+- [x] 8. `src/index.ts` — `export default function(pi)` that calls `registerOrchestration(pi)` and wires the footer-status hook (`agent_start`/`turn_end` → `herdr agent list` → `ctx.ui.setStatus`).
+- [x] 9. Smoke-test the Appendix D ping→pong flow via tools from a live `pi -e ./src/index.ts` session.
 
 ### Follow-on phases (NOT in v1 scope — listed for sequencing only)
 
@@ -163,13 +163,13 @@ type AgentPreset = "pi"|"claude"|"codex"|"omp"|"custom";
 
 ## Verification (acceptance AC1–AC7)
 
-- [ ] `pi -e ./src/index.ts` loads with no errors; Tier-1 tools appear in tool list (AC1).
-- [ ] From a pi session: start pi agent → send "ping" → wait idle → read "pong", all via tools (AC2). Reproduce Appendix D flow.
-- [ ] `herdr_delegate` returns spawned agent's response in one call (AC3).
-- [ ] Windows: `herdr_start_agent agent:"pi"` succeeds — no "Win32 application" error (AC4).
-- [ ] herdr missing from PATH → every tool returns `HERDR_UNAVAILABLE`, no crash/hang (AC5).
-- [ ] Every blocking tool respects `timeoutMs` → `TIMEOUT` (AC6).
-- [ ] Destructive tools labeled ⚠️ in `description` (AC7).
+- [x] `pi -e ./src/index.ts` loads with no errors; Tier-1 tools appear in tool list (AC1).
+- [x] From a pi session: start pi agent → send "ping" → wait idle → read "pong", all via tools (AC2). Reproduce Appendix D flow.
+- [x] `herdr_delegate` returns spawned agent's response in one call (AC3).
+- [x] Windows: `herdr_start_agent agent:"pi"` succeeds — no "Win32 application" error (AC4).
+- [x] herdr missing from PATH → every tool returns `HERDR_UNAVAILABLE`, no crash/hang (AC5).
+- [x] Every blocking tool respects `timeoutMs` → `TIMEOUT` (AC6).
+- [x] Destructive tools labeled ⚠️ in `description` (AC7).
 
 **Manual smoke:** launch `herdr` (so server is running), then `pi -e ./src/index.ts` in a test project and exercise the ping→pong loop from a pi session.
 
@@ -186,3 +186,16 @@ type AgentPreset = "pi"|"claude"|"codex"|"omp"|"custom";
 
 - `wait agent-status` stdout shape on Windows (single envelope vs trailing event line) — confirm parse with a live `herdr` during Phase 2 smoke test; `herdr.ts` parses the **last** JSON object to be safe.
 - Agent names persist across turns for re-addressing (PRD Q4) — verify names survive in `agent list`; if not, return `paneId` prominently from `start`/`delegate`.
+
+## Implementation findings (verified during build — read before Tier 2–5)
+
+- **`wait agent-status` waits for a state *change*, not current state.** Waiting for `idle` when *already* idle times out ("timed out waiting for agent status change"). So `delegate` drives turns with `wait working` then `wait idle` (both transitions), and checks the boot-idle result rather than assuming. `agent get` reads current state if you ever need a snapshot.
+- **`agent read` result nests text under a wrapper key** (`result.read.text` / `result.pane_read.text`), not top-level. `extractText()` searches shallowly for `text`/`output`/`content`.
+- **`pane send-keys` returns empty stdout/stderr on success** (exit 0). `herdr.ts` treats empty-stdout + exit 0 + no-stderr as silent success `{}`. (Server-down, by contrast, prints a Rust error to stderr → `VALIDATION_ERROR` with that message.)
+- **Git Bash mangles `cmd /c` → `cmd C:/`** (PRD §2.3) — confirmed. Any herdr call made *from a POSIX shell* with a literal `/c` is corrupted; Node `spawn(shell:false)` is unaffected (verified: argv arrives as `["cmd","/c","pi"]`). All diagnostics/tests must go through Node, not bash.
+- **Spawned pi boot is fast (~2s) via Node**, but a spawned pi **inherits the host's global config** (extensions/skills/model) — with a slow model or near-full context a turn can take minutes. `delegate` retries the send if the turn never starts and always reads on timeout; pass a generous `timeoutMs` for slow agents.
+- **herdr is a native `.exe`** at `C:\Users\Andrew\AppData\Local\Programs\Herdr\bin\herdr.exe` (PRD §2.4 wrong) — spawned directly, no shell.
+
+## Status
+
+**v1 (Tier 1) complete — all AC1–AC7 validated.** `npm test` (server-less, 48 checks) + live `tests/{live,pong,delegate}.mjs` (require a running herdr session; `pong`/`delegate` also need a working model/API key for the spawned pi).

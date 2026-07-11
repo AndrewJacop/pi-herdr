@@ -104,17 +104,33 @@ function pickStr(o: Record<string, unknown>, ...keys: string[]): string | undefi
   return undefined;
 }
 
-/** Extract textual output from a herdr `agent read` / `pane read` result. */
+/** Extract textual output from a herdr `agent read` / `pane read` result.
+ *  The payload may be a bare string, `{text}` at top level, or nested under a
+ *  wrapper key (`{read:{text}}` / `{pane_read:{text}}`), so we search shallowly. */
+function findTextField(o: unknown, depth = 0): string | undefined {
+  if (!o || typeof o !== "object" || depth > 2) return undefined;
+  const obj = o as Record<string, unknown>;
+  for (const k of ["text", "output", "content", "data"]) {
+    if (typeof obj[k] === "string") return obj[k] as string;
+  }
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === "object") {
+      const found = findTextField(v, depth + 1);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
 export function extractText(d: unknown): string {
   if (d == null) return "";
   if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.join("\n");
   if (typeof d === "object") {
+    const found = findTextField(d);
+    if (found !== undefined) return found;
     const o = d as Record<string, unknown>;
-    for (const k of ["text", "output", "content", "data"]) {
-      if (typeof o[k] === "string") return o[k] as string;
-    }
     if (Array.isArray(o.lines)) return (o.lines as unknown[]).join("\n");
   }
-  if (Array.isArray(d)) return (d as unknown[]).join("\n");
   return JSON.stringify(d, null, 2);
 }
