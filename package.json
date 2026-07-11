@@ -1,0 +1,23 @@
+{
+  "name": "pi-herdr",
+  "version": "0.1.0",
+  "description": "herdr integration extension for the pi coding agent — spawn/drive/wait/harvest AI agent panes",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.0",
+    "typebox": ">=1.1.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.80.6",
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@types/node": "^22.20.1",
+    "jiti": "^2.7.0",
+    "typebox": "^1.3.6",
+    "typescript": "^7.0.2"
+  }
+}
