@@ -1,7 +1,7 @@
 # pi-herdr
 
 [![npm version](https://img.shields.io/npm/v/@andrewjacop/pi-herdr.svg)](https://www.npmjs.com/package/@andrewjacop/pi-herdr)
-[![license](https://img.shields.io/npm/l/pi-herdr.svg)](./LICENSE)
+[![license](https://img.shields.io/github/license/AndrewJacop/pi-herdr)](./LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%20tested-blue)](#platform-support)
 
 A [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding-agent
