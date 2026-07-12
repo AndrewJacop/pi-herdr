@@ -11,6 +11,7 @@
   "scripts": {
     "test": "node tests/smoke.mjs",
     "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/pong.mjs && node tests/delegate.mjs",
+    "test:multi": "node tests/multi.mjs",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
