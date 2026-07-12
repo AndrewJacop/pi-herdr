@@ -1,13 +1,45 @@
 {
   "name": "pi-herdr",
   "version": "0.1.0",
-  "description": "herdr integration extension for the pi coding agent — spawn/drive/wait/harvest AI agent panes",
+  "description": "herdr integration for the pi coding agent — spawn, drive, wait for, and harvest AI agent panes running in herdr.",
   "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "herdr",
+    "ai-agent",
+    "orchestration",
+    "multi-agent",
+    "coding-agent",
+    "terminal",
+    "claude",
+    "codex"
+  ],
+  "license": "MIT",
+  "author": "Andrew",
+  "homepage": "https://github.com/YOUR-GITHUB-USERNAME/pi-herdr#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR-GITHUB-USERNAME/pi-herdr.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR-GITHUB-USERNAME/pi-herdr/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
     ]
   },
+  "files": [
+    "src/**/*.ts",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "test": "node tests/smoke.mjs",
     "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/pong.mjs && node tests/delegate.mjs",
@@ -16,8 +48,12 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.0",
-    "typebox": ">=1.1.0"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.80.6",

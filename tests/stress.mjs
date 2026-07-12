@@ -22,11 +22,17 @@ import { execSync } from "node:child_process";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 
-const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), { parent: ROOT });
-const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT })).herdr;
+const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
+	parent: ROOT,
+});
+const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT }))
+	.herdr;
 
 const tools = [];
-orch.registerOrchestration({ registerTool: (d) => tools.push(d), on: () => {} });
+orch.registerOrchestration({
+	registerTool: (d) => tools.push(d),
+	on: () => {},
+});
 const delegate = tools.find((t) => t.name === "herdr_delegate");
 
 const EXT = "D:/Me/pi-herdr/src/index.ts";
@@ -47,7 +53,8 @@ const TASKS = [
 			"Run `node total.js` AND run `node -e \"console.log(require('fs').readFileSync('sales.csv','utf8').trim().split('\\n').length)\"` " +
 			"to confirm the row count. Report both outputs.",
 		verify: (cwd) => {
-			const files = existsSync(join(cwd, "sales.csv")) && existsSync(join(cwd, "total.js"));
+			const files =
+				existsSync(join(cwd, "sales.csv")) && existsSync(join(cwd, "total.js"));
 			const out = run("node total.js", cwd);
 			return { files, pass: out.trim() === "1500", out: out.trim() };
 		},
@@ -61,9 +68,16 @@ const TASKS = [
 			"writes them to `long.txt`, and prints them joined by single spaces. " +
 			"Run `node long.js`, then `cat long.txt`, and report both.",
 		verify: (cwd) => {
-			const files = existsSync(join(cwd, "words.txt")) && existsSync(join(cwd, "long.js")) && existsSync(join(cwd, "long.txt"));
+			const files =
+				existsSync(join(cwd, "words.txt")) &&
+				existsSync(join(cwd, "long.js")) &&
+				existsSync(join(cwd, "long.txt"));
 			const out = run("node long.js", cwd);
-			return { files, pass: out.trim() === "apple banana grape lemon mango", out: out.trim() };
+			return {
+				files,
+				pass: out.trim() === "apple banana grape lemon mango",
+				out: out.trim(),
+			};
 		},
 	},
 	{
@@ -75,7 +89,9 @@ const TASKS = [
 			"and prints exactly PASS if all pass else FAIL. " +
 			"Run `node calc.test.js` twice (once to test, once to confirm stable) and report the final stdout.",
 		verify: (cwd) => {
-			const files = existsSync(join(cwd, "calc.js")) && existsSync(join(cwd, "calc.test.js"));
+			const files =
+				existsSync(join(cwd, "calc.js")) &&
+				existsSync(join(cwd, "calc.test.js"));
 			const out = run("node calc.test.js", cwd);
 			return { files, pass: /^PASS\b/m.test(out), out: out.trim() };
 		},
@@ -88,7 +104,10 @@ const TASKS = [
 			"Create `adults.js` that reads users.json, keeps age>=18, writes them to `adults.json`, and prints the count. " +
 			"Run `node adults.js`, then run `node -e \"console.log(JSON.parse(require('fs').readFileSync('adults.json')).length)\"`, and report both.",
 		verify: (cwd) => {
-			const files = existsSync(join(cwd, "users.json")) && existsSync(join(cwd, "adults.js")) && existsSync(join(cwd, "adults.json"));
+			const files =
+				existsSync(join(cwd, "users.json")) &&
+				existsSync(join(cwd, "adults.js")) &&
+				existsSync(join(cwd, "adults.json"));
 			const out = run("node adults.js", cwd);
 			return { files, pass: out.trim() === "3", out: out.trim() };
 		},
@@ -102,7 +121,9 @@ const TASKS = [
 			"Then create `count.js` that reads every .txt file in the current directory and prints the total number of lines. " +
 			"Run `node count.js` and also `ls *.txt`, and report both.",
 		verify: (cwd) => {
-			const files = ["a.txt", "b.txt", "c.txt", "count.js"].every((f) => existsSync(join(cwd, f)));
+			const files = ["a.txt", "b.txt", "c.txt", "count.js"].every((f) =>
+				existsSync(join(cwd, f)),
+			);
 			const out = run("node count.js", cwd);
 			// Accept the bare total or a breakdown line like "Total: 6 lines".
 			const pass = /Total:?\s*6\b/.test(out) || out.trim() === "6";
@@ -128,7 +149,9 @@ const check = (c, m) => {
 	console.log((c ? "  ✓ " : "  ✗ ") + m);
 };
 
-console.log(`\nLaunching ${TASKS.length} agents in parallel (heavy multi-tool work)...`);
+console.log(
+	`\nLaunching ${TASKS.length} agents in parallel (heavy multi-tool work)...`,
+);
 const t0 = Date.now();
 const settledOrder = [];
 const results = await Promise.all(
@@ -150,7 +173,9 @@ const results = await Promise.all(
 			.then((r) => {
 				const dur = ((Date.now() - t0) / 1000).toFixed(0);
 				settledOrder.push(t.name);
-				console.log(`  [${t.name}] delegate settled in ${dur}s (isError=${r.isError ?? false})`);
+				console.log(
+					`  [${t.name}] delegate settled in ${dur}s (isError=${r.isError ?? false})`,
+				);
 				return { ...t, r };
 			}),
 	),
@@ -159,7 +184,9 @@ const results = await Promise.all(
 console.log(`\nsettle order: ${settledOrder.join(", ")}`);
 console.log("\n=== Artifact verification ===");
 for (const { name, cwd, r, verify } of results) {
-	console.log(`\n[${name}] (pane ${r.details?.paneId ?? "?"}, isError=${r.isError === true})`);
+	console.log(
+		`\n[${name}] (pane ${r.details?.paneId ?? "?"}, isError=${r.isError === true})`,
+	);
 	check(r.isError !== true, `delegate completed cleanly`);
 	const v = verify(cwd);
 	check(v.files, `produced expected file(s)`);
@@ -171,7 +198,9 @@ const agents = await herdr(["agent", "list"], { timeoutMs: 10_000 });
 if (agents.ok) {
 	for (const a of agents.data?.agents ?? []) {
 		if (String(a.name ?? "").startsWith("stress-")) {
-			const c = await herdr(["pane", "close", a.pane_id], { timeoutMs: 10_000 });
+			const c = await herdr(["pane", "close", a.pane_id], {
+				timeoutMs: 10_000,
+			});
 			check(c.ok, `closed ${a.name} (${a.pane_id})`);
 		}
 	}
@@ -183,5 +212,7 @@ try {
 }
 
 const dur = ((Date.now() - t0) / 1000).toFixed(0);
-console.log(`\n${fail === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${pass}/${pass + fail}) in ${dur}s`);
+console.log(
+	`\n${fail === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${pass}/${pass + fail}) in ${dur}s`,
+);
 process.exit(fail === 0 ? 0 : 1);
