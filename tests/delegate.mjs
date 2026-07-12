@@ -27,7 +27,11 @@ if (!delegate) {
 console.log("[delegate] invoking herdr_delegate with a real prompt...");
 const res = await delegate.execute(
 	"smoke-call",
-	{ prompt: "Reply with exactly one word: pong", timeoutMs: 240_000 },
+	{
+		prompt: "Reply with exactly one word: pong",
+		cwd: ROOT, // spawn in the small project dir, not the busy current workspace
+		timeoutMs: 240_000,
+	},
 	undefined,
 );
 

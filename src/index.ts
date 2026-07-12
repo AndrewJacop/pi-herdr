@@ -3,9 +3,14 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerOrchestration } from "./tools/orchestration.js";
+import { registerSelfReport } from "./selfreport.js";
 import { herdr } from "./herdr.js";
 
 export default function (pi: ExtensionAPI): void {
+	// Push this pi's own state to herdr so agent_status is reliable for everyone
+	// (fixes herdr's working -> idle detection misses). No-op outside herdr.
+	registerSelfReport(pi);
+
 	registerOrchestration(pi);
 
 	// NFR-6: optional footer status showing the herdr fleet while orchestrating.

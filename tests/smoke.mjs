@@ -61,8 +61,22 @@ assert(
 	names.length === expected.length,
 	`exactly ${expected.length} tools (got ${names.length})`,
 );
-assert(events.agent_start?.length === 1, "wired agent_start footer hook");
+assert(events.agent_start?.length >= 1, "wired agent_start footer hook");
 assert(events.turn_end?.length === 1, "wired turn_end footer hook");
+// Self-report (src/selfreport.ts) activates only inside a herdr pane; when it
+// does, it adds session_start/agent_start/agent_settled/session_shutdown hooks.
+const selfReportActive =
+	!!process.env.HERDR_PANE_ID && process.env.HERDR_ENV === "1";
+if (selfReportActive) {
+	assert(
+		(events.session_start?.length ?? 0) >= 1,
+		"self-report wired session_start (running inside herdr)",
+	);
+	assert(
+		(events.agent_settled?.length ?? 0) >= 1,
+		"self-report wired agent_settled",
+	);
+}
 
 // AC7: destructive tools labeled
 const stop = tools.find((t) => t.name === "herdr_stop_agent");

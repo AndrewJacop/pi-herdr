@@ -90,14 +90,106 @@ async function resolvePaneId(
 const sleep = (ms: number): Promise<void> =>
 	new Promise((r) => setTimeout(r, ms));
 
+/** Read a pane's current visible (viewport) text for TUI-state inspection. */
+async function readVisibleText(paneId: string, signal?: AbortSignal): Promise<string> {
+	const r = await herdr<unknown>(
+		["agent", "read", paneId, "--source", "visible", "--lines", "24", "--format", "text"],
+		{ timeoutMs: 8_000, signal, textOk: true },
+	);
+	return r.ok ? extractText(r.data) : "";
+}
+
 /**
- * Drive a spawned agent through one turn using herdr's transition waits:
- * wait for `working` (the turn started), then `idle` (the turn finished).
- * `wait agent-status` waits for a state *change*, which is reliable here because
- * after a submitted prompt the agent transitions idle -> working -> idle.
+ * pi renders a braille-spinner + "Working..." line while busy. Its absence in the
+ * tail of the viewport is a reliable idle signal that does NOT depend on herdr's
+ * (sometimes stale) agent_status.
+ */
+const SPINNER_RE = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*Working/i;
+function hasWorkingSpinner(text: string): boolean {
+	return SPINNER_RE.test(text.split(/\r?\n/).slice(-12).join("\n"));
+}
+
+/** Read an agent's CURRENT status via `agent get` (snapshot; no transition wait). */
+async function currentStatus(
+	paneId: string,
+	signal?: AbortSignal,
+): Promise<string | undefined> {
+	const r = await herdr<{ agent?: { agent_status?: string } }>(["agent", "get", paneId], {
+		timeoutMs: 8_000,
+		signal,
+	});
+	if (!r.ok) return undefined;
+	return (
+		r.data?.agent?.agent_status ??
+		(r.data as { agent_status?: string }).agent_status
+	);
+}
+
+/** Force herdr's (possibly stale) state for a pane to idle. Self-heal. */
+async function reportIdle(paneId: string, signal?: AbortSignal): Promise<void> {
+	await herdr(
+		[
+			"pane",
+			"report-agent",
+			paneId,
+			"--source",
+			"pi-herdr",
+			"--agent",
+			"pi",
+			"--state",
+			"idle",
+			"--seq",
+			String(Date.now()),
+		],
+		{ timeoutMs: 5_000, signal },
+	);
+}
+
+/**
+ * Robustly wait for an agent to be idle/done. herdr can miss the working->idle
+ * transition and leave a finished pane stuck on `working`, so in addition to the
+ * real status we treat "status working but pi's Working-spinner is gone" as done
+ * and self-heal herdr's state with `report-agent`.
+ */
+async function waitForIdleOrDone(
+	target: string,
+	deadline: number,
+	signal?: AbortSignal,
+): Promise<Result<true>> {
+	while (Date.now() < deadline) {
+		if (signal?.aborted) {
+			return { ok: false, error: { code: "TIMEOUT", message: "aborted" } };
+		}
+		const status = await currentStatus(target, signal);
+		if (status === "idle" || status === "done") return { ok: true, data: true };
+		if (status === "working") {
+			const vis = await readVisibleText(target, signal);
+			if (!hasWorkingSpinner(vis)) {
+				// herdr says working, but the TUI shows no spinner => actually finished.
+				await reportIdle(target, signal);
+				return { ok: true, data: true };
+			}
+		}
+		await sleep(1_500);
+	}
+	return { ok: false, error: { code: "TIMEOUT", message: "timed out waiting for idle" } };
+}
+
+/**
+ * Drive a spawned agent through one turn.
  *
- * Returns ok on completion, or an error Result whose `message` is "NOT_STARTED"
- * when the turn never entered working (caller may re-send the prompt).
+ * Phase 1 (start): wait for `working`. herdr's idle->working transition is
+ * reliable, so we use the event-driven `wait agent-status working`.
+ *
+ * Phase 2 (finish): herdr sometimes MISSES the working->idle transition and the
+ * status sticks on `working`, so we don't trust it here. Instead we poll the
+ * pane's rendered content and treat the disappearance of pi's "Working…"
+ * spinner as completion (with a real `idle`/`done` status as a fast-path). When
+ * we detect completion from the TUI we self-heal herdr's stuck state via
+ * `pane report-agent` so the UI and any other waiters see idle.
+ *
+ * Returns ok on completion, or an error whose `message` is "NOT_STARTED" when
+ * the turn never entered working (caller may re-send the prompt).
  */
 async function driveOneTurn(
 	paneId: string,
@@ -108,6 +200,8 @@ async function driveOneTurn(
 		opts.workingWindowMs ?? 30_000,
 		Math.max(2_000, opts.deadline - Date.now()),
 	);
+
+	// Phase 1: turn started.
 	const working = await herdr(
 		[
 			"wait",
@@ -123,21 +217,28 @@ async function driveOneTurn(
 	if (!working.ok) {
 		return { ok: false, error: { ...working.error, message: "NOT_STARTED" } };
 	}
-	const idleBudget = Math.max(5_000, opts.deadline - Date.now());
-	const idle = await herdr(
-		[
-			"wait",
-			"agent-status",
-			paneId,
-			"--status",
-			"idle",
-			"--timeout",
-			String(idleBudget),
-		],
-		{ timeoutMs: idleBudget + 5_000, signal },
-	);
-	if (!idle.ok) return idle;
-	return { ok: true, data: true };
+
+	// Phase 2: completion via the rendered TUI (spinner gone) or a real idle status.
+	let sawSpinner = false;
+	while (Date.now() < opts.deadline) {
+		if (signal?.aborted) {
+			return { ok: false, error: { code: "TIMEOUT", message: "aborted" } };
+		}
+		const status = await currentStatus(paneId, signal);
+		if (status === "idle" || status === "done") {
+			return { ok: true, data: true };
+		}
+		const vis = await readVisibleText(paneId, signal);
+		if (hasWorkingSpinner(vis)) {
+			sawSpinner = true;
+		} else if (sawSpinner) {
+			// Spinner appeared then disappeared => the turn finished. Self-heal herdr.
+			await reportIdle(paneId, signal);
+			return { ok: true, data: true };
+		}
+		await sleep(1_500);
+	}
+	return { ok: false, error: { code: "TIMEOUT", message: "turn did not return to idle" } };
 }
 
 // ---- registration ----------------------------------------------------------
@@ -329,6 +430,15 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, p, signal) {
 			const timeoutMs = p.timeoutMs ?? 60_000;
+			const reached = (msg: string, agentStatus: string): ToolReturn =>
+				okText(msg, { paneId: p.target, agentStatus });
+			// idle/done: robust detection (herdr can miss the working->idle transition).
+			if (p.status === "idle" || p.status === "done") {
+				const r = await waitForIdleOrDone(p.target, Date.now() + timeoutMs, signal);
+				if (!r.ok) return fail(r);
+				return reached(`Agent "${p.target}" reached status "${p.status}".`, p.status);
+			}
+			// working/blocked/unknown: herdr's transition wait.
 			const r = await herdr<unknown>(
 				[
 					"wait",
@@ -342,10 +452,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				{ timeoutMs: timeoutMs + 8_000, signal },
 			);
 			if (!r.ok) return fail(r);
-			return okText(`Agent "${p.target}" reached status "${p.status}".`, {
-				paneId: p.target,
-				agentStatus: p.status,
-			});
+			return reached(`Agent "${p.target}" reached status "${p.status}".`, p.status);
 		},
 	});
 
