@@ -1,6 +1,6 @@
 # pi-herdr
 
-[![npm version](https://img.shields.io/npm/v/pi-herdr.svg)](https://www.npmjs.com/package/pi-herdr)
+[![npm version](https://img.shields.io/npm/v/@andrewjacop/pi-herdr.svg)](https://www.npmjs.com/package/@andrewjacop/pi-herdr)
 [![license](https://img.shields.io/npm/l/pi-herdr.svg)](./LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%20tested-blue)](#platform-support)
 
@@ -74,7 +74,7 @@ server. If herdr is missing or not running, every tool returns a clean
 ### 3. This extension
 
 ```bash
-pi install npm:pi-herdr
+pi install npm:@andrewjacop/pi-herdr
 ```
 
 That's it — every pi session (including agents you later spawn) will now load it.
@@ -87,7 +87,7 @@ Restart pi (or `/reload`) if a session was already running.
 ### From npm (recommended)
 
 ```bash
-pi install npm:pi-herdr
+pi install npm:@andrewjacop/pi-herdr
 ```
 
 ### From source / local dev
@@ -206,7 +206,7 @@ but **sometimes misses `working → idle`**, which can leave a finished pane stu
 When pi runs inside a herdr pane, this extension pushes its real state to herdr on
 lifecycle hooks — `agent_start → working`, `agent_settled → idle`. herdr renders that
 idle-after-working as `done`, which `herdr_delegate` / `herdr_wait_agent` detect by
-racing the `idle` and `done` transition waits. A global install (`pi install npm:pi-herdr`)
+racing the `idle` and `done` transition waits. A global install (`pi install npm:@andrewjacop/pi-herdr`)
 loads the extension into **every** pi — including spawned ones — so all pi agents
 report reliably.
 
