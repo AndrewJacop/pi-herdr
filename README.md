@@ -93,7 +93,7 @@ pi install npm:pi-herdr
 ### From source / local dev
 
 ```bash
-git clone https://github.com/YOUR-GITHUB-USERNAME/pi-herdr.git
+git clone https://github.com/AndrewJacop/pi-herdr.git
 cd pi-herdr
 npm install
 pi install ./          # register the local checkout globally

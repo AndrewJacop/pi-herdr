@@ -18,13 +18,13 @@
   ],
   "license": "MIT",
   "author": "Andrew",
-  "homepage": "https://github.com/YOUR-GITHUB-USERNAME/pi-herdr#readme",
+  "homepage": "https://github.com/AndrewJacop/pi-herdr#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOUR-GITHUB-USERNAME/pi-herdr.git"
+    "url": "git+https://github.com/AndrewJacop/pi-herdr.git"
   },
   "bugs": {
-    "url": "https://github.com/YOUR-GITHUB-USERNAME/pi-herdr/issues"
+    "url": "https://github.com/AndrewJacop/pi-herdr/issues"
   },
   "engines": {
     "node": ">=20"

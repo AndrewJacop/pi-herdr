@@ -26,4 +26,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   envelope/error parsing), live integration, and parallel multi-agent stress tests
   with on-disk artifact verification.
 
-[0.1.0]: https://github.com/YOUR-GITHUB-USERNAME/pi-herdr/releases/tag/v0.1.0
+[0.1.0]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.1.0
