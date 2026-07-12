@@ -5,10 +5,10 @@ import { getPresets } from "./config.js";
 import type { Result } from "./env.js";
 
 export interface AgentSpec {
-  /** Preset name (default "pi"). "custom" requires an explicit argv. */
-  agent?: string;
-  /** Explicit argv — overrides preset expansion (required for "custom"). */
-  argv?: string[];
+	/** Preset name (default "pi"). "custom" requires an explicit argv. */
+	agent?: string;
+	/** Explicit argv — overrides preset expansion (required for "custom"). */
+	argv?: string[];
 }
 
 /**
@@ -18,20 +18,20 @@ export interface AgentSpec {
  * - Unknown preset -> VALIDATION_ERROR Result (never throws).
  */
 export function expandAgentSpec(spec: AgentSpec): Result<string[]> {
-  if (spec.argv && spec.argv.length > 0) {
-    return { ok: true, data: [...spec.argv] };
-  }
-  const presets = getPresets();
-  const preset = spec.agent ?? "pi";
-  const v = presets[preset];
-  if (!v) {
-    return {
-      ok: false,
-      error: {
-        code: "VALIDATION_ERROR",
-        message: `Unknown agent preset: "${preset}". Known presets: ${Object.keys(presets).join(", ")}`,
-      },
-    };
-  }
-  return { ok: true, data: [...v] };
+	if (spec.argv && spec.argv.length > 0) {
+		return { ok: true, data: [...spec.argv] };
+	}
+	const presets = getPresets();
+	const preset = spec.agent ?? "pi";
+	const v = presets[preset];
+	if (!v) {
+		return {
+			ok: false,
+			error: {
+				code: "VALIDATION_ERROR",
+				message: `Unknown agent preset: "${preset}". Known presets: ${Object.keys(presets).join(", ")}`,
+			},
+		};
+	}
+	return { ok: true, data: [...v] };
 }
