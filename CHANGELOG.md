@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-12
+
+### Changed
+
+- Renamed the npm package to the scoped **`@andrewjacop/pi-herdr`** (the
+  unscoped `pi-herdr` is retired). Install with
+  `pi install npm:@andrewjacop/pi-herdr`.
+- README: comprehensive onboarding (what herdr is, install steps for each
+  prerequisite, platform-support callout, worked examples) and fixed the license
+  badge (now sourced from the GitHub LICENSE instead of the retired npm name).
+
+No functional changes since 0.1.0.
+
 ## [0.1.0] - 2026-07-12
 
 ### Added
@@ -27,3 +40,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with on-disk artifact verification.
 
 [0.1.0]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.1.0
+[0.1.1]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.1.1
