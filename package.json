@@ -12,6 +12,7 @@
     "test": "node tests/smoke.mjs",
     "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/pong.mjs && node tests/delegate.mjs",
     "test:multi": "node tests/multi.mjs",
+    "test:stress": "node tests/stress.mjs",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {

@@ -19,12 +19,18 @@ import { execSync } from "node:child_process";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 
-const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), { parent: ROOT });
-const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT })).herdr;
+const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
+	parent: ROOT,
+});
+const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT }))
+	.herdr;
 
 // Build the delegate tool the same way pi would.
 const tools = [];
-orch.registerOrchestration({ registerTool: (d) => tools.push(d), on: () => {} });
+orch.registerOrchestration({
+	registerTool: (d) => tools.push(d),
+	on: () => {},
+});
 const delegate = tools.find((t) => t.name === "herdr_delegate");
 if (!delegate) {
 	console.error("herdr_delegate not registered");
@@ -50,10 +56,15 @@ const TASKS = [
 			"and prints exactly PASS if both pass, else FAIL.\n" +
 			"Then run `node test.js` and report its exact stdout.",
 		verify: (cwd) => {
-			const js = existsSync(join(cwd, "math.js")) && existsSync(join(cwd, "test.js"));
+			const js =
+				existsSync(join(cwd, "math.js")) && existsSync(join(cwd, "test.js"));
 			let out = "";
 			try {
-				out = execSync("node test.js", { cwd, encoding: "utf8", timeout: 10_000 });
+				out = execSync("node test.js", {
+					cwd,
+					encoding: "utf8",
+					timeout: 10_000,
+				});
 			} catch (e) {
 				out = (e.stdout || "") + (e.stderr || "");
 			}
@@ -70,7 +81,11 @@ const TASKS = [
 			const js = existsSync(join(cwd, "reverse.js"));
 			let out = "";
 			try {
-				out = execSync("node reverse.js hello", { cwd, encoding: "utf8", timeout: 10_000 });
+				out = execSync("node reverse.js hello", {
+					cwd,
+					encoding: "utf8",
+					timeout: 10_000,
+				});
 			} catch (e) {
 				out = (e.stdout || "") + (e.stderr || "");
 			}
@@ -87,14 +102,21 @@ const TASKS = [
 			const js = existsSync(join(cwd, "fizzbuzz.js"));
 			let out = "";
 			try {
-				out = execSync("node fizzbuzz.js", { cwd, encoding: "utf8", timeout: 10_000 });
+				out = execSync("node fizzbuzz.js", {
+					cwd,
+					encoding: "utf8",
+					timeout: 10_000,
+				});
 			} catch (e) {
 				out = (e.stdout || "") + (e.stderr || "");
 			}
 			const lines = out.trim().split(/\r?\n/);
 			return {
 				js,
-				pass: lines.length === 15 && lines[2] === "Fizz" && lines[14] === "FizzBuzz",
+				pass:
+					lines.length === 15 &&
+					lines[2] === "Fizz" &&
+					lines[14] === "FizzBuzz",
 				out: lines.slice(0, 3).join("|") + " ... " + lines.slice(-2).join("|"),
 			};
 		},
@@ -131,7 +153,9 @@ const results = await Promise.all(
 			)
 			.then((r) => {
 				const dur = ((Date.now() - t0) / 1000).toFixed(0);
-				console.log(`  [${t.name}] delegate settled in ${dur}s (isError=${r.isError ?? false})`);
+				console.log(
+					`  [${t.name}] delegate settled in ${dur}s (isError=${r.isError ?? false})`,
+				);
 				return { ...t, r };
 			}),
 	),
@@ -155,7 +179,9 @@ const agents = await herdr(["agent", "list"], { timeoutMs: 10_000 });
 if (agents.ok) {
 	for (const a of agents.data?.agents ?? []) {
 		if (String(a.name ?? "").startsWith("multi-")) {
-			const c = await herdr(["pane", "close", a.pane_id], { timeoutMs: 10_000 });
+			const c = await herdr(["pane", "close", a.pane_id], {
+				timeoutMs: 10_000,
+			});
 			check(c.ok, `closed ${a.name} (${a.pane_id})`);
 		}
 	}
@@ -167,5 +193,7 @@ try {
 }
 
 const dur = ((Date.now() - t0) / 1000).toFixed(0);
-console.log(`\n${fail === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${pass}/${pass + fail}) in ${dur}s`);
+console.log(
+	`\n${fail === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${pass}/${pass + fail}) in ${dur}s`,
+);
 process.exit(fail === 0 ? 0 : 1);
