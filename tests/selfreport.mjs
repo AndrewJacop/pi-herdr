@@ -7,6 +7,7 @@
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { piArgv } from "./_platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
@@ -28,11 +29,7 @@ const start = await herdr(
 		"sr-probe",
 		"--no-focus",
 		"--",
-		"cmd",
-		"/c",
-		"pi",
-		"-e",
-		"D:/Me/pi-herdr/src/index.ts",
+		...piArgv(["-e", join(ROOT, "src", "index.ts")]),
 	],
 	{ timeoutMs: 20_000 },
 );

@@ -8,11 +8,15 @@
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { piArgv } from "./_platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
-const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT })).herdr;
-const extractText = (await jiti.import(join(ROOT, "src/env.ts"), { parent: ROOT })).extractText;
+const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT }))
+	.herdr;
+const extractText = (
+	await jiti.import(join(ROOT, "src/env.ts"), { parent: ROOT })
+).extractText;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const statusOf = async (pane) => {
@@ -22,10 +26,23 @@ const statusOf = async (pane) => {
 	return a?.agent_status ?? "?";
 };
 const visibleTail = async (pane) => {
-	const r = await herdr(["agent", "read", pane, "--source", "visible", "--lines", "8", "--format", "text"], {
-		timeoutMs: 10_000,
-		textOk: true,
-	});
+	const r = await herdr(
+		[
+			"agent",
+			"read",
+			pane,
+			"--source",
+			"visible",
+			"--lines",
+			"8",
+			"--format",
+			"text",
+		],
+		{
+			timeoutMs: 10_000,
+			textOk: true,
+		},
+	);
 	return extractText(r.data).slice(-300);
 };
 
@@ -34,10 +51,13 @@ const check = (c, m) => {
 	if (!c) process.exitCode = 1;
 };
 
-// 1. spawn a PLAIN pi (no -e) via Node so argv is literal ["cmd","/c","pi"].
-const start = await herdr(["agent", "start", "verify-global", "--no-focus", "--", "cmd", "/c", "pi"], {
-	timeoutMs: 20_000,
-});
+// 1. spawn a PLAIN pi (no -e) via Node so argv is passed literally (platform preset).
+const start = await herdr(
+	["agent", "start", "verify-global", "--no-focus", "--", ...piArgv()],
+	{
+		timeoutMs: 20_000,
+	},
+);
 const pane = start.data?.agent?.pane_id;
 check(!!pane, `plain pi spawned (no -e): ${pane}`);
 if (!pane) process.exit(1);
@@ -57,11 +77,19 @@ try {
 
 	// 2. Does the footer show "herdr:" => the global extension loaded?
 	const tail = await visibleTail(pane);
-	console.log("    footer tail:", JSON.stringify(tail.replace(/\s+/g, " ").trim()));
-	check(/herdr:/i.test(tail), 'pane footer shows "herdr:" => global extension auto-loaded');
+	console.log(
+		"    footer tail:",
+		JSON.stringify(tail.replace(/\s+/g, " ").trim()),
+	);
+	check(
+		/herdr:/i.test(tail),
+		'pane footer shows "herdr:" => global extension auto-loaded',
+	);
 
 	// 3. Send a short task and confirm working -> done (not stuck).
-	await herdr(["agent", "send", pane, "Reply with one word: ready"], { timeoutMs: 15_000 });
+	await herdr(["agent", "send", pane, "Reply with one word: ready"], {
+		timeoutMs: 15_000,
+	});
 	await herdr(["pane", "send-keys", pane, "Enter"], { timeoutMs: 15_000 });
 	console.log("watching status through the turn...");
 	let sawWorking = false;

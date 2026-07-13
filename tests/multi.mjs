@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { mkdtempSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
+import { piArgv } from "./_platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
@@ -38,8 +39,8 @@ if (!delegate) {
 }
 
 // Spawned pis load this extension so they self-report (reliable completion).
-const EXT = "D:/Me/pi-herdr/src/index.ts";
-const ARGV = ["cmd", "/c", "pi", "-e", EXT];
+const EXT = join(ROOT, "src", "index.ts");
+const ARGV = piArgv(["-e", EXT]);
 const TIMEOUT = 300_000; // 5 min per agent
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-herdr-multi-"));

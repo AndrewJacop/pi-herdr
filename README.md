@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@andrewjacop/pi-herdr.svg)](https://www.npmjs.com/package/@andrewjacop/pi-herdr)
 [![license](https://img.shields.io/github/license/AndrewJacop/pi-herdr)](./LICENSE)
-[![platform](https://img.shields.io/badge/platform-Windows%20tested-blue)](#platform-support)
+[![platform](https://img.shields.io/badge/platform-macOS%20%26%20Windows%20tested-blue)](#platform-support)
 
 A [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding-agent
 extension that turns pi into an **orchestrator over a fleet of visible AI agent
@@ -21,12 +21,15 @@ coordinates them.
 
 ## Platform support
 
-> ⚠️ **Tested on Windows only.** Everything in this README was validated on Windows.
-> The code is platform-aware (separate Windows/POSIX launch presets; `herdr` spawned
-> directly as a native binary) and is *expected* to work on macOS and Linux, but that
-> has **not been verified** — and herdr's own availability on those platforms follows
-> [herdr.dev](https://herdr.dev). If you try macOS/Linux, please open an issue with
-> the result.
+**Tested on Windows and macOS.** The code is platform-aware (separate Windows/POSIX
+launch presets; `herdr` spawned directly as a native binary) and is *expected* to work
+on Linux too, though that has not been verified. herdr's own availability on each
+platform follows [herdr.dev](https://herdr.dev). If you try Linux, please open an
+issue with the result.
+
+> **macOS — launch herdr from your terminal, not `brew services`.** A launchd-managed
+> herdr server inherits macOS's minimal PATH (no `node`), and spawned `pi` agents die
+> silently. See [Requirements → herdr](#2-herdr-the-workspace-manager).
 
 ---
 
@@ -70,6 +73,26 @@ herdr                 # launch the herdr workspace (starts its local server)
 The `herdr` server must be running for `pi-herdr`'s tools to work — they talk to that
 server. If herdr is missing or not running, every tool returns a clean
 `HERDR_UNAVAILABLE` error instead of hanging.
+
+> ⚠️ **macOS — do not manage herdr with `brew services`.** `brew services` runs the
+> herdr server under launchd, which gives it macOS's *minimal* PATH
+> (`/usr/bin:/bin:/usr/sbin:/sbin`) with no `node`. Spawned `pi` is a
+> `#!/usr/bin/env node` script, so it can't find `node` and the pane dies silently
+> (~2s, no output). (`claude`/`codex` survive because they're standalone binaries.)
+>
+> Launch herdr from your terminal instead, so the server inherits your shell PATH:
+>
+> ```bash
+> brew services stop --all 2>/dev/null; brew services stop herdr   # if you enabled it
+> herdr                            # from your project dir; starts a server w/ your full PATH
+> herdr status                     # confirm "server: running"
+> ```
+>
+> herdr attaches to a *persistent* session, so you must stop the launchd server first
+> — otherwise `herdr` just reattaches to the minimal-PATH one.
+>
+> If you must keep herdr in `brew services`, spawn agents with an absolute path **and**
+> inject `PATH` via the `env` field of `herdr_start_agent` / `herdr_delegate`.
 
 ### 3. This extension
 
@@ -175,7 +198,7 @@ All Tier 1 (orchestration) tools are included. Every tool that targets an existi
 pane accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
 
 | Tool | What it does |
-|---|---|
+| --- | --- |
 | `herdr_start_agent` | Launch an agent (`pi`/`claude`/`codex`/`omp`/`custom`) in a herdr pane; returns pane id + state. |
 | `herdr_send_prompt` | Send a prompt to a pane; submits with Enter by default. |
 | `herdr_read_agent` | Read recent/visible output text from a pane. |
@@ -191,7 +214,7 @@ pane accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
 `herdr_start_agent` and `herdr_delegate` take an `AgentSpec`:
 
 | Field | Default | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `agent` | `"pi"` | One of `pi`, `claude`, `codex`, `omp` (opencode), `custom`. |
 | `argv` | — | Explicit launch argv; overrides the preset (required for `custom`). |
 | `cwd` | — | Working directory for the spawned agent. |
@@ -205,17 +228,21 @@ but **sometimes misses `working → idle`**, which can leave a finished pane stu
 
 When pi runs inside a herdr pane, this extension pushes its real state to herdr on
 lifecycle hooks — `agent_start → working`, `agent_settled → idle`. herdr renders that
-idle-after-working as `done`, which `herdr_delegate` / `herdr_wait_agent` detect by
-racing the `idle` and `done` transition waits. A global install (`pi install npm:@andrewjacop/pi-herdr`)
+idle-after-working as `done` on builds that derive it; `herdr_delegate` /
+`herdr_wait_agent` race the `idle` and `done` transition waits (plus a polling
+fallback — see below). A global install (`pi install npm:@andrewjacop/pi-herdr`)
 loads the extension into **every** pi — including spawned ones — so all pi agents
 report reliably.
 
-Completion is read **only** from herdr's state events — never inferred from the
+Completion is read from herdr's state events — never inferred from the
 rendered `Working…` spinner (tool-call output replaces that spinner mid-work, which
-would otherwise cause false "idle" reports). For an agent that can't self-report
-(e.g. `claude`/`codex`, which don't load pi extensions) and where herdr misses the
-transition, the wait times out and the delegate returns whatever partial output it
-could read.
+would otherwise cause false "idle" reports). As of 0.2.0, `herdr_delegate` /
+`herdr_wait_agent` **also poll `agent get` as a fallback**, racing it against the
+`wait agent-status` event: if the event is flaky or never fires (e.g. herdr 0.7.3's
+`failed to decode pane get error`, or a `done`/`idle` state herdr no longer derives),
+the poll still detects the settled state promptly — instead of hanging on the event
+or timing out the budget. For an agent that can't self-report (e.g.
+`claude`/`codex`), the poll catches the settled state too.
 
 > **Tip:** You can always unstick a pane manually:
 > `herdr pane report-agent <pane> --source manual --agent pi --state idle`.
@@ -223,7 +250,7 @@ could read.
 ## Configuration (environment variables)
 
 | Variable | Default | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `HERDR_BIN` | `herdr` (resolved via `PATH`/`PATHEXT`) | Override the herdr binary path. |
 | `HERDR_PRESET_<NAME>` | built-in map | Add/override a preset as a JSON argv array, e.g. `HERDR_PRESET_GEMINI='["cmd","/c","gemini"]'`. |
 | `PI_HERDR_NO_SELF_REPORT` | unset | Set to `1` to disable self-report in this pi. |
@@ -236,6 +263,11 @@ launched as `cmd /c <cli>`; elsewhere as the bare command.
 - **Windows:** the agent CLIs (`pi`, `claude`, …) are npm `.cmd` shims and are
   launched through a `cmd /c` wrapper automatically. `herdr` is a native executable
   and is spawned directly (no shell), so argv is passed literally.
+- **macOS:** agents are spawned the same way (`shell:false`, literal argv). The only
+  macOS gotcha is environmental: a herdr server started by `brew services` / launchd
+  (or a GUI launch) inherits macOS's minimal PATH, so node-based agents like `pi`
+  can't find `node`. Launch herdr from your terminal instead (see Requirements). If
+  you can't, pass an absolute agent path and inject `PATH` via the tool's `env`.
 - A known Git-Bash quirk mangles a literal `cmd /c` argument into `cmd C:/`. This
   only affects *typing* the command in a POSIX shell; `pi-herdr` spawns via Node with
   `shell: false`, so it is unaffected. (Don't drive herdr from bash in scripts.)
@@ -277,12 +309,12 @@ first to discuss substantial changes. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Limitations / roadmap
 
-- **v0.1 (this release):** Tier 1 orchestration (`herdr_delegate` + the 10 atomic tools).
-- **Tested on Windows only** (see [Platform support](#platform-support)).
+- **v0.2 (this release):** Tier 1 orchestration (`herdr_delegate` + the 10 atomic tools), macOS support, polling-fallback completion detection.
+- **Tested on Windows and macOS** (see [Platform support](#platform-support)).
 - **Planned:** Tier 3 sync (`wait_output`, `send_keys`, `run_command`, `notify`),
   Tier 2 layout (panes/tabs/workspaces), Tier 4 git worktrees, Tier 5 sessions/snapshot.
 - Self-report is pi-only; heterogeneous (claude/codex) completion relies on herdr's
-  auto-detect.
+  auto-detect (also caught by the `agent get` polling fallback).
 
 ## License
 

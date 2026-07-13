@@ -105,12 +105,25 @@ const sleep = (ms: number): Promise<void> =>
  * transition), both waits time out and we return TIMEOUT — the caller then
  * reads whatever partial output exists.
  */
-async function raceIdleDone(
+/**
+ * Wait for `paneId` to reach one of `statuses`.
+ *
+ * Prefers herdr's event-based `wait agent-status` (prompt, no polling), but races
+ * it against a polling fallback (`agent get`) because `wait agent-status` is
+ * unreliable on some herdr builds (e.g. 0.7.3 returns `failed to decode pane get
+ * error` on its probe step). The event promise resolves ONLY on success — on
+ * error it stays pending so the poll decides. Whichever path sees a target
+ * status first wins; the other is cancelled. The poll is what makes completion
+ * detection robust instead of depending on a flaky event command.
+ */
+async function waitForStatus(
 	paneId: string,
+	statuses: string[],
 	deadline: number,
 	signal?: AbortSignal,
 ): Promise<Result<true>> {
-	const budget = Math.max(2_000, deadline - Date.now());
+	const budget = Math.max(1_000, deadline - Date.now());
+	const want = new Set(statuses);
 	const ctrl = new AbortController();
 	const onParentAbort = () => ctrl.abort();
 	if (signal) {
@@ -119,26 +132,79 @@ async function raceIdleDone(
 		}
 		signal.addEventListener("abort", onParentAbort, { once: true });
 	}
-	const wait = (status: "idle" | "done") =>
-		herdr(
-			[
-				"wait",
-				"agent-status",
-				paneId,
-				"--status",
-				status,
-				"--timeout",
-				String(budget),
-			],
-			{ timeoutMs: budget + 5_000, signal: ctrl.signal },
-		);
+	type Resolved = { via: "event" | "poll"; r: Result<true> };
+	// Event path: resolves only on a successful transition (errors swallowed so
+	// the polling fallback gets to run).
+	const events = new Promise<Resolved>((resolve) => {
+		for (const s of statuses) {
+			herdr(
+				[
+					"wait",
+					"agent-status",
+					paneId,
+					"--status",
+					s,
+					"--timeout",
+					String(budget),
+				],
+				{ timeoutMs: budget + 5_000, signal: ctrl.signal },
+			).then((r) => {
+				if (r.ok) resolve({ via: "event", r: { ok: true, data: true } });
+			});
+		}
+	});
+	// Polling fallback: `agent get` is reliable when `wait agent-status` misbehaves.
+	const poll: Promise<Resolved> = (async () => {
+		while (Date.now() < deadline) {
+			if (ctrl.signal.aborted) {
+				return {
+					via: "poll",
+					r: { ok: false, error: { code: "TIMEOUT", message: "aborted" } },
+				};
+			}
+			const r = await herdr<{
+				agent?: { agent_status?: string };
+				agent_status?: string;
+			}>(["agent", "get", paneId], { timeoutMs: 8_000, signal: ctrl.signal });
+			if (r.ok) {
+				const st = (r.data?.agent ?? r.data)?.agent_status;
+				if (st && want.has(st)) {
+					return { via: "poll", r: { ok: true, data: true } };
+				}
+			}
+			await sleep(800);
+		}
+		return {
+			via: "poll",
+			r: {
+				ok: false,
+				error: {
+					code: "TIMEOUT",
+					message: `timed out polling for ${statuses.join("/")}`,
+				},
+			},
+		};
+	})();
 	try {
-		const first = await Promise.race([wait("idle"), wait("done")]);
-		ctrl.abort(); // cancel the loser
-		return first.ok ? { ok: true, data: true } : first;
+		const first = await Promise.race([events, poll]);
+		ctrl.abort(); // cancel the still-running path
+		return first.r;
 	} finally {
 		if (signal) signal.removeEventListener("abort", onParentAbort);
 	}
+}
+
+/**
+ * Wait for a pane to reach idle OR done, whichever fires first.
+ * Self-report yields `idle` on herdr ≥0.7.3 (which no longer derives `done`);
+ * older builds derived `done`. waitForStatus races the event against a poll.
+ */
+async function raceIdleDone(
+	paneId: string,
+	deadline: number,
+	signal?: AbortSignal,
+): Promise<Result<true>> {
+	return waitForStatus(paneId, ["idle", "done"], deadline, signal);
 }
 
 /**
@@ -163,17 +229,11 @@ async function driveOneTurn(
 		opts.workingWindowMs ?? 30_000,
 		Math.max(2_000, opts.deadline - Date.now()),
 	);
-	const working = await herdr(
-		[
-			"wait",
-			"agent-status",
-			paneId,
-			"--status",
-			"working",
-			"--timeout",
-			String(workingBudget),
-		],
-		{ timeoutMs: workingBudget + 5_000, signal },
+	const working = await waitForStatus(
+		paneId,
+		["working"],
+		Date.now() + workingBudget,
+		signal,
 	);
 	if (!working.ok) {
 		return { ok: false, error: { ...working.error, message: "NOT_STARTED" } };
@@ -599,6 +659,14 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 						"Close the pane after a successful response (default false, keep alive).",
 				}),
 			),
+			env: Type.Optional(
+				Type.Record(Type.String(), Type.String(), {
+					description:
+						"Extra env vars (KEY=VALUE) for the agent. On macOS set PATH to your " +
+						"shell PATH if herdr's server runs with launchd's minimal PATH " +
+						"(e.g. via `brew services`), so a node-based agent like `pi` can find `node`.",
+				}),
+			),
 		}),
 		async execute(_id, p, signal) {
 			const overall = p.timeoutMs ?? 120_000;
@@ -621,6 +689,9 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			const name = p.name ?? `delegate-${Date.now()}`;
 			const startArgs = ["agent", "start", name, "--no-focus"];
 			if (p.cwd) startArgs.push("--cwd", p.cwd);
+			if (p.env)
+				for (const [k, v] of Object.entries(p.env))
+					startArgs.push("--env", `${k}=${v}`);
 			startArgs.push("--", ...spec.data);
 			const startR = await herdr<{ agent?: Record<string, unknown> }>(
 				startArgs,
@@ -643,17 +714,11 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			//    the host's extensions/skills can spend ~40-60s in `unknown` before
 			//    reaching idle, so use a generous timeout and CHECK it (don't send until
 			//    the agent is actually idle/ready).
-			const boot = await herdr(
-				[
-					"wait",
-					"agent-status",
-					paneId,
-					"--status",
-					"idle",
-					"--timeout",
-					"90000",
-				],
-				{ timeoutMs: 95_000, signal },
+			const boot = await waitForStatus(
+				paneId,
+				["idle"],
+				Date.now() + 90_000,
+				signal,
 			);
 			if (!boot.ok) {
 				return partial(

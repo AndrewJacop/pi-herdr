@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-13
+
+### Added
+
+- **macOS support (verified).** Launch herdr from your terminal, not `brew services`
+  — a launchd-managed herdr server inherits macOS's minimal PATH (no `node`), so
+  spawned `pi` agents (a `#!/usr/bin/env node` script) die silently. See README →
+  Platform support / Requirements. (`claude`/`codex` are standalone binaries and are
+  unaffected.)
+- **`env` param on `herdr_delegate`** (parity with `herdr_start_agent`): pass extra
+  environment variables (e.g. `PATH`) to the spawned agent — the recovery path on a
+  minimal-PATH herdr server.
+- **Polling fallback for completion detection.** `herdr_delegate` /
+  `herdr_wait_agent` now race herdr's `wait agent-status` event against an
+  `agent get` poll, so completion is detected reliably even when `wait agent-status`
+  is flaky (e.g. herdr 0.7.3's `failed to decode pane get error`) or a state isn't
+  derived (herdr ≥0.7.3 no longer renders `done`). Completion no longer depends on
+  the event command firing, nor on timing out the budget.
+- `tests/fallback.mjs` (live) validating the fallback; platform-aware test suite via
+  a shared `tests/_platform.mjs` helper (no more hardcoded Windows `cmd /c` argv or
+  `D:/...` paths).
+
+### Changed
+
+- README: platform badge + Platform support now "macOS & Windows tested"; macOS
+  Requirements callout and Platform notes bullet; "How completion is detected"
+  updated to describe the polling fallback.
+
 ## [0.1.1] - 2026-07-12
 
 ### Changed
@@ -41,3 +69,4 @@ No functional changes since 0.1.0.
 
 [0.1.0]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.1.0
 [0.1.1]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.1.1
+[0.2.0]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.2.0

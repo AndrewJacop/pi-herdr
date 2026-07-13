@@ -8,7 +8,9 @@
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { piArgv } from "./_platform.mjs";
 
+const EXPECTED_ARGV = piArgv();
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT }))
@@ -24,7 +26,7 @@ const check = (c, m) => {
 
 console.log("[live] agent start via Node spawn (shell:false) — AC4");
 const start = await herdr(
-	["agent", "start", "ac4node", "--no-focus", "--", "cmd", "/c", "pi"],
+	["agent", "start", "ac4node", "--no-focus", "--", ...EXPECTED_ARGV],
 	{
 		timeoutMs: 20_000,
 	},
@@ -33,8 +35,8 @@ check(start.ok, `start succeeded (error code=${start.error?.code})`);
 const a = start.ok ? start.data?.agent : null;
 check(!!a?.pane_id, `pane_id present: ${a?.pane_id}`);
 check(
-	JSON.stringify(start.data?.argv) === JSON.stringify(["cmd", "/c", "pi"]),
-	`argv passed LITERALLY as ["cmd","/c","pi"] (got ${JSON.stringify(start.data?.argv)}) — AC4, no mangling`,
+	JSON.stringify(start.data?.argv) === JSON.stringify(EXPECTED_ARGV),
+	`argv passed LITERALLY as ${JSON.stringify(EXPECTED_ARGV)} (got ${JSON.stringify(start.data?.argv)}) — AC4, no mangling`,
 );
 check(
 	!JSON.stringify(start).includes("os error 193"),

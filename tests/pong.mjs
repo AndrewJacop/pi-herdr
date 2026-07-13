@@ -7,6 +7,7 @@
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { piArgv } from "./_platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
@@ -31,9 +32,9 @@ const rawText = (d) => {
 const PANE = {};
 
 try {
-	console.log("[pong] 1. start pi agent (cmd /c pi)");
+	console.log("[pong] 1. start pi agent (platform preset)");
 	const start = await herdr(
-		["agent", "start", "pi-pong", "--no-focus", "--", "cmd", "/c", "pi"],
+		["agent", "start", "pi-pong", "--no-focus", "--", ...piArgv()],
 		{
 			timeoutMs: 20_000,
 		},

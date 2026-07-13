@@ -5,6 +5,7 @@
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { piArgv } from "./_platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
@@ -22,7 +23,7 @@ const statusOf = async (pane) => {
 };
 
 const start = await herdr(
-	["agent", "start", "bootdiag", "--no-focus", "--", "cmd", "/c", "pi"],
+	["agent", "start", "bootdiag", "--no-focus", "--", ...piArgv()],
 	{
 		timeoutMs: 20_000,
 	},
