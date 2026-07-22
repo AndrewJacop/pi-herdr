@@ -231,7 +231,7 @@ lifecycle hooks — `agent_start → working`, `agent_settled → idle` — and 
 ask-blocked EventBus channels:
 `rpiv:ask-user:blocked` from
 [`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question)
-and `cursor:ask-question:blocked` from
+and `pi-cursor-sdk:ask-question:blocked` from
 [`pi-cursor-sdk`](https://github.com/fitchmultz/pi-cursor-sdk)
 (`active: true → blocked`, `active: false → working` so the turn resumes). herdr
 renders that idle-after-working as `done` on builds that derive it;

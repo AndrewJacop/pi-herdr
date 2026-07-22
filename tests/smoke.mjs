@@ -90,8 +90,8 @@ if (selfReportActive) {
 		"self-report wired rpiv:ask-user:blocked",
 	);
 	assert(
-		(busEvents["cursor:ask-question:blocked"]?.length ?? 0) >= 1,
-		"self-report wired cursor:ask-question:blocked",
+		(busEvents["pi-cursor-sdk:ask-question:blocked"]?.length ?? 0) >= 1,
+		"self-report wired pi-cursor-sdk:ask-question:blocked",
 	);
 }
 
@@ -117,8 +117,8 @@ assert(
 );
 assert(
 	selfreport.CURSOR_ASK_QUESTION_BLOCKED_EVENT ===
-		"cursor:ask-question:blocked",
-	"cursor ask-question blocked channel matches cursor-sdk contract",
+		"pi-cursor-sdk:ask-question:blocked",
+	"cursor ask-question blocked channel matches pi-cursor-sdk contract",
 );
 
 // AC7: destructive tools labeled

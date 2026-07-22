@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Self-report `blocked` while a questionnaire awaits input:
   subscribe to `rpiv:ask-user:blocked` (`@juicesharp/rpiv-ask-user-question`)
-  and `cursor:ask-question:blocked` (`pi-cursor-sdk`), mapping
+  and `pi-cursor-sdk:ask-question:blocked` (`pi-cursor-sdk`), mapping
   `{ active: true }` → `blocked`, `{ active: false }` → `working` (turn still
   in progress). Requires a pi host that loads this extension plus the matching
   producer package.

@@ -30,10 +30,11 @@ export const ASK_USER_BLOCKED_EVENT = "rpiv:ask-user:blocked" as const;
 
 /**
  * Public channel from `pi-cursor-sdk` (`CURSOR_ASK_QUESTION_BLOCKED_EVENT`).
- * Same append-only rule: keep the producer-namespaced string in sync.
+ * Package-namespaced (not bare `cursor:`) so it is not confused with
+ * pi-cursor-oauth or standalone cursor-agent. Keep in sync with the producer.
  */
 export const CURSOR_ASK_QUESTION_BLOCKED_EVENT =
-	"cursor:ask-question:blocked" as const;
+	"pi-cursor-sdk:ask-question:blocked" as const;
 
 // Start from the clock so the seq is monotonically increasing across pi
 // restarts within the same pane (a fresh low seq could be ignored as stale).
@@ -60,7 +61,7 @@ function report(state: "idle" | "working" | "blocked" | "unknown"): void {
 
 /**
  * Map ask-blocked payload (`{ active: boolean }`) → herdr state.
- * Shared by `rpiv:ask-user:blocked` and `cursor:ask-question:blocked`.
+ * Shared by `rpiv:ask-user:blocked` and `pi-cursor-sdk:ask-question:blocked`.
  * `active: false` returns `working` (turn still in progress), not `idle`.
  * Unknown payloads return `null` (ignore).
  */
@@ -81,10 +82,10 @@ export function mapAskUserBlockedToState(
  *   agent_start     -> working (a run began)
  *   agent_settled   -> idle   (pi will not auto-retry/compact/follow-up — truly done)
  *   session_shutdown-> idle
- *   rpiv:ask-user:blocked { active: true }       -> blocked
- *   rpiv:ask-user:blocked { active: false }      -> working (resume the turn)
- *   cursor:ask-question:blocked { active: true } -> blocked
- *   cursor:ask-question:blocked { active: false }-> working (resume the turn)
+ *   rpiv:ask-user:blocked { active: true }              -> blocked
+ *   rpiv:ask-user:blocked { active: false }             -> working (resume the turn)
+ *   pi-cursor-sdk:ask-question:blocked { active: true } -> blocked
+ *   pi-cursor-sdk:ask-question:blocked { active: false }-> working (resume the turn)
  *
  * `agent_end` is deliberately NOT mapped: pi may auto-retry, auto-compact, or
  * continue with a queued follow-up after it, so reporting idle there would
