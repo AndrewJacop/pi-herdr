@@ -228,8 +228,11 @@ but **sometimes misses `working → idle`**, which can leave a finished pane stu
 
 When pi runs inside a herdr pane, this extension pushes its real state to herdr on
 lifecycle hooks — `agent_start → working`, `agent_settled → idle` — and on the
-`rpiv:ask-user:blocked` EventBus channel from
+ask-blocked EventBus channels:
+`rpiv:ask-user:blocked` from
 [`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question)
+and `cursor:ask-question:blocked` from
+[`pi-cursor-sdk`](https://github.com/fitchmultz/pi-cursor-sdk)
 (`active: true → blocked`, `active: false → working` so the turn resumes). herdr
 renders that idle-after-working as `done` on builds that derive it;
 `herdr_delegate` / `herdr_wait_agent` race the `idle` and `done` transition waits

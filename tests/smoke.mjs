@@ -73,7 +73,7 @@ assert(events.agent_start?.length >= 1, "wired agent_start footer hook");
 assert(events.turn_end?.length === 1, "wired turn_end footer hook");
 // Self-report (src/selfreport.ts) activates only inside a herdr pane; when it
 // does, it adds session_start/agent_start/agent_settled/session_shutdown hooks
-// plus a rpiv:ask-user:blocked EventBus subscription.
+// plus rpiv + cursor ask-blocked EventBus subscriptions.
 const selfReportActive =
 	!!process.env.HERDR_PANE_ID && process.env.HERDR_ENV === "1";
 if (selfReportActive) {
@@ -89,9 +89,13 @@ if (selfReportActive) {
 		(busEvents["rpiv:ask-user:blocked"]?.length ?? 0) >= 1,
 		"self-report wired rpiv:ask-user:blocked",
 	);
+	assert(
+		(busEvents["cursor:ask-question:blocked"]?.length ?? 0) >= 1,
+		"self-report wired cursor:ask-question:blocked",
+	);
 }
 
-// Offline: ask-user blocked payload → herdr state mapping (no herdr required).
+// Offline: ask-blocked payload → herdr state mapping (no herdr required).
 const selfreport = await jiti.import(join(ROOT, "src/selfreport.ts"), {
 	parent: ROOT,
 });
@@ -110,6 +114,11 @@ assert(
 assert(
 	selfreport.ASK_USER_BLOCKED_EVENT === "rpiv:ask-user:blocked",
 	"ask-user blocked channel matches rpiv contract",
+);
+assert(
+	selfreport.CURSOR_ASK_QUESTION_BLOCKED_EVENT ===
+		"cursor:ask-question:blocked",
+	"cursor ask-question blocked channel matches cursor-sdk contract",
 );
 
 // AC7: destructive tools labeled
