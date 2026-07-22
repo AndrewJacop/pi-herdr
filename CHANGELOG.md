@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Self-report `blocked` while `@juicesharp/rpiv-ask-user-question` awaits input:
+  subscribe to `rpiv:ask-user:blocked` and map `{ active: true }` → `blocked`,
+  `{ active: false }` → `working` (turn still in progress). Requires a pi host
+  that loads both this extension and the ask-user package.
+
 ## [0.2.0] - 2026-07-13
 
 ### Added

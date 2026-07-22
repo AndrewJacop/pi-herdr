@@ -227,12 +227,15 @@ but **sometimes misses `working → idle`**, which can leave a finished pane stu
 `working` and hang a wait. `pi-herdr` solves this with **self-report**:
 
 When pi runs inside a herdr pane, this extension pushes its real state to herdr on
-lifecycle hooks — `agent_start → working`, `agent_settled → idle`. herdr renders that
-idle-after-working as `done` on builds that derive it; `herdr_delegate` /
-`herdr_wait_agent` race the `idle` and `done` transition waits (plus a polling
-fallback — see below). A global install (`pi install npm:@andrewjacop/pi-herdr`)
-loads the extension into **every** pi — including spawned ones — so all pi agents
-report reliably.
+lifecycle hooks — `agent_start → working`, `agent_settled → idle` — and on the
+`rpiv:ask-user:blocked` EventBus channel from
+[`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question)
+(`active: true → blocked`, `active: false → working` so the turn resumes). herdr
+renders that idle-after-working as `done` on builds that derive it;
+`herdr_delegate` / `herdr_wait_agent` race the `idle` and `done` transition waits
+(plus a polling fallback — see below). A global install
+(`pi install npm:@andrewjacop/pi-herdr`) loads the extension into **every** pi —
+including spawned ones — so all pi agents report reliably.
 
 Completion is read from herdr's state events — never inferred from the
 rendered `Working…` spinner (tool-call output replaces that spinner mid-work, which
