@@ -273,7 +273,7 @@ async function sendAgentPrompt(
 	}
 	const sendR = await herdr(["agent", "send", paneId, text], {
 		timeoutMs: 15_000,
-	signal: opts.signal,
+		signal: opts.signal,
 	});
 	if (!sendR.ok) return sendR;
 	if (submit) {

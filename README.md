@@ -65,7 +65,7 @@ Install herdr from **<https://herdr.dev>** (follow the instructions there for yo
 platform). Then verify it's on your `PATH` and start a session:
 
 ```bash
-herdr --version       # verify, e.g. "herdr 0.7.2-preview"
+herdr --version       # verify, e.g. "herdr 0.7.5"
 herdr status          # shows server + socket; "server: not running" until you launch it
 herdr                 # launch the herdr workspace (starts its local server)
 ```
@@ -73,6 +73,13 @@ herdr                 # launch the herdr workspace (starts its local server)
 The `herdr` server must be running for `pi-herdr`'s tools to work — they talk to that
 server. If herdr is missing or not running, every tool returns a clean
 `HERDR_UNAVAILABLE` error instead of hanging.
+
+> ℹ️ **Version compatibility.** `pi-herdr` probes `herdr --version` at session
+> start and branches to match your herdr: it supports both the redesigned **0.7.5**
+> API (`agent start` / `agent prompt`) and the older **0.7.3** API (still the
+> current Windows beta). If the `herdr` binary is missing you get a warning toast
+> with the install link; the detected version shows in the footer, e.g.
+> `herdr: 3 agents (1 working) (0.7.5)`.
 
 > ⚠️ **macOS — do not manage herdr with `brew services`.** `brew services` runs the
 > herdr server under launchd, which gives it macOS's *minimal* PATH
@@ -103,7 +110,9 @@ pi install npm:@andrewjacop/pi-herdr
 That's it — every pi session (including agents you later spawn) will now load it.
 Restart pi (or `/reload`) if a session was already running.
 
-> **Quick test without installing:** `pi -e ./src/index.ts` (from a clone of this repo).
+> **Quick test without installing:** `pi -ne -e ./src/index.ts` from a clone of
+> this repo — `-ne` skips installed-extension discovery so only this local copy
+> loads (great for end-to-end checks against a real herdr server).
 
 ## Install
 
