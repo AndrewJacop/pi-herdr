@@ -262,7 +262,7 @@ assert(
 		minor: 7,
 		patch: 3,
 	}),
-	"parseVersion tolerates pre-release suffix (Windows beta 0.7.3)",
+	"parseVersion tolerates pre-release suffix (0.7.3-preview)",
 );
 assert(
 	versionMod.parseVersion("garbage") === null,
@@ -276,7 +276,7 @@ assert(
 );
 assert(
 	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 3 }) === false,
-	"0.7.3 -> legacy (Windows beta)",
+	"0.7.3 -> legacy (Windows stable)",
 );
 assert(
 	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 4 }) === false,

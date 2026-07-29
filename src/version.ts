@@ -1,6 +1,9 @@
 // Cached herdr version probe + per-session refresh.
-// `agent start` was redesigned in 0.7.5 (needs --kind/--pane, no focus); the
-// Windows beta still ships 0.7.3, so callers branch on the detected version.
+// `agent start` was redesigned in 0.7.5 (needs --kind/--pane, no focus). Windows
+// STABLE ships 0.7.3 (legacy path); the Windows PREVIEW channel ships 0.7.5,
+// whose `agent start --kind` is broken on Windows (Start-Process emits an empty
+// -ArgumentList) — see startAgentNew for the actionable error. Callers branch on
+// the detected version.
 //
 // The probe runs eagerly at session_start (see index.ts) so a missing herdr or
 // a version change is surfaced immediately (toast + footer) rather than only as
@@ -67,8 +70,8 @@ export async function detectHerdrVersion(): Promise<HerdrVersion | null> {
 
 /**
  * True when herdr uses the redesigned `agent start` (>= 0.7.5).
- * Unknown version -> false (safe default: keeps the 0.7.3 Windows beta working
- * rather than guessing the new API and breaking the only known-good path).
+ * Unknown version -> false (safe default: keeps the legacy <0.7.5 path, which is
+ * the only known-good Windows path, rather than guessing the new API).
  */
 export function isNewAgentApi(v: HerdrVersion | null): boolean {
 	if (!v) return false;
