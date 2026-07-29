@@ -122,7 +122,20 @@ export function herdr<T = unknown>(
 
 		child.on("close", (exitCode) => {
 			// herdr may emit trailing non-JSON lines; parse the last JSON object.
-			const parsed = parseLastJson(out);
+			let parsed = parseLastJson(out);
+			// herdr 0.7.5+ emits error envelopes on stderr (stdout empty, non-zero
+			// exit). Parse that so the error code/message map correctly instead of
+			// surfacing raw JSON as a generic VALIDATION_ERROR.
+			if (parsed === null && exitCode !== 0) {
+				const alt = parseLastJson(stderr);
+				if (
+					alt &&
+					typeof alt === "object" &&
+					"error" in (alt as Record<string, unknown>)
+				) {
+					parsed = alt;
+				}
+			}
 			if (parsed === null) {
 				// Some commands (e.g. `pane send-keys`) return empty output on success.
 				// Empty stdout + exit 0 + no stderr => silent success.

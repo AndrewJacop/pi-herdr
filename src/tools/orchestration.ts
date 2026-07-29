@@ -201,7 +201,9 @@ async function startAgentNew(
 		);
 	}
 
-	// 2. attach the agent to that pane.
+	// 2. attach the agent to that pane. herdr fails fast with `agent_pane_busy`
+	//    while the freshly-split shell is still reaching its prompt (it does not
+	//    retry despite --timeout being a readiness wait), so retry briefly.
 	const startArgs = [
 		"agent",
 		"start",
@@ -211,10 +213,18 @@ async function startAgentNew(
 		"--pane",
 		paneId,
 	];
-	const startR = await herdr<{ agent?: Record<string, unknown> }>(startArgs, {
-		timeoutMs: 20_000,
-		signal: input.signal,
-	});
+	const deadline = Date.now() + 6_000;
+	let startR: Result<{ agent?: Record<string, unknown> }>;
+	do {
+		startR = await herdr<{ agent?: Record<string, unknown> }>(startArgs, {
+			timeoutMs: 20_000,
+			signal: input.signal,
+		});
+		if (startR.ok) break;
+		const code = (startR.error.details as { code?: string } | undefined)?.code;
+		if (code !== "agent_pane_busy" || Date.now() >= deadline) break;
+		await sleep(250);
+	} while (true);
 	if (!startR.ok) return startR;
 	return {
 		ok: true,
@@ -235,6 +245,45 @@ async function startHerdrAgent(
 	return isNewAgentApi(version)
 		? startAgentNew(input)
 		: startAgentLegacy(input);
+}
+
+/**
+ * Type (and optionally submit) a prompt into an agent pane. herdr 0.7.5 replaced
+ * `agent send` with `agent prompt` (type + submit in one call) and pane-level
+ * `send-text` (type only); legacy keeps `agent send` + `pane send-keys Enter`.
+ */
+async function sendAgentPrompt(
+	paneId: string,
+	text: string,
+	opts: { submit?: boolean; signal?: AbortSignal } = {},
+): Promise<Result<true>> {
+	const submit = opts.submit !== false;
+	const version = await detectHerdrVersion();
+	if (isNewAgentApi(version)) {
+		const r = submit
+			? await herdr(["agent", "prompt", paneId, text], {
+					timeoutMs: 15_000,
+					signal: opts.signal,
+				})
+			: await herdr(["pane", "send-text", paneId, text], {
+					timeoutMs: 15_000,
+					signal: opts.signal,
+				});
+		return r.ok ? { ok: true, data: true } : r;
+	}
+	const sendR = await herdr(["agent", "send", paneId, text], {
+		timeoutMs: 15_000,
+		signal: opts.signal,
+	});
+	if (!sendR.ok) return sendR;
+	if (submit) {
+		const enterR = await herdr(["pane", "send-keys", paneId, "Enter"], {
+			timeoutMs: 15_000,
+			signal: opts.signal,
+		});
+		if (!enterR.ok) return enterR;
+	}
+	return { ok: true, data: true };
 }
 
 /** Resolve a flexible target (name/label/paneId) to a concrete pane id. */
@@ -501,22 +550,14 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 		async execute(_id, p, signal) {
 			const pid = await resolvePaneId(p.target, signal);
 			if (!pid.ok) return fail(pid);
-			const sendR = await herdr(["agent", "send", p.target, p.text], {
-				timeoutMs: 15_000,
+			const submitted = p.submit !== false;
+			const sendR = await sendAgentPrompt(pid.data, p.text, {
+				submit: submitted,
 				signal,
 			});
 			if (!sendR.ok) return fail(sendR);
-			let submitted = false;
-			if (p.submit !== false) {
-				const enterR = await herdr(["pane", "send-keys", pid.data, "Enter"], {
-					timeoutMs: 15_000,
-					signal,
-				});
-				if (!enterR.ok) return fail(enterR);
-				submitted = true;
-			}
 			return okText(
-				`Sent prompt to "${p.target}" (pane ${pid.data})${submitted ? " and submitted with Enter" : " (text only, not submitted)"}.`,
+				`Sent prompt to "${p.target}" (pane ${pid.data})${submitted ? " and submitted" : " (text only, not submitted)"}.`,
 				{ paneId: pid.data, submitted },
 			);
 		},
@@ -906,24 +947,14 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				attempt++
 			) {
 				if (attempt > 0) await sleep(2_000); // brief pause before re-sending
-				const sendR = await herdr(["agent", "send", paneId, p.prompt], {
-					timeoutMs: 15_000,
+				const sendR = await sendAgentPrompt(paneId, p.prompt, {
+					submit: true,
 					signal,
 				});
 				if (!sendR.ok) {
 					return partial(
 						`Started agent in pane ${paneId} but failed to send the prompt: ${sendR.error.message}`,
 						{ paneId, name, error: sendR.error },
-					);
-				}
-				const enterR = await herdr(["pane", "send-keys", paneId, "Enter"], {
-					timeoutMs: 15_000,
-					signal,
-				});
-				if (!enterR.ok) {
-					return partial(
-						`Sent text to pane ${paneId} but failed to submit (Enter): ${enterR.error.message}`,
-						{ paneId, name, error: enterR.error },
 					);
 				}
 				done = await driveOneTurn(paneId, {

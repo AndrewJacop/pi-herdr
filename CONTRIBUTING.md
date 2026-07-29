@@ -24,6 +24,10 @@ You do **not** need a build step — pi loads TypeScript via jiti. Edit `src/` a
   spawned agents.
 - `npm run test:stress` — 5 parallel agents doing real multi-tool work, with
   on-disk artifact verification. The strongest correctness check.
+- **Isolated live test (no install):** from a clone, open a herdr tab and run
+  `pi -ne -e ./src/index.ts`. `-ne` disables installed-extension discovery so only
+  your local `src/` loads — drive it to exercise the tools end-to-end against a
+  real herdr server without touching your installed copy.
 
 ## Guidelines
 
@@ -42,6 +46,11 @@ You do **not** need a build step — pi loads TypeScript via jiti. Edit `src/` a
   waits). See README › "How completion is detected".
 - **Platform differences stay in the launcher.** New presets go through the
   `HERDR_PRESET_*` map; the `cmd /c` wrapper is the launcher's job, not the LLM's.
+- **Branch on herdr version when a CLI command changes.** herdr 0.7.5 redesigned
+  several commands (`agent start`, removed `agent send` → `agent prompt`, and now
+  emits error envelopes on stderr). The extension detects the version once
+  (`src/version.ts`) and branches; when you touch a herdr command that differs
+  across versions, follow that pattern instead of assuming one API.
 
 ## Adding a tool
 
