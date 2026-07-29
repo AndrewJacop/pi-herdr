@@ -63,14 +63,19 @@ function okText(text: string, details: unknown): ToolReturn {
 }
 
 // ---- agent start: version-branched ----------------------------------------
-// herdr redesigned `agent start` in 0.7.5. The Windows beta still ships 0.7.3,
-// so we detect the version once and branch:
+// herdr redesigned `agent start` in 0.7.5. Windows STABLE ships 0.7.3 (legacy
+// path); the Windows PREVIEW channel ships 0.7.5, whose `agent start --kind` is
+// broken on Windows (Start-Process can't launch npm-shim agents like pi.cmd —
+// "%1 is not a valid Win32 application"; with no args it's an empty -ArgumentList).
+// We detect the version once and branch:
 //   - legacy (<0.7.5): `agent start <name> [--cwd --split --tab --workspace
 //     --env] [--focus|--no-focus] -- <argv>` — one call creates the pane.
 //   - new (>=0.7.5):  `pane split --current --direction ... [--cwd --env --focus]`
 //     then `agent start <name> --kind <kind> --pane <id>` — pane must exist.
 //     tab/workspace targeting has no 0.7.5 equivalent (pane split has none), so
 //     those are ignored on the new path and the pane lands in the current tab.
+//     On Windows the `agent start --kind` step fails (herdr 0.7.5-preview bug),
+//     so startAgentNew launches via `pane run` + herdr auto-detect instead.
 
 const NEW_API_KINDS = new Set([
 	"pi",
@@ -201,9 +206,16 @@ async function startAgentNew(
 		);
 	}
 
-	// 2. attach the agent to that pane. herdr fails fast with `agent_pane_busy`
-	//    while the freshly-split shell is still reaching its prompt (it does not
-	//    retry despite --timeout being a readiness wait), so retry briefly.
+	// 2. attach the agent to the pane. herdr 0.7.5-preview's `agent start --kind`
+	//    is broken on Windows (Start-Process can't launch npm-shim agents — "%1
+	//    is not a valid Win32 application"), so on Windows launch the bare agent
+	//    command via `pane run` and let herdr auto-detect it (validated e2e). On
+	//    macOS/Linux `agent start --kind` works but fails fast with
+	//    `agent_pane_busy` while the freshly-split shell reaches its prompt, so
+	//    retry briefly.
+	if (process.platform === "win32") {
+		return startAgentWindowsPaneRun(input, paneId);
+	}
 	const startArgs = [
 		"agent",
 		"start",
@@ -235,6 +247,68 @@ async function startAgentNew(
 			>,
 		},
 	};
+}
+
+/**
+ * Windows launch fallback for herdr 0.7.5-preview, whose `agent start --kind` is
+ * broken (Start-Process can't launch npm-shim agents like pi.cmd — "%1 is not a
+ * valid Win32 application"). Launch the BARE agent command via `pane run` — the
+ * pane's shell resolves the .cmd shim (PATHEXT) — wait for herdr to auto-detect
+ * it, then name the pane.
+ *
+ * Use the bare command (e.g. "pi"), NOT the `cmd /c` wrapper: the wrapper nests
+ * a shell and herdr's auto-detection then sees `cmd`, not the agent.
+ *
+ * ponytail: platform-gated. When herdr fixes Windows `agent start --kind`, revisit
+ * to use it (gives proper --kind/session registration); until then pane-run is the
+ * only working Windows launch, and all tools (prompt/get/read/rename/close) work
+ * on the auto-detected pane.
+ */
+async function startAgentWindowsPaneRun(
+	input: StartInput,
+	paneId: string,
+): Promise<Result<{ agent: Record<string, unknown> }>> {
+	const spec = expandAgentSpec({ agent: input.agent });
+	if (!spec.ok) return spec;
+	const bareCmd = spec.data[spec.data.length - 1];
+	const runR = await herdr(["pane", "run", paneId, bareCmd], {
+		timeoutMs: 15_000,
+		signal: input.signal,
+	});
+	if (!runR.ok) return runR;
+	// Wait for herdr to detect the agent (agent get stops returning agent_not_found).
+	const detected = await waitForAgentDetected(paneId, 20_000, input.signal);
+	if (!detected.ok) return detected;
+	// Name the pane (best-effort; `agent start` would have taken <name>).
+	await herdr(["agent", "rename", paneId, input.name], {
+		timeoutMs: 10_000,
+		signal: input.signal,
+	});
+	return {
+		ok: true,
+		data: { agent: { pane_id: paneId } },
+	};
+}
+
+/** Poll `agent get` until herdr tracks the pane as an agent (or budget expires). */
+async function waitForAgentDetected(
+	paneId: string,
+	budgetMs: number,
+	signal?: AbortSignal,
+): Promise<Result<true>> {
+	const deadline = Date.now() + budgetMs;
+	while (Date.now() < deadline) {
+		const r = await herdr(["agent", "get", paneId], {
+			timeoutMs: 8_000,
+			signal,
+		});
+		if (r.ok) return { ok: true, data: true };
+		await sleep(500);
+	}
+	return err(
+		"AGENT_START_FAILED",
+		`agent in pane ${paneId} was not detected by herdr within ${budgetMs}ms`,
+	);
 }
 
 /** Detect herdr version once and dispatch to the matching launch path. */

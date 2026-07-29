@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-29
+
+### Fixed
+
+- **Windows + herdr 0.7.5-preview: `herdr_start_agent` / `herdr_delegate` now
+  spawn.** herdr 0.7.5-preview's `agent start --kind` is broken on Windows: it
+  launches the agent via PowerShell `Start-Process -FilePath <kind>`, which can't
+  run npm `.cmd` shims (`pi`, `claude`, …) — "%1 is not a valid Win32 application"
+  (with no agent args it first surfaces as an empty `-ArgumentList`). On Windows
+  the launch now splits a pane, runs the **bare** agent command via `pane run` (the
+  pane's shell resolves the `.cmd` shim via PATHEXT), waits for herdr to
+  auto-detect the agent, then names it. `agent prompt` / `get` / `read` / `rename`
+  / `close` then work on the auto-detected pane as usual.
+  - The bare command is used (e.g. `pi`), **not** the `cmd /c` wrapper — the
+    wrapper nests a shell and herdr's auto-detection then sees `cmd`, not the
+    agent.
+  - macOS/Linux keep the working `agent start --kind` path: a
+    `process.platform === "win32"` guard sits in front of it; the non-Windows
+    code is unchanged.
+  - The stale "Windows still ships 0.7.3" assumption in the comments was also
+    corrected — Windows now runs the 0.7.5 preview channel.
+
+### Added
+
+- `tests/win-start.mjs` + `npm run test:win` — Windows-only live test that loads
+  the edited `src` via jiti and exercises every orchestration tool against a pane
+  created by the fixed launch path. Self-skips on non-Windows (safe inside
+  `test:live` on macOS).
+
 ## [0.2.2] - 2026-07-29
 
 ### Fixed
