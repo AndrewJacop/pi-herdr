@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Self-report `blocked` while a questionnaire awaits input:
+  subscribe to `rpiv:ask-user:blocked` (`@juicesharp/rpiv-ask-user-question`)
+  and `pi-cursor-sdk:ask-question:blocked` (`pi-cursor-sdk`), mapping
+  `{ active: true }` → `blocked`, `{ active: false }` → `working` (turn still
+  in progress). Requires a pi host that loads this extension plus the matching
+  producer package.
+
 ## [0.2.0] - 2026-07-13
 
 ### Added

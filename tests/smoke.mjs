@@ -34,10 +34,18 @@ const ext = await jiti.import(join(ROOT, "src/index.ts"), { parent: ROOT });
 
 const tools = [];
 const events = {};
+const busEvents = {};
 const mockPi = {
 	registerTool: (def) => tools.push(def),
 	on: (ev, handler) => {
 		(events[ev] ??= []).push(handler);
+	},
+	events: {
+		on: (channel, handler) => {
+			(busEvents[channel] ??= []).push(handler);
+			return () => {};
+		},
+		emit: () => {},
 	},
 };
 await ext.default(mockPi);
@@ -64,7 +72,8 @@ assert(
 assert(events.agent_start?.length >= 1, "wired agent_start footer hook");
 assert(events.turn_end?.length === 1, "wired turn_end footer hook");
 // Self-report (src/selfreport.ts) activates only inside a herdr pane; when it
-// does, it adds session_start/agent_start/agent_settled/session_shutdown hooks.
+// does, it adds session_start/agent_start/agent_settled/session_shutdown hooks
+// plus rpiv + cursor ask-blocked EventBus subscriptions.
 const selfReportActive =
 	!!process.env.HERDR_PANE_ID && process.env.HERDR_ENV === "1";
 if (selfReportActive) {
@@ -76,7 +85,41 @@ if (selfReportActive) {
 		(events.agent_settled?.length ?? 0) >= 1,
 		"self-report wired agent_settled",
 	);
+	assert(
+		(busEvents["rpiv:ask-user:blocked"]?.length ?? 0) >= 1,
+		"self-report wired rpiv:ask-user:blocked",
+	);
+	assert(
+		(busEvents["pi-cursor-sdk:ask-question:blocked"]?.length ?? 0) >= 1,
+		"self-report wired pi-cursor-sdk:ask-question:blocked",
+	);
 }
+
+// Offline: ask-blocked payload → herdr state mapping (no herdr required).
+const selfreport = await jiti.import(join(ROOT, "src/selfreport.ts"), {
+	parent: ROOT,
+});
+assert(
+	selfreport.mapAskUserBlockedToState({ active: true }) === "blocked",
+	"ask-user blocked active:true → blocked",
+);
+assert(
+	selfreport.mapAskUserBlockedToState({ active: false }) === "working",
+	"ask-user blocked active:false → working (turn resumes)",
+);
+assert(
+	selfreport.mapAskUserBlockedToState({}) === null,
+	"ask-user blocked ignores malformed payload",
+);
+assert(
+	selfreport.ASK_USER_BLOCKED_EVENT === "rpiv:ask-user:blocked",
+	"ask-user blocked channel matches rpiv contract",
+);
+assert(
+	selfreport.CURSOR_ASK_QUESTION_BLOCKED_EVENT ===
+		"pi-cursor-sdk:ask-question:blocked",
+	"cursor ask-question blocked channel matches pi-cursor-sdk contract",
+);
 
 // AC7: destructive tools labeled
 const stop = tools.find((t) => t.name === "herdr_stop_agent");
