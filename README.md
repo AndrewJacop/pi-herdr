@@ -141,7 +141,7 @@ Use herdr_delegate to spawn a fresh pi agent and ask it to summarize README.md i
 ```
 
 You'll see a new pane appear in herdr, the spawned agent work, and pi return its
-answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents (1 working)`.
+answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents (1 working) (0.7.5)`.
 
 ---
 
@@ -227,12 +227,18 @@ but **sometimes misses `working → idle`**, which can leave a finished pane stu
 `working` and hang a wait. `pi-herdr` solves this with **self-report**:
 
 When pi runs inside a herdr pane, this extension pushes its real state to herdr on
-lifecycle hooks — `agent_start → working`, `agent_settled → idle`. herdr renders that
-idle-after-working as `done` on builds that derive it; `herdr_delegate` /
-`herdr_wait_agent` race the `idle` and `done` transition waits (plus a polling
-fallback — see below). A global install (`pi install npm:@andrewjacop/pi-herdr`)
-loads the extension into **every** pi — including spawned ones — so all pi agents
-report reliably.
+lifecycle hooks — `agent_start → working`, `agent_settled → idle` — and on the
+ask-blocked EventBus channels:
+`rpiv:ask-user:blocked` from
+[`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question)
+and `pi-cursor-sdk:ask-question:blocked` from
+[`pi-cursor-sdk`](https://github.com/fitchmultz/pi-cursor-sdk)
+(`active: true → blocked`, `active: false → working` so the turn resumes). herdr
+renders that idle-after-working as `done` on builds that derive it;
+`herdr_delegate` / `herdr_wait_agent` race the `idle` and `done` transition waits
+(plus a polling fallback — see below). A global install
+(`pi install npm:@andrewjacop/pi-herdr`) loads the extension into **every** pi —
+including spawned ones — so all pi agents report reliably.
 
 Completion is read from herdr's state events — never inferred from the
 rendered `Working…` spinner (tool-call output replaces that spinner mid-work, which
@@ -298,7 +304,7 @@ src/
   selfreport.ts          # push this pi's state to herdr (reliable completion)
   tools/orchestration.ts # Tier 1 tools + herdr_delegate
 tests/
-  smoke.mjs              # offline (50 checks)
+  smoke.mjs              # offline (70 checks)
   live.mjs, pong.mjs, delegate.mjs, selfreport.mjs, multi.mjs, stress.mjs
 ```
 
