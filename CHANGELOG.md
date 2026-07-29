@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VALIDATION_ERROR: herdr error: {json}` with no usable code. Errors now map to
   their real code/message (e.g. `agent_pane_busy`, `protocol_mismatch`) — which
   is also what lets the start retry recognize `agent_pane_busy`.
+- **herdr 0.7.5: `herdr_send_prompt` / `herdr_delegate` send step.** 0.7.5 removed
+  `agent send` (replaced by `agent prompt`, which types + submits in one call). The
+  send step now branches by version: 0.7.5 uses `agent prompt` (or `pane send-text`
+  for type-only); legacy keeps `agent send` + `pane send-keys Enter`.
 
 ## [0.2.1] - 2026-07-29
 
