@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-29
+
+### Fixed
+
+- **herdr 0.7.5 compatibility for `herdr_start_agent` / `herdr_delegate` (#2).**
+  herdr 0.7.5 redesigned `agent start`: it no longer creates a pane or accepts
+  `--cwd/--split/--tab/--workspace/--env/--focus`, and now requires `--kind`/
+  `--pane` on an *existing* pane. The old code always passed `--focus`/
+  `--no-focus`, so both tools unconditionally failed on 0.7.5 with
+  `unknown option: --focus` (exit 2). The extension now detects the herdr version
+  once and branches:
+  - **legacy (`<0.7.5`)** — incl. the Windows beta — keeps the original
+    one-call `agent start` (unchanged).
+  - **new (`>=0.7.5`)** — splits a pane (`pane split --current --direction …`),
+    then `agent start <name> --kind <preset> --pane <id>`. Custom `argv:` returns
+    a clear `VALIDATION_ERROR` (0.7.5 has no raw-argv path).
+  Both tools route through one shared, version-branched helper.
+
+### Added
+
+- **Proactive herdr detection at session start.** The version probe now runs
+  eagerly on `session_start` (`startup`/`reload`) instead of lazily on the first
+  agent-start call, so an install/upgrade or a missing herdr is noticed
+  immediately. If herdr is absent (or its version can't be parsed) a warning
+  toast points to the install instructions (`herdr.dev` / `brew install herdr`);
+  the footer always shows the detected version, e.g.
+  `herdr: 3 agents (1 working) (0.7.5)`.
+
 ## [0.2.0] - 2026-07-13
 
 ### Added

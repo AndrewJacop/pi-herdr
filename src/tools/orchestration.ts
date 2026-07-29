@@ -7,10 +7,12 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { herdr } from "../herdr.js";
 import { expandAgentSpec } from "../launcher.js";
+import { detectHerdrVersion, isNewAgentApi } from "../version.js";
 import {
 	extractText,
 	normalizeAgent,
 	type Err,
+	type HerdrErrorCode,
 	type Result,
 	type ToolReturn,
 } from "../env.js";
@@ -58,6 +60,181 @@ function fail(r: Err): ToolReturn {
 /** Build a success ToolReturn with custom text + structured details. */
 function okText(text: string, details: unknown): ToolReturn {
 	return { content: [{ type: "text", text }], details };
+}
+
+// ---- agent start: version-branched ----------------------------------------
+// herdr redesigned `agent start` in 0.7.5. The Windows beta still ships 0.7.3,
+// so we detect the version once and branch:
+//   - legacy (<0.7.5): `agent start <name> [--cwd --split --tab --workspace
+//     --env] [--focus|--no-focus] -- <argv>` — one call creates the pane.
+//   - new (>=0.7.5):  `pane split --current --direction ... [--cwd --env --focus]`
+//     then `agent start <name> --kind <kind> --pane <id>` — pane must exist.
+//     tab/workspace targeting has no 0.7.5 equivalent (pane split has none), so
+//     those are ignored on the new path and the pane lands in the current tab.
+
+const NEW_API_KINDS = new Set([
+	"pi",
+	"claude",
+	"codex",
+	"gemini",
+	"cursor",
+	"devin",
+	"agy",
+	"cline",
+	"omp",
+	"mastracode",
+	"opencode",
+	"copilot",
+	"kimi",
+	"kiro",
+	"droid",
+	"amp",
+	"grok",
+	"hermes",
+	"kilo",
+	"qodercli",
+	"maki",
+]);
+
+interface StartInput {
+	name: string;
+	agent?: string;
+	argv?: string[];
+	cwd?: string;
+	split?: "right" | "down";
+	tabId?: string;
+	workspaceId?: string;
+	env?: Record<string, string>;
+	focus?: boolean;
+	signal?: AbortSignal;
+}
+
+/** Build a non-ok Result with a normalized error code. */
+function err(code: HerdrErrorCode, message: string, details?: unknown): Err {
+	return { ok: false, error: { code, message, details } };
+}
+
+/** Tolerantly pull a pane id out of a `pane split` / `agent start` result. */
+function extractPaneId(d: unknown): string | undefined {
+	if (!d || typeof d !== "object") return undefined;
+	const o = d as Record<string, unknown>;
+	const pane =
+		o.pane && typeof o.pane === "object"
+			? (o.pane as Record<string, unknown>)
+			: o;
+	for (const k of ["pane_id", "paneId", "id"]) {
+		if (typeof pane[k] === "string") return pane[k] as string;
+	}
+	return undefined;
+}
+
+/** Legacy (<0.7.5) launch: one `agent start` that creates and configures the pane. */
+async function startAgentLegacy(
+	input: StartInput,
+): Promise<Result<{ agent: Record<string, unknown> }>> {
+	const spec = expandAgentSpec({ agent: input.agent, argv: input.argv });
+	if (!spec.ok) return spec;
+	const args = ["agent", "start", input.name];
+	if (input.cwd) args.push("--cwd", input.cwd);
+	if (input.split) args.push("--split", input.split);
+	if (input.tabId) args.push("--tab", input.tabId);
+	if (input.workspaceId) args.push("--workspace", input.workspaceId);
+	if (input.env)
+		for (const [k, v] of Object.entries(input.env))
+			args.push("--env", `${k}=${v}`);
+	args.push(input.focus ? "--focus" : "--no-focus");
+	args.push("--", ...spec.data);
+	const r = await herdr<{ agent?: Record<string, unknown> }>(args, {
+		timeoutMs: 20_000,
+		signal: input.signal,
+	});
+	if (!r.ok) return r;
+	return {
+		ok: true,
+		data: { agent: (r.data?.agent ?? r.data) as Record<string, unknown> },
+	};
+}
+
+/** New (>=0.7.5) launch: split a pane, then attach an agent to it by --kind. */
+async function startAgentNew(
+	input: StartInput,
+): Promise<Result<{ agent: Record<string, unknown> }>> {
+	// 0.7.5 `agent start` takes --kind, not a raw command.
+	if (input.argv && input.argv.length) {
+		return err(
+			"VALIDATION_ERROR",
+			"herdr 0.7.5+ `agent start` requires --kind and cannot run a custom argv; use a named preset (pi/claude/codex/omp).",
+		);
+	}
+	const kind = (input.agent ?? "pi").toLowerCase();
+	if (!NEW_API_KINDS.has(kind)) {
+		return err(
+			"VALIDATION_ERROR",
+			`herdr 0.7.5+ \`agent start\` has no --kind for preset "${kind}". Supported: ${[...NEW_API_KINDS].join(", ")}.`,
+		);
+	}
+
+	// 1. create the pane (0.7.5 `agent start` needs an existing pane at a shell prompt).
+	const splitArgs = [
+		"pane",
+		"split",
+		"--current",
+		"--direction",
+		input.split ?? "right",
+	];
+	if (input.cwd) splitArgs.push("--cwd", input.cwd);
+	if (input.env)
+		for (const [k, v] of Object.entries(input.env))
+			splitArgs.push("--env", `${k}=${v}`);
+	if (input.focus) splitArgs.push("--focus");
+	const splitR = await herdr<unknown>(splitArgs, {
+		timeoutMs: 20_000,
+		signal: input.signal,
+	});
+	if (!splitR.ok) return splitR;
+	const paneId = extractPaneId(splitR.data);
+	if (!paneId) {
+		return err(
+			"PANE_GONE",
+			"herdr pane split returned no pane id",
+			splitR.data,
+		);
+	}
+
+	// 2. attach the agent to that pane.
+	const startArgs = [
+		"agent",
+		"start",
+		input.name,
+		"--kind",
+		kind,
+		"--pane",
+		paneId,
+	];
+	const startR = await herdr<{ agent?: Record<string, unknown> }>(startArgs, {
+		timeoutMs: 20_000,
+		signal: input.signal,
+	});
+	if (!startR.ok) return startR;
+	return {
+		ok: true,
+		data: {
+			agent: (startR.data?.agent ?? { pane_id: paneId }) as Record<
+				string,
+				unknown
+			>,
+		},
+	};
+}
+
+/** Detect herdr version once and dispatch to the matching launch path. */
+async function startHerdrAgent(
+	input: StartInput,
+): Promise<Result<{ agent: Record<string, unknown> }>> {
+	const version = await detectHerdrVersion();
+	return isNewAgentApi(version)
+		? startAgentNew(input)
+		: startAgentLegacy(input);
 }
 
 /** Resolve a flexible target (name/label/paneId) to a concrete pane id. */
@@ -279,26 +456,21 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			),
 		}),
 		async execute(_id, p, signal) {
-			const spec = expandAgentSpec({ agent: p.agent, argv: p.argv });
-			if (!spec.ok) return fail(spec);
 			const name = p.name ?? `agent-${Date.now()}`;
-			const args = ["agent", "start", name];
-			if (p.cwd) args.push("--cwd", p.cwd);
-			if (p.split) args.push("--split", p.split);
-			if (p.tabId) args.push("--tab", p.tabId);
-			if (p.workspaceId) args.push("--workspace", p.workspaceId);
-			if (p.env)
-				for (const [k, v] of Object.entries(p.env))
-					args.push("--env", `${k}=${v}`);
-			args.push(p.focus ? "--focus" : "--no-focus");
-			args.push("--", ...spec.data);
-
-			const r = await herdr<{ agent?: Record<string, unknown> }>(args, {
-				timeoutMs: 20_000,
+			const r = await startHerdrAgent({
+				name,
+				agent: p.agent,
+				argv: p.argv,
+				cwd: p.cwd,
+				split: p.split,
+				tabId: p.tabId,
+				workspaceId: p.workspaceId,
+				env: p.env,
+				focus: p.focus,
 				signal,
 			});
 			if (!r.ok) return fail(r);
-			const a = normalizeAgent(r.data?.agent ?? r.data);
+			const a = normalizeAgent(r.data.agent);
 			return okText(
 				`Started ${a.agent ?? p.agent ?? "pi"} agent "${a.name ?? name}" in pane ${a.paneId ?? "?"}.`,
 				a,
@@ -683,25 +855,18 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				isError,
 			});
 
-			// 1. start
-			const spec = expandAgentSpec({ agent: p.agent, argv: p.argv });
-			if (!spec.ok) return fail(spec);
+			// 1. start (version-branched: legacy 0.7.3 vs redesigned 0.7.5 agent start)
 			const name = p.name ?? `delegate-${Date.now()}`;
-			const startArgs = ["agent", "start", name, "--no-focus"];
-			if (p.cwd) startArgs.push("--cwd", p.cwd);
-			if (p.env)
-				for (const [k, v] of Object.entries(p.env))
-					startArgs.push("--env", `${k}=${v}`);
-			startArgs.push("--", ...spec.data);
-			const startR = await herdr<{ agent?: Record<string, unknown> }>(
-				startArgs,
-				{ timeoutMs: 20_000, signal },
-			);
+			const startR = await startHerdrAgent({
+				name,
+				agent: p.agent,
+				argv: p.argv,
+				cwd: p.cwd,
+				env: p.env,
+				signal,
+			});
 			if (!startR.ok) return fail(startR);
-			const paneId =
-				(startR.data?.agent as { pane_id?: string })?.pane_id ??
-				(startR.data as { pane_id?: string })?.pane_id ??
-				null;
+			const paneId = normalizeAgent(startR.data.agent).paneId ?? null;
 			if (!paneId) {
 				return partial("agent start returned no pane id", {
 					name,
