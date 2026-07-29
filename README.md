@@ -304,7 +304,7 @@ src/
   selfreport.ts          # push this pi's state to herdr (reliable completion)
   tools/orchestration.ts # Tier 1 tools + herdr_delegate
 tests/
-  smoke.mjs              # offline (50 checks)
+  smoke.mjs              # offline (53 checks)
   live.mjs, pong.mjs, delegate.mjs, selfreport.mjs, multi.mjs, stress.mjs
 ```
 
