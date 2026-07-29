@@ -141,7 +141,7 @@ Use herdr_delegate to spawn a fresh pi agent and ask it to summarize README.md i
 ```
 
 You'll see a new pane appear in herdr, the spawned agent work, and pi return its
-answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents (1 working)`.
+answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents (1 working) (0.7.5)`.
 
 ---
 
@@ -304,7 +304,7 @@ src/
   selfreport.ts          # push this pi's state to herdr (reliable completion)
   tools/orchestration.ts # Tier 1 tools + herdr_delegate
 tests/
-  smoke.mjs              # offline (53 checks)
+  smoke.mjs              # offline (70 checks)
   live.mjs, pong.mjs, delegate.mjs, selfreport.mjs, multi.mjs, stress.mjs
 ```
 

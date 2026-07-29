@@ -233,6 +233,95 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
+console.log("\n[7] Version detection + agent-start API boundary (issue #2)");
+const versionMod = await jiti.import(join(ROOT, "src/version.ts"), {
+	parent: ROOT,
+});
+assert(
+	eq(versionMod.parseVersion("herdr 0.7.5"), { major: 0, minor: 7, patch: 5 }),
+	"parseVersion('herdr 0.7.5') -> {0,7,5}",
+);
+assert(
+	eq(versionMod.parseVersion("herdr 0.7.3-preview"), {
+		major: 0,
+		minor: 7,
+		patch: 3,
+	}),
+	"parseVersion tolerates pre-release suffix (Windows beta 0.7.3)",
+);
+assert(
+	versionMod.parseVersion("garbage") === null,
+	"parseVersion -> null on garbage",
+);
+assert(versionMod.parseVersion("") === null, "parseVersion -> null on empty");
+// Legacy API (<0.7.5): one `agent start` creates the pane.
+assert(
+	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 2 }) === false,
+	"0.7.2 -> legacy",
+);
+assert(
+	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 3 }) === false,
+	"0.7.3 -> legacy (Windows beta)",
+);
+assert(
+	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 4 }) === false,
+	"0.7.4 -> legacy",
+);
+// Redesigned API (>=0.7.5): needs pane split + --kind/--pane.
+assert(
+	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 5 }) === true,
+	"0.7.5 -> new API",
+);
+assert(
+	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 10 }) === true,
+	"0.7.10 -> new API",
+);
+assert(
+	versionMod.isNewAgentApi({ major: 0, minor: 8, patch: 0 }) === true,
+	"0.8.0 -> new API",
+);
+assert(
+	versionMod.isNewAgentApi({ major: 1, minor: 0, patch: 0 }) === true,
+	"1.0.0 -> new API",
+);
+assert(
+	versionMod.isNewAgentApi(null) === false,
+	"unknown version -> legacy (safe default)",
+);
+// e2e: detectHerdrVersion spawns `herdr --version` and parses it. Use node as a
+// fake herdr (its --version prints "vMAJOR.MINOR.PATCH" -> major >= 1 -> new API).
+process.env.HERDR_BIN = NODE;
+const detected = await versionMod.detectHerdrVersion();
+assert(
+	detected &&
+		typeof detected.major === "number" &&
+		typeof detected.minor === "number" &&
+		typeof detected.patch === "number",
+	"detectHerdrVersion spawns + parses --version (e2e)",
+);
+assert(
+	versionMod.isNewAgentApi(detected) === true,
+	"detectHerdrVersion result classified (node fake -> new API)",
+);
+// probe state machine: "ok" when herdr runs, "missing" when the binary is absent.
+process.env.HERDR_BIN = NODE;
+const okProbe = await versionMod.refreshHerdrProbe();
+assert(
+	okProbe.state === "ok" && typeof okProbe.version?.major === "number",
+	"probe -> ok when herdr runs",
+);
+assert(
+	typeof versionMod.formatVersion(okProbe.version) === "string",
+	"formatVersion returns a string",
+);
+process.env.HERDR_BIN = "Z:\\nonexistent\\herdr-binary.exe";
+const missingProbe = await versionMod.refreshHerdrProbe();
+assert(
+	missingProbe.state === "missing",
+	"probe -> missing when herdr binary absent",
+);
+
+// ---------------------------------------------------------------------------
 console.log(
 	`\n${failed === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${passed} passed, ${failed} failed)`,
 );
