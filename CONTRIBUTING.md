@@ -22,6 +22,8 @@ You do **not** need a build step — pi loads TypeScript via jiti. Edit `src/` a
 - `npm test` — offline smoke suite; no herdr required. Must pass.
 - `npm run test:live` — requires a running herdr session + a working model for
   spawned agents.
+- `npm run test:win` — Windows-only live test of the `pane run` launch path + every
+  orchestration tool; self-skips on non-Windows.
 - `npm run test:stress` — 5 parallel agents doing real multi-tool work, with
   on-disk artifact verification. The strongest correctness check.
 - **Isolated live test (no install):** from a clone, open a herdr tab and run
@@ -51,6 +53,12 @@ You do **not** need a build step — pi loads TypeScript via jiti. Edit `src/` a
   emits error envelopes on stderr). The extension detects the version once
   (`src/version.ts`) and branches; when you touch a herdr command that differs
   across versions, follow that pattern instead of assuming one API.
+- **Platform-gate when a herdr command is broken on one OS.** herdr 0.7.5-preview's
+  `agent start --kind` is Windows-broken (PowerShell `Start-Process` can't launch
+  npm shims), so `startAgentNew` branches on `process.platform === "win32"` to
+  launch via `pane run` + herdr auto-detect instead, leaving the macOS/Linux
+  `agent start` path intact. When a herdr command works on one platform but not
+  another, gate on platform and keep the working path untouched.
 
 ## Adding a tool
 
