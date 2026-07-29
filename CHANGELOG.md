@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.2] - 2026-07-29
+## [0.2.1] - 2026-07-29
+
+### Added
+
+- **Self-report `blocked` while a questionnaire awaits input.** Subscribe to
+  `rpiv:ask-user:blocked` (`@juicesharp/rpiv-ask-user-question`) and
+  `pi-cursor-sdk:ask-question:blocked` (`pi-cursor-sdk`), mapping
+  `{ active: true }` → `blocked`, `{ active: false }` → `working` (turn still
+  in progress). Requires a pi host that loads this extension plus the matching
+  producer package.
+- **Proactive herdr detection at session start.** The version probe now runs
+  eagerly on `session_start` (`startup`/`reload`) instead of lazily on the first
+  agent-start call, so an install/upgrade or a missing herdr is noticed
+  immediately. If herdr is absent (or its version can't be parsed) a warning
+  toast points to the install instructions (`herdr.dev` / `brew install herdr`);
+  the footer always shows the detected version, e.g.
+  `herdr: 3 agents (1 working) (0.7.5)`.
 
 ### Fixed
 
@@ -24,27 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     then `agent start <name> --kind <preset> --pane <id>`. Custom `argv:` returns
     a clear `VALIDATION_ERROR` (0.7.5 has no raw-argv path).
   Both tools route through one shared, version-branched helper.
-
-### Added
-
-- **Proactive herdr detection at session start.** The version probe now runs
-  eagerly on `session_start` (`startup`/`reload`) instead of lazily on the first
-  agent-start call, so an install/upgrade or a missing herdr is noticed
-  immediately. If herdr is absent (or its version can't be parsed) a warning
-  toast points to the install instructions (`herdr.dev` / `brew install herdr`);
-  the footer always shows the detected version, e.g.
-  `herdr: 3 agents (1 working) (0.7.5)`.
-
-## [0.2.1] - 2026-07-29
-
-### Added
-
-- Self-report `blocked` while a questionnaire awaits input:
-  subscribe to `rpiv:ask-user:blocked` (`@juicesharp/rpiv-ask-user-question`)
-  and `pi-cursor-sdk:ask-question:blocked` (`pi-cursor-sdk`), mapping
-  `{ active: true }` → `blocked`, `{ active: false }` → `working` (turn still
-  in progress). Requires a pi host that loads this extension plus the matching
-  producer package.
 
 ## [0.2.0] - 2026-07-13
 
@@ -112,4 +107,3 @@ No functional changes since 0.1.0.
 [0.1.1]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.1.1
 [0.2.0]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.2.0
 [0.2.1]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.2.1
-[0.2.2]: https://github.com/AndrewJacop/pi-herdr/releases/tag/v0.2.2
