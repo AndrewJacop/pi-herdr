@@ -196,6 +196,21 @@ assert(
 		errOut.error.message === "boom",
 	`maps agent_start_failed -> AGENT_START_FAILED (got ${errOut.error?.code})`,
 );
+// herdr 0.7.5+ emits error envelopes on stderr (stdout empty, exit 1).
+const stderrErr = await herdrMod.herdr(
+	[
+		"-e",
+		'process.stderr.write(JSON.stringify({error:{code:"agent_start_failed",message:"boom2"},id:"x"}));process.exit(1)',
+	],
+	{ timeoutMs: 5_000 },
+);
+assert(
+	!stderrErr.ok &&
+		stderrErr.error.code === "AGENT_START_FAILED" &&
+		stderrErr.error.message === "boom2" &&
+		stderrErr.error.details?.code === "agent_start_failed",
+	"parses stderr error envelope -> mapped code + details.code (0.7.5 emits errors on stderr)",
+);
 
 const rawOut = await herdrMod.herdr(["-e", 'process.stdout.write("pong\\n")'], {
 	timeoutMs: 5_000,

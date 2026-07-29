@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **herdr 0.7.5: `herdr_start_agent` / `herdr_delegate` now actually spawn.**
+  0.2.1's new path splits a pane then calls `agent start`, but herdr returns
+  `agent_pane_busy` while the freshly-split shell is still reaching its prompt
+  (it fails fast instead of waiting), so spawning always failed on 0.7.5. The
+  start now retries `agent start` briefly (≤6s) on `agent_pane_busy`.
+- **herdr 0.7.5 error envelopes (emitted on stderr) are now parsed.** herdr 0.7.5
+  writes error JSON to stderr (stdout empty, non-zero exit); the helper only
+  parsed stdout, so every error collapsed to a generic
+  `VALIDATION_ERROR: herdr error: {json}` with no usable code. Errors now map to
+  their real code/message (e.g. `agent_pane_busy`, `protocol_mismatch`) — which
+  is also what lets the start retry recognize `agent_pane_busy`.
+
 ## [0.2.1] - 2026-07-29
 
 ### Added

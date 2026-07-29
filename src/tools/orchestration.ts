@@ -201,7 +201,9 @@ async function startAgentNew(
 		);
 	}
 
-	// 2. attach the agent to that pane.
+	// 2. attach the agent to that pane. herdr fails fast with `agent_pane_busy`
+	//    while the freshly-split shell is still reaching its prompt (it does not
+	//    retry despite --timeout being a readiness wait), so retry briefly.
 	const startArgs = [
 		"agent",
 		"start",
@@ -211,10 +213,18 @@ async function startAgentNew(
 		"--pane",
 		paneId,
 	];
-	const startR = await herdr<{ agent?: Record<string, unknown> }>(startArgs, {
-		timeoutMs: 20_000,
-		signal: input.signal,
-	});
+	const deadline = Date.now() + 6_000;
+	let startR: Result<{ agent?: Record<string, unknown> }>;
+	do {
+		startR = await herdr<{ agent?: Record<string, unknown> }>(startArgs, {
+			timeoutMs: 20_000,
+			signal: input.signal,
+		});
+		if (startR.ok) break;
+		const code = (startR.error.details as { code?: string } | undefined)?.code;
+		if (code !== "agent_pane_busy" || Date.now() >= deadline) break;
+		await sleep(250);
+	} while (true);
 	if (!startR.ok) return startR;
 	return {
 		ok: true,
