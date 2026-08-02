@@ -232,8 +232,9 @@ pane accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| `agent` | `"pi"` | One of `pi`, `claude`, `codex`, `omp` (opencode), `custom`. |
-| `argv` | — | Explicit launch argv; overrides the preset (required for `custom`). |
+| `agent` | `"pi"` | One of `pi`, `claude`, `codex`, `omp` (opencode), `custom`. (herdr 0.7.5 supports ~20 kinds via `--kind`; `custom` is legacy `<0.7.5` only.) |
+| `argv` | — | Explicit launch argv; overrides the preset (required for `custom`). Legacy `<0.7.5` only — rejected on 0.7.5. |
+| `agentArgs` | — | Extra flags appended to the agent CLI after launch, e.g. `["-ne","-e","./src/index.ts"]` to load a **local extension** instead of the installed copy (the dev / self-host loop). 0.7.5: after `--` in `agent start`; Windows pane-run: joined into the command line; legacy: extends the preset argv. *(v0.2.4)* |
 | `cwd` | — | Working directory for the spawned agent. |
 | `name` | `agent-<timestamp>` | Unique pane name. |
 

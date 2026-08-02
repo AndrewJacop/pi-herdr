@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-02
+
+### Added
+
+- **`agentArgs` on `herdr_start_agent` / `herdr_delegate`.** Pass extra flags to
+  the spawned agent CLI — most importantly
+  `agentArgs: ["-ne","-e","./src/index.ts"]` to launch a `pi` that loads a
+  **local extension** instead of the installed copy (the dev / self-host loop, and
+  the basis for the v0.2.5 self-driving task pipeline). Threaded through all three
+  launch paths:
+  - herdr ≥0.7.5 (macOS/Linux): `agent start <name> --kind <kind> --pane <id> --
+    <agentArgs>` (herdr's documented native-args form — verified against herdr's
+    `agent_start` source + official CLI reference, platform-independent).
+  - herdr ≥0.7.5 (Windows): joined into the `pane run` command line (the
+    auto-detect launch path, since `agent start --kind` is Windows-broken in the
+    0.7.5 preview).
+  - legacy `<0.7.5`: appended to the preset argv after `--`.
+  Verified end-to-end on Windows: a tool-driven `herdr_start_agent` spawn with
+  `agentArgs` loaded the local `./src` (boot showed `[Extensions] src`).
+- `tests/smoke.mjs` asserts `agentArgs` is exposed on both tool schemas.
+
 ## [0.2.3] - 2026-07-29
 
 ### Fixed

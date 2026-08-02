@@ -337,6 +337,21 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
+console.log("\n[8] agentArgs param exposed on start/delegate tools (v0.2.4)");
+const startTool = tools.find((t) => t.name === "herdr_start_agent");
+const delegateTool = tools.find((t) => t.name === "herdr_delegate");
+assert(!!startTool, "herdr_start_agent registered");
+assert(!!delegateTool, "herdr_delegate registered");
+assert(
+	!!startTool?.parameters?.properties?.agentArgs,
+	"herdr_start_agent exposes agentArgs param",
+);
+assert(
+	!!delegateTool?.parameters?.properties?.agentArgs,
+	"herdr_delegate exposes agentArgs param",
+);
+
+// ---------------------------------------------------------------------------
 console.log(
 	`\n${failed === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${passed} passed, ${failed} failed)`,
 );

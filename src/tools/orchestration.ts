@@ -36,7 +36,13 @@ const agentFields = {
 	argv: Type.Optional(
 		Type.Array(Type.String(), {
 			description:
-				"Explicit launch argv; overrides the preset (required when agent='custom').",
+			"Explicit launch argv; overrides the preset (required when agent='custom'). Legacy (<0.7.5) only — rejected on 0.7.5.",
+		}),
+	),
+	agentArgs: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+			"Extra flags appended to the agent CLI after launch, e.g. [\"-ne\",\"-e\",\"./src/index.ts\"] to load a local extension instead of the installed one. On 0.7.5 these follow `--` in `agent start`; on the Windows pane-run path they join the command line; on legacy they extend the preset argv.",
 		}),
 	),
 	cwd: Type.Optional(
@@ -105,6 +111,7 @@ interface StartInput {
 	name: string;
 	agent?: string;
 	argv?: string[];
+	agentArgs?: string[]; // extra flags appended to the agent CLI (e.g. ["-ne","-e","./src/index.ts"])
 	cwd?: string;
 	split?: "right" | "down";
 	tabId?: string;
@@ -147,8 +154,8 @@ async function startAgentLegacy(
 	if (input.env)
 		for (const [k, v] of Object.entries(input.env))
 			args.push("--env", `${k}=${v}`);
-	args.push(input.focus ? "--focus" : "--no-focus");
-	args.push("--", ...spec.data);
+	args.push(input.focus ? "--focus" : "--no-focus");	// legacy `agent start -- <argv>`: preset argv, then any extra agent flags.
+	args.push("--", ...spec.data, ...(input.agentArgs ?? []));
 	const r = await herdr<{ agent?: Record<string, unknown> }>(args, {
 		timeoutMs: 20_000,
 		signal: input.signal,
@@ -225,6 +232,9 @@ async function startAgentNew(
 		"--pane",
 		paneId,
 	];
+	// 0.7.5 `agent start ... -- <agent-args>`: pass native agent flags (e.g. pi's
+	// `-e ./src/index.ts`) so a spawned agent can load a local extension.
+	if (input.agentArgs?.length) startArgs.push("--", ...input.agentArgs);
 	const deadline = Date.now() + 6_000;
 	let startR: Result<{ agent?: Record<string, unknown> }>;
 	do {
@@ -271,7 +281,12 @@ async function startAgentWindowsPaneRun(
 	const spec = expandAgentSpec({ agent: input.agent });
 	if (!spec.ok) return spec;
 	const bareCmd = spec.data[spec.data.length - 1];
-	const runR = await herdr(["pane", "run", paneId, bareCmd], {
+	// `pane run <pane> <command>` takes one command string (text + Enter); join
+	// the bare agent command with any extra flags into a single command line.
+	const cmdLine = input.agentArgs?.length
+		? [bareCmd, ...input.agentArgs].join(" ")
+		: bareCmd;
+	const runR = await herdr(["pane", "run", paneId, cmdLine], {
 		timeoutMs: 15_000,
 		signal: input.signal,
 	});
@@ -550,7 +565,8 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 		label: "Start herdr agent",
 		description:
 			"Launch a new AI agent (pi/claude/codex/...) in a herdr pane and return its pane id and state. " +
-			"Platform argv handling (Windows cmd /c wrapper) is automatic.",
+			"Platform argv handling (Windows cmd /c wrapper) is automatic. " +
+			"Pass agentArgs (e.g. [\"-ne\",\"-e\",\"./src/index.ts\"]) to give the agent CLI extra flags — used to load a local extension instead of the installed one.",
 		promptSnippet:
 			"Spawn a herdr agent pane (pi/claude/codex/...) and drive it",
 		promptGuidelines: [
@@ -584,6 +600,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				name,
 				agent: p.agent,
 				argv: p.argv,
+				agentArgs: p.agentArgs,
 				cwd: p.cwd,
 				split: p.split,
 				tabId: p.tabId,
@@ -976,6 +993,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				name,
 				agent: p.agent,
 				argv: p.argv,
+				agentArgs: p.agentArgs,
 				cwd: p.cwd,
 				env: p.env,
 				signal,
