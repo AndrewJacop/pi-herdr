@@ -91,6 +91,16 @@ const expected = [
 	"herdr_focus_workspace",
 	"herdr_rename_workspace",
 	"herdr_close_workspace",
+	// Tier 4 — worktrees (T6)
+	"herdr_worktree_create",
+	"herdr_worktree_open",
+	"herdr_worktree_list",
+	"herdr_worktree_remove",
+	// Tier 5 — introspection (T6): api snapshot + sessions
+	"herdr_api_snapshot",
+	"herdr_session_list",
+	"herdr_session_stop",
+	"herdr_session_delete",
 ];
 for (const n of expected) assert(names.includes(n), `registered ${n}`);
 assert(
@@ -894,6 +904,313 @@ assert(
 		focused: true,
 	}),
 	"normalizeWorkspace maps snake_case -> camelCase",
+);
+
+// ---------------------------------------------------------------------------
+console.log(
+	"\n[14] T6: Tier 4 worktrees + Tier 5 snapshot/sessions",
+);
+const worktreesMod = await jiti.import(join(ROOT, "src/tools/worktrees.ts"), {
+	parent: ROOT,
+});
+const introspectionMod = await jiti.import(
+	join(ROOT, "src/tools/introspection.ts"),
+	{ parent: ROOT },
+);
+const t6Tools = [
+	// worktrees (remove is destructive)
+	"herdr_worktree_create",
+	"herdr_worktree_open",
+	"herdr_worktree_list",
+	"herdr_worktree_remove",
+	// introspection: api snapshot + sessions (stop/delete destructive)
+	"herdr_api_snapshot",
+	"herdr_session_list",
+	"herdr_session_stop",
+	"herdr_session_delete",
+];
+for (const n of t6Tools) assert(names.includes(n), `registered ${n} (T6)`);
+// Each T6 tool has the documented LLM hints (CONTRIBUTING: promptSnippet + guidelines).
+for (const n of t6Tools) {
+	const t = tools.find((x) => x.name === n);
+	assert(!!t?.promptSnippet, `${n} has promptSnippet`);
+	assert(
+		Array.isArray(t?.promptGuidelines) && t.promptGuidelines.length > 0,
+		`${n} has promptGuidelines`,
+	);
+	assert(
+		/worktree_create|worktree_open|worktree_list|worktree_remove|api_snapshot|session_list|session_stop|session_delete/.test(
+			t.promptGuidelines.join(" "),
+		),
+		`${n} promptGuidelines name the tool`,
+	);
+}
+// AC7: destructive T6 tools labeled ⚠️ (remove deletes the checkout dir;
+// stop tears down a session server; delete removes the session dir).
+for (const n of [
+	"herdr_worktree_remove",
+	"herdr_session_stop",
+	"herdr_session_delete",
+]) {
+	const t = tools.find((x) => x.name === n);
+	assert(
+		/⚠️/.test(t.description),
+		`${n} description carries ⚠️ (AC7)`,
+	);
+}
+// `session attach` is interactive (TUI) -> excluded: it must NOT be registered.
+assert(
+	!names.includes("herdr_session_attach"),
+	"interactive 'session attach' is excluded from the tool surface (T6)",
+);
+
+// Pure argv builders — worktrees.
+assert(
+	typeof worktreesMod.createWorktreeArgs === "function",
+	"createWorktreeArgs exported from worktrees (pure argv builder)",
+);
+// create serializes workspace/cwd/branch/base/path/label/focus and always emits --json.
+assert(
+	eq(
+		worktreesMod.createWorktreeArgs({
+			workspaceId: "w2",
+			cwd: "/repo",
+			branch: "feat",
+			base: "main",
+			path: "/wt/feat",
+			label: "feat-wt",
+			focus: true,
+		}),
+		[
+			"worktree",
+			"create",
+			"--workspace",
+			"w2",
+			"--cwd",
+			"/repo",
+			"--branch",
+			"feat",
+			"--base",
+			"main",
+			"--path",
+			"/wt/feat",
+			"--label",
+			"feat-wt",
+			"--focus",
+			"--json",
+		],
+	),
+	"createWorktreeArgs: full option set serializes in documented flag order with --json",
+);
+assert(
+	eq(worktreesMod.createWorktreeArgs({ focus: false }), [
+		"worktree",
+		"create",
+		"--no-focus",
+		"--json",
+	]),
+	"createWorktreeArgs: focus:false -> --no-focus; undefined options omitted; --json always present",
+);
+// open: subset of create flags (no --base).
+assert(
+	eq(
+		worktreesMod.openWorktreeArgs({ path: "/wt/feat", branch: "feat", focus: true }),
+		[
+			"worktree",
+			"open",
+			"--path",
+			"/wt/feat",
+			"--branch",
+			"feat",
+			"--focus",
+			"--json",
+		],
+	),
+	"openWorktreeArgs: path/branch/focus + --json (no --base on open)",
+);
+// list: optional workspace/cwd + --json.
+assert(
+	eq(worktreesMod.listWorktreesArgs(), ["worktree", "list", "--json"]),
+	"listWorktreesArgs: bare 'worktree list --json'",
+);
+assert(
+	eq(worktreesMod.listWorktreesArgs({ workspaceId: "w2", cwd: "/repo" }), [
+		"worktree",
+		"list",
+		"--workspace",
+		"w2",
+		"--cwd",
+		"/repo",
+		"--json",
+	]),
+	"listWorktreesArgs: filters by --workspace/--cwd",
+);
+// remove: workspace optional, force optional, --json always.
+assert(
+	eq(worktreesMod.removeWorktreeArgs({}), [
+		"worktree",
+		"remove",
+		"--json",
+	]),
+	"removeWorktreeArgs: bare 'worktree remove --json'",
+);
+assert(
+	eq(worktreesMod.removeWorktreeArgs({ workspaceId: "w2", force: true }), [
+		"worktree",
+		"remove",
+			"--workspace",
+		"w2",
+		"--force",
+		"--json",
+	]),
+	"removeWorktreeArgs: --workspace + --force",
+);
+// normalizer tolerates snake_case + open_workspace_id alias.
+assert(
+	eq(
+		worktreesMod.normalizeWorktree({
+			path: "D:/r",
+			branch: "main",
+			open_workspace_id: "w1",
+			is_linked_worktree: false,
+		}),
+		{
+			path: "D:/r",
+			branch: "main",
+			label: undefined,
+			openWorkspaceId: "w1",
+			isLinkedWorktree: false,
+			isDetached: undefined,
+			isBare: undefined,
+			isPrunable: undefined,
+		},
+	),
+	"normalizeWorktree maps snake_case -> camelCase (open_workspace_id)",
+);
+// extractWorktree pulls the first worktree out of a `worktrees` array, and
+// falls back to a bare object / `worktree` wrapper.
+assert(
+	worktreesMod.extractWorktree({ worktrees: [{ path: "/a", branch: "x" }] })
+		.path === "/a",
+	"extractWorktree: unwraps the first element of a worktrees array",
+);
+assert(
+	worktreesMod.extractWorktree({ worktree: { path: "/b" } }).path === "/b",
+	"extractWorktree: unwraps a `worktree` wrapper",
+);
+assert(
+	worktreesMod.extractWorktree({ path: "/c", branch: "y" }).path === "/c",
+	"extractWorktree: returns a bare worktree object as-is",
+);
+
+// Pure argv builders — introspection.
+assert(
+	eq(introspectionMod.apiSnapshotArgs(), ["api", "snapshot"]),
+	"apiSnapshotArgs: 'api snapshot' (no flags)",
+);
+assert(
+	eq(introspectionMod.sessionListArgs(), ["session", "list", "--json"]),
+	"sessionListArgs: 'session list --json'",
+);
+assert(
+	eq(introspectionMod.sessionStopArgs("pi-herdr"), [
+		"session",
+		"stop",
+		"pi-herdr",
+		"--json",
+	]),
+	"sessionStopArgs: positional NAME + --json",
+);
+assert(
+	eq(introspectionMod.sessionDeleteArgs("stale"), [
+		"session",
+		"delete",
+		"stale",
+		"--json",
+	]),
+	"sessionDeleteArgs: positional NAME + --json",
+);
+// session normalizer tolerates snake_case + missing fields.
+assert(
+	eq(
+		introspectionMod.normalizeSession({
+			name: "default",
+			running: true,
+			default: true,
+			session_dir: "/s",
+			socket_path: "/sock",
+		}),
+		{
+			name: "default",
+			running: true,
+			default: true,
+			sessionDir: "/s",
+			socketPath: "/sock",
+		},
+	),
+	"normalizeSession maps snake_case -> camelCase",
+);
+// summarizeSnapshot reads counts + focused ids from a nested `snapshot` and
+// counts working agents; also tolerates a bare snapshot object.
+assert(
+	eq(
+		introspectionMod.summarizeSnapshot({
+			snapshot: {
+				version: "0.7.5",
+				protocol: 18,
+				focused_pane_id: "w1:pB",
+				focused_tab_id: "w1:t1",
+				focused_workspace_id: "w1",
+				workspaces: [{}],
+				tabs: [{}],
+				panes: [{}, {}],
+				agents: [{ agent_status: "working" }, { agent_status: "idle" }],
+			},
+		}),
+		{
+			version: "0.7.5",
+			protocol: 18,
+			focusedPaneId: "w1:pB",
+			focusedTabId: "w1:t1",
+			focusedWorkspaceId: "w1",
+			workspaceCount: 1,
+			tabCount: 1,
+			paneCount: 2,
+			agentCount: 2,
+			workingCount: 1,
+		},
+	),
+	"summarizeSnapshot: unwraps `snapshot`, counts lists, counts working agents",
+);
+assert(
+	introspectionMod.summarizeSnapshot({ workspaces: [] }).workspaceCount === 0,
+	"summarizeSnapshot: tolerates a bare snapshot object",
+);
+assert(
+	eq(introspectionMod.summarizeSnapshot({}), {
+		version: undefined,
+		protocol: undefined,
+		focusedPaneId: undefined,
+		focusedTabId: undefined,
+		focusedWorkspaceId: undefined,
+		workspaceCount: undefined,
+		tabCount: undefined,
+		paneCount: undefined,
+		agentCount: 0,
+		workingCount: 0,
+	}),
+	"summarizeSnapshot: missing lists -> undefined counts, agent counts default to 0",
+);
+// stop/delete take a single `name`; exposed on the schema.
+const sessionStopTool = tools.find((t) => t.name === "herdr_session_stop");
+const sessionDeleteTool = tools.find((t) => t.name === "herdr_session_delete");
+assert(
+	!!sessionStopTool?.parameters?.properties?.name,
+	"herdr_session_stop exposes a 'name' param",
+);
+assert(
+	!!sessionDeleteTool?.parameters?.properties?.name,
+	"herdr_session_delete exposes a 'name' param",
 );
 
 // ---------------------------------------------------------------------------
