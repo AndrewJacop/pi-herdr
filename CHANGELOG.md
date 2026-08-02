@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-02
+
+The "full herdr 0.7.5 surface" release. The extension now wraps **43 tools** across
+five tiers (was 11, orchestration-only) — pane/tab/workspace CRUD, raw pane sync,
+git worktrees, and live introspection — plus bug fixes and refactors on the
+redesigned 0.7.5 `agent` API. Offline smoke gate grows to **378 checks**; a full
+**live sweep of all 43 tools** passed against herdr 0.7.5-preview.
+
+### Added
+
+- **Tier 3 — pane-sync (6 tools):** `herdr_split_pane`, `herdr_run_command`,
+  `herdr_read_pane`, `herdr_wait_output`, `herdr_send_keys` (⚠️), `herdr_close_pane`
+  (⚠️) — the raw-process surface 0.7.5 splits out from agents (use case: run a
+  command in a pane and read its output on demand). Always emits `--timeout` so
+  `wait_output` never hangs.
+- **Tier 2 — layout (18 tools):** panes (`list`/`get`/`resize`/`zoom`/`move`/`swap`),
+  tabs (`list`/`create`/`get`/`focus`/`rename`/`close` ⚠️), workspaces
+  (`list`/`create`/`get`/`focus`/`rename`/`close` ⚠️). Pane `split`/`close` reuse
+  Tier 3.
+- **Tier 4 — git worktrees (4 tools):** `herdr_worktree_create`,
+  `herdr_worktree_open`, `herdr_worktree_list`, `herdr_worktree_remove` (⚠️).
+- **Tier 5 — introspection (4 tools):** `herdr_api_snapshot`, `herdr_session_list`,
+  `herdr_session_stop` (⚠️), `herdr_session_delete` (⚠️). Interactive
+  `session attach` is excluded.
+- **User-facing wiki** under `docs/` — landing page, concepts (envelope, version
+  branching, pane-vs-agent surface, targeting/naming, destructive tools),
+  per-surface references for all 43 tools, and a development/testing guide.
+- `tests/smoke.mjs` extended with argv-builder, normalizer, destructive-label, and
+  registration-count assertions (84 → 378 checks).
+
+### Fixed
+
+- **`herdr_wait_agent` on herdr 0.7.5.** The removed `wait agent-status` group
+  broke waits for `working`/`blocked`/`unknown` (only `idle`/`done` survived via
+  the polling fallback). The new API now emits
+  `agent wait <target> --until <s> [--until …] --timeout <ms>` (`idle`/`done` still
+  race the `agent get` fallback); legacy keeps `wait agent-status`.
+
+### Changed
+
+- **`herdr_delegate` is atomic on 0.7.5.** Submit+wait is now a single
+  `agent prompt <target> <text> --wait --timeout <ms>`; `agent_prompt_stalled`
+  falls back to wait/poll instead of hanging, and the turn is re-sent up to 3× if
+  it never starts. Legacy send → wait dance unchanged.
+- **Dropped the dead `custom`/`argv` launch surface.** `agent:"custom"`+`argv` is
+  rejected on 0.7.5; removed from the LLM schema. `agent` is now a free string
+  **validated against the live `herdr agent` kind list** (cached per session,
+  hardcoded fallback), else `VALIDATION_ERROR`. Use `agentArgs` to load a local
+  extension.
+
+### Docs
+
+- README refreshed for the 0.7.5 command surface (real ~20 agent kinds,
+  completion detection via `agent prompt --wait` / `agent wait --until`, the five
+  shipped tiers, corrected stale examples).
+
 ## [0.2.4] - 2026-08-02
 
 ### Added

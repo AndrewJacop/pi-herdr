@@ -1,6 +1,6 @@
 {
   "name": "@andrewjacop/pi-herdr",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "herdr integration for the pi coding agent — spawn, drive, wait for, and harvest AI agent panes running in herdr.",
   "type": "module",
   "keywords": [
