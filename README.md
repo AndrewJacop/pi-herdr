@@ -203,20 +203,24 @@ give each its own checkout.)
 **What happens:** A `claude` pane boots, receives the diff, and returns a review.
 Because each agent is a real CLI in its own pane, you can mix models/vendors freely.
 
-> ⚠️ **Interrupting a stuck pane:** to send Ctrl-C to a runaway agent, use the
-> built-in herdr CLI directly for now: `herdr pane send-keys <pane> C-c`
-> (a dedicated `herdr_send_keys` tool is planned for the next tier).
+> ⚠️ **Interrupting a stuck pane:** to send Ctrl-C to a runaway agent, use
+> `herdr_send_keys` with `["ctrl+c"]` (set `agentScope: true` to target an agent
+> rather than the raw pane).
 
 ---
 
 ## Tools
 
-All Tier 1 (orchestration) tools are included. Every tool that targets an existing
-pane accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
+`pi-herdr` exposes the full herdr tool surface across five tiers. **Tier 1
+(orchestration)** is the headline use case; tiers 2–5 cover layout, pane-sync,
+git worktrees, and fleet introspection. Every tool that targets an existing pane
+accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
+
+### Tier 1 — orchestration (spawn & drive agents)
 
 | Tool | What it does |
 | --- | --- |
-| `herdr_start_agent` | Launch an agent (`pi`/`claude`/`codex`/`omp`/`custom`) in a herdr pane; returns pane id + state. |
+| `herdr_start_agent` | Launch an agent (`pi`/`claude`/`codex`/`gemini`/`cursor`/… — ~20 kinds) in a herdr pane; returns pane id + state. |
 | `herdr_send_prompt` | Send a prompt to a pane; submits with Enter by default. |
 | `herdr_read_agent` | Read recent/visible output text from a pane. |
 | `herdr_wait_agent` | Block until a pane reaches `idle`/`working`/`blocked`/`done`. |
@@ -228,12 +232,22 @@ pane accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
 | `herdr_explain_agent` | Natural-language explanation of what a pane is/does. |
 | `herdr_delegate` | **Composite one-shot:** spawn → send → wait → harvest response. |
 
+### The other tiers (one line each)
+
+- **Tier 2 — layout:** `herdr_split_pane`, `herdr_close_pane`, `herdr_list_panes`,
+  `herdr_get_pane`, `herdr_resize_pane`, `herdr_zoom_pane`, `herdr_move_pane`,
+  `herdr_swap_panes`; tab + workspace `create`/`list`/`get`/`focus`/`rename`/`close`.
+- **Tier 3 — pane-sync:** `herdr_run_command`, `herdr_read_pane`, `herdr_wait_output`,
+  `herdr_send_keys` ⚠️ (send logical keys like `ctrl+c` / `esc`).
+- **Tier 4 — worktrees:** `herdr_worktree_create` / `open` / `list` / `remove` ⚠️.
+- **Tier 5 — fleet introspection:** `herdr_api_snapshot`, `herdr_session_list`,
+  `herdr_session_stop` ⚠️, `herdr_session_delete` ⚠️.
+
 `herdr_start_agent` and `herdr_delegate` take an `AgentSpec`:
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| `agent` | `"pi"` | One of `pi`, `claude`, `codex`, `omp` (opencode), `custom`. (herdr 0.7.5 supports ~20 kinds via `--kind`; `custom` is legacy `<0.7.5` only.) |
-| `argv` | — | Explicit launch argv; overrides the preset (required for `custom`). Legacy `<0.7.5` only — rejected on 0.7.5. |
+| `agent` | `"pi"` | Agent kind, passed as `agent start --kind` on 0.7.5. herdr 0.7.5 ships ~20 kinds (`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `maki`); an unknown kind returns a `VALIDATION_ERROR` listing the kinds your herdr supports (the list is fetched live and cached per session, with this hardcoded fallback offline). The old `custom`/`argv` launch surface is gone — use `agentArgs` to load a local extension instead. |
 | `agentArgs` | — | Extra flags appended to the agent CLI after launch, e.g. `["-ne","-e","./src/index.ts"]` to load a **local extension** instead of the installed copy (the dev / self-host loop). 0.7.5: after `--` in `agent start`; Windows pane-run: joined into the command line; legacy: extends the preset argv. *(v0.2.4)* |
 | `cwd` | — | Working directory for the spawned agent. |
 | `name` | `agent-<timestamp>` | Unique pane name. |
@@ -260,13 +274,16 @@ including spawned ones — so all pi agents report reliably.
 
 Completion is read from herdr's state events — never inferred from the
 rendered `Working…` spinner (tool-call output replaces that spinner mid-work, which
-would otherwise cause false "idle" reports). As of 0.2.0, `herdr_delegate` /
-`herdr_wait_agent` **also poll `agent get` as a fallback**, racing it against the
-`wait agent-status` event: if the event is flaky or never fires (e.g. herdr 0.7.3's
-`failed to decode pane get error`, or a `done`/`idle` state herdr no longer derives),
-the poll still detects the settled state promptly — instead of hanging on the event
-or timing out the budget. For an agent that can't self-report (e.g.
-`claude`/`codex`), the poll catches the settled state too.
+would otherwise cause false "idle" reports). On herdr **0.7.5**, `herdr_delegate`
+submits and waits in one atomic call (`agent prompt <target> <text> --wait`) and
+`herdr_wait_agent` blocks on the repeatable `agent wait <target> --until <status>`
+(`idle` / `done` / `blocked` can be raced in a single call); on **<0.7.5** these use
+the legacy `agent send` + `wait agent-status` group. Both also **race a polling
+`agent get` fallback** alongside the event wait: if the event is flaky or never
+fires (e.g. herdr 0.7.3's `failed to decode pane get error`, or a `done`/`idle`
+state herdr no longer derives), the poll still detects the settled state promptly —
+instead of hanging on the event or timing out the budget. For an agent that can't
+self-report (e.g. `claude`/`codex`), the poll catches the settled state too.
 
 > **Tip:** You can always unstick a pane manually:
 > `herdr pane report-agent <pane> --source manual --agent pi --state idle`.
@@ -326,9 +343,13 @@ src/
   config.ts              # binary + preset resolution (env + PATH)
   env.ts                 # shared types + unwrap/normalize/extractText helpers
   selfreport.ts          # push this pi's state to herdr (reliable completion)
-  tools/orchestration.ts # Tier 1 tools + herdr_delegate
+  tools/orchestration.ts # Tier 1 tools + herdr_delegate (spawn/wait/send/read/…)
+  tools/sync.ts          # Tier 3 pane-sync (split/run/read/wait_output/send_keys/close)
+  tools/layout.ts        # Tier 2 layout (panes/tabs/workspaces)
+  tools/worktrees.ts     # Tier 4 git worktrees
+  tools/introspection.ts # Tier 5 snapshot/sessions
 tests/
-  smoke.mjs              # offline (70 checks)
+  smoke.mjs              # offline smoke (no herdr required)
   live.mjs, pong.mjs, delegate.mjs, selfreport.mjs, multi.mjs, stress.mjs
 ```
 
@@ -339,10 +360,13 @@ first to discuss substantial changes. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Limitations / roadmap
 
-- **v0.2 (this release):** Tier 1 orchestration (`herdr_delegate` + the 10 atomic tools), macOS support, polling-fallback completion detection.
+- **v0.2:** Tier 1 orchestration (`herdr_delegate` + the 10 atomic tools), macOS
+  support, polling-fallback completion detection.
+- **v0.2.5:** branched for herdr 0.7.5 (`agent prompt --wait`, `agent wait --until`,
+  dynamic agent-kind validation), and added Tier 2 layout (panes/tabs/workspaces),
+  Tier 3 pane-sync (`split` / `run` / `read` / `wait_output` / `send_keys` /
+  `close`), Tier 4 git worktrees, and Tier 5 snapshot/sessions.
 - **Tested on Windows and macOS** (see [Platform support](#platform-support)).
-- **Planned:** Tier 3 sync (`wait_output`, `send_keys`, `run_command`, `notify`),
-  Tier 2 layout (panes/tabs/workspaces), Tier 4 git worktrees, Tier 5 sessions/snapshot.
 - Self-report is pi-only; heterogeneous (claude/codex) completion relies on herdr's
   auto-detect (also caught by the `agent get` polling fallback).
 
