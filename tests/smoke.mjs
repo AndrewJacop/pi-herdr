@@ -63,6 +63,13 @@ const expected = [
 	"herdr_focus_agent",
 	"herdr_explain_agent",
 	"herdr_delegate",
+	// Tier 3 — pane-sync (T4)
+	"herdr_split_pane",
+	"herdr_run_command",
+	"herdr_read_pane",
+	"herdr_wait_output",
+	"herdr_send_keys",
+	"herdr_close_pane",
 ];
 for (const n of expected) assert(names.includes(n), `registered ${n}`);
 assert(
@@ -521,6 +528,103 @@ assert(
 assert(
 	!!startTool?.parameters?.properties?.agentArgs,
 	"herdr_start_agent still exposes agentArgs (the supported local-ext loader)",
+);
+
+// ---------------------------------------------------------------------------
+console.log(
+	"\n[12] T4: Tier 3 pane-sync tools (split/run/read/wait_output/send_keys/close)",
+);
+const syncMod = await jiti.import(join(ROOT, "src/tools/sync.ts"), {
+	parent: ROOT,
+});
+assert(
+	typeof syncMod.waitOutputArgs === "function",
+	"waitOutputArgs exported from sync (pure argv builder, offline-testable)",
+);
+const paneTools = [
+	"herdr_split_pane",
+	"herdr_run_command",
+	"herdr_read_pane",
+	"herdr_wait_output",
+	"herdr_send_keys",
+	"herdr_close_pane",
+];
+for (const n of paneTools) assert(names.includes(n), `registered ${n} (T4)`);
+// Each T4 tool has the documented LLM hints (CONTRIBUTING: promptSnippet + guidelines).
+for (const n of paneTools) {
+	const t = tools.find((x) => x.name === n);
+	assert(!!t?.promptSnippet, `${n} has promptSnippet`);
+	assert(
+		Array.isArray(t?.promptGuidelines) && t.promptGuidelines.length > 0,
+		`${n} has promptGuidelines`,
+	);
+	assert(
+		/split_pane|run_command|read_pane|wait_output|send_keys|close_pane/.test(
+			t.promptGuidelines.join(" "),
+		),
+		`${n} promptGuidelines name the tool`,
+	);
+}
+// waitOutputArgs: match path (default timeout always emitted — no indefinite hang).
+assert(
+	eq(
+		syncMod.waitOutputArgs("w1:p3", { match: "ready" }),
+		["pane", "wait-output", "w1:p3", "--match", "ready", "--timeout", "30000"],
+	),
+	"waitOutputArgs: --match path with default 30s timeout",
+);
+// waitOutputArgs: regex path + optional flags.
+assert(
+	eq(
+		syncMod.waitOutputArgs("w1:p3", {
+			regex: "\\d+ ready",
+			source: "visible",
+			lines: 10,
+			timeoutMs: 5000,
+			raw: true,
+		}),
+		[
+			"pane",
+			"wait-output",
+			"w1:p3",
+			"--regex",
+			"\\d+ ready",
+			"--source",
+			"visible",
+			"--lines",
+			"10",
+			"--timeout",
+			"5000",
+			"--raw",
+		],
+	),
+	"waitOutputArgs: --regex path with source/lines/timeout/raw",
+);
+assert(
+	typeof syncMod.waitOutputArgs("w1:p3", { match: "x" })[6] === "string",
+	"waitOutputArgs: --timeout is stringified (spawn argv must be strings)",
+);
+// herdr_run_command takes a single command string (validated e2e launch path).
+assert(
+	!!tools.find((t) => t.name === "herdr_run_command")?.parameters?.properties
+		?.command,
+	"herdr_run_command exposes a 'command' string param",
+);
+// AC7: destructive pane tools labeled ⚠️ (send_keys interrupts, close_pane kills).
+const sendKeys = tools.find((t) => t.name === "herdr_send_keys");
+const closePane = tools.find((t) => t.name === "herdr_close_pane");
+assert(
+	/⚠️/.test(sendKeys.description),
+	"herdr_send_keys description carries ⚠️ (AC7: ctrl+c interrupts a process)",
+);
+assert(
+	/⚠️/.test(closePane.description),
+	"herdr_close_pane description carries ⚠️ (AC7: terminates the pane)",
+);
+// send_keys exposes agentScope (switches pane vs agent send-keys surface).
+assert(
+	!!sendKeys?.parameters?.properties?.agentScope,
+	"herdr_send_keys exposes agentScope (pane send-keys vs agent send-keys)",
 );
 
 // ---------------------------------------------------------------------------
