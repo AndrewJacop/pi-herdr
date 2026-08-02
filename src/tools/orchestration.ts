@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { herdr } from "../herdr.js";
+import { getAgentKinds } from "../config.js";
 import { expandAgentSpec } from "../launcher.js";
 import { detectHerdrVersion, isNewAgentApi } from "../version.js";
 import {
@@ -17,26 +18,27 @@ import {
 	type ToolReturn,
 } from "../env.js";
 
-const AGENT_PRESETS = ["pi", "claude", "codex", "omp", "custom"] as const;
-
-/** AgentSpec fields reused by start_agent and delegate. */
+/** AgentSpec fields reused by start_agent and delegate.
+ *
+ * `agent` is a free string (default "pi") validated against the LIVE `herdr
+ * agent` kind list at execute time — a stale hardcoded enum can't track the
+ * ~20 kinds herdr 0.7.5 ships, and `agent:"custom"`+`argv` is rejected on
+ * 0.7.5. The old `argv`/`custom` launch surface is gone; use `agentArgs` (e.g.
+ * `["-e","./src/index.ts"]`) to load a local extension. */
 const agentFields = {
 	name: Type.Optional(
 		Type.String({
 			description:
-				"Agent pane name (must be unique). Default: agent-<timestamp>.",
+			"Agent pane name (must be unique). Default: agent-<timestamp>.",
 		}),
 	),
 	agent: Type.Optional(
-		StringEnum(AGENT_PRESETS, {
+		Type.String({
 			description:
-				"Built-in preset to launch (default 'pi'). Use 'custom' with an explicit argv.",
-		}),
-	),
-	argv: Type.Optional(
-		Type.Array(Type.String(), {
-			description:
-			"Explicit launch argv; overrides the preset (required when agent='custom'). Legacy (<0.7.5) only — rejected on 0.7.5.",
+			"Agent kind to launch (default 'pi'), e.g. pi/claude/codex/gemini/cursor/omp/copilot. " +
+			"On herdr 0.7.5+ this is passed as `agent start --kind`; an unknown kind returns a " +
+			"VALIDATION_ERROR listing the kinds this herdr supports. To load a local extension " +
+			"pass agentArgs (e.g. [\"-e\",\"./src/index.ts\"]) instead of the removed `custom`/`argv`.",
 		}),
 	),
 	agentArgs: Type.Optional(
@@ -83,34 +85,12 @@ function okText(text: string, details: unknown): ToolReturn {
 //     On Windows the `agent start --kind` step fails (herdr 0.7.5-preview bug),
 //     so startAgentNew launches via `pane run` + herdr auto-detect instead.
 
-const NEW_API_KINDS = new Set([
-	"pi",
-	"claude",
-	"codex",
-	"gemini",
-	"cursor",
-	"devin",
-	"agy",
-	"cline",
-	"omp",
-	"mastracode",
-	"opencode",
-	"copilot",
-	"kimi",
-	"kiro",
-	"droid",
-	"amp",
-	"grok",
-	"hermes",
-	"kilo",
-	"qodercli",
-	"maki",
-]);
+// Valid agent kinds live in src/config.ts (getAgentKinds: live `herdr agent`
+// list, cached per session, with AGENT_KINDS_FALLBACK for offline/old herdr).
 
 interface StartInput {
 	name: string;
 	agent?: string;
-	argv?: string[];
 	agentArgs?: string[]; // extra flags appended to the agent CLI (e.g. ["-ne","-e","./src/index.ts"])
 	cwd?: string;
 	split?: "right" | "down";
@@ -124,6 +104,24 @@ interface StartInput {
 /** Build a non-ok Result with a normalized error code. */
 function err(code: HerdrErrorCode, message: string, details?: unknown): Err {
 	return { ok: false, error: { code, message, details } };
+}
+
+/**
+ * Validate an agent kind against a known-good list. Returns null when the kind
+ * is valid, or a `VALIDATION_ERROR` Result (listing the valid kinds) when not.
+ * Pure — no I/O — so the unknown-kind error path can be unit-tested offline.
+ */
+export function kindError(
+	kind: string,
+	validKinds: readonly string[],
+): Err | null {
+	const k = kind.toLowerCase();
+	if (validKinds.some((v) => v.toLowerCase() === k)) return null;
+	return err(
+		"VALIDATION_ERROR",
+		`Unknown agent kind "${kind}". Supported kinds: ${validKinds.join(", ")}.`,
+		{ kind, validKinds: [...validKinds] },
+	);
 }
 
 /** Tolerantly pull a pane id out of a `pane split` / `agent start` result. */
@@ -144,7 +142,7 @@ function extractPaneId(d: unknown): string | undefined {
 async function startAgentLegacy(
 	input: StartInput,
 ): Promise<Result<{ agent: Record<string, unknown> }>> {
-	const spec = expandAgentSpec({ agent: input.agent, argv: input.argv });
+	const spec = expandAgentSpec({ agent: input.agent });
 	if (!spec.ok) return spec;
 	const args = ["agent", "start", input.name];
 	if (input.cwd) args.push("--cwd", input.cwd);
@@ -171,20 +169,12 @@ async function startAgentLegacy(
 async function startAgentNew(
 	input: StartInput,
 ): Promise<Result<{ agent: Record<string, unknown> }>> {
-	// 0.7.5 `agent start` takes --kind, not a raw command.
-	if (input.argv && input.argv.length) {
-		return err(
-			"VALIDATION_ERROR",
-			"herdr 0.7.5+ `agent start` requires --kind and cannot run a custom argv; use a named preset (pi/claude/codex/omp).",
-		);
-	}
+	// 0.7.5 `agent start` takes --kind, not a raw command. Validate the kind
+	// against the live `herdr agent` kind list (cached, hardcoded fallback) so an
+	// unknown kind fails fast with a clear error instead of a server-side 400.
 	const kind = (input.agent ?? "pi").toLowerCase();
-	if (!NEW_API_KINDS.has(kind)) {
-		return err(
-			"VALIDATION_ERROR",
-			`herdr 0.7.5+ \`agent start\` has no --kind for preset "${kind}". Supported: ${[...NEW_API_KINDS].join(", ")}.`,
-		);
-	}
+	const bad = kindError(kind, await getAgentKinds());
+	if (bad) return bad;
 
 	// 1. create the pane (0.7.5 `agent start` needs an existing pane at a shell prompt).
 	const splitArgs = [
@@ -700,7 +690,6 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			const r = await startHerdrAgent({
 				name,
 				agent: p.agent,
-				argv: p.argv,
 				agentArgs: p.agentArgs,
 				cwd: p.cwd,
 				split: p.split,
@@ -1089,7 +1078,6 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			const startR = await startHerdrAgent({
 				name,
 				agent: p.agent,
-				argv: p.argv,
 				agentArgs: p.agentArgs,
 				cwd: p.cwd,
 				env: p.env,

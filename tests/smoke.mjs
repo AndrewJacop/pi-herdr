@@ -441,6 +441,90 @@ assert(
 
 // ---------------------------------------------------------------------------
 console.log(
+	"\n[11] T3: drop custom/argv; validate agent kind against live list",
+);
+const configMod = await jiti.import(join(ROOT, "src/config.ts"), {
+	parent: ROOT,
+});
+// parseAgentKinds pulls the trailing `kinds: a|b|c` line from `herdr agent`.
+assert(
+	eq(
+		configMod.parseAgentKinds(
+			"herdr agent commands:\n  herdr agent start <name> --kind KIND --pane ID\n  kinds: pi|claude|codex|omp",
+		),
+		["pi", "claude", "codex", "omp"],
+	),
+	"parseAgentKinds parses the trailing `kinds: a|b|c` line (lowercased)",
+);
+assert(
+	configMod.parseAgentKinds("no kinds line here") === null,
+	"parseAgentKinds -> null when no kinds line",
+);
+assert(
+	Array.isArray(configMod.AGENT_KINDS_FALLBACK) &&
+		configMod.AGENT_KINDS_FALLBACK.includes("pi") &&
+		configMod.AGENT_KINDS_FALLBACK.length >= 10,
+	"AGENT_KINDS_FALLBACK is a non-trivial hardcoded list",
+);
+// getAgentKinds falls back to the hardcoded list when herdr is unavailable, and
+// caches the result per session (same reference on the 2nd call, no re-fetch).
+configMod.resetAgentKindsCache();
+process.env.HERDR_BIN = "Z:\\nonexistent\\herdr-binary.exe";
+const fbKinds = await configMod.getAgentKinds();
+assert(
+	Array.isArray(fbKinds) &&
+		eq(fbKinds, [...configMod.AGENT_KINDS_FALLBACK]),
+	"getAgentKinds falls back to AGENT_KINDS_FALLBACK when herdr unavailable",
+);
+assert(
+	(await configMod.getAgentKinds()) === fbKinds,
+	"getAgentKinds caches per session (same array reference on 2nd call)",
+);
+configMod.resetAgentKindsCache();
+delete process.env.HERDR_BIN;
+
+// kindError: the pure, offline-testable unknown-kind error path.
+assert(
+	orchMod.kindError("pi", ["pi", "claude"]) === null,
+	"kindError: known kind -> null (valid)",
+);
+assert(
+	orchMod.kindError("PI", ["pi", "claude"]) === null,
+	"kindError: case-insensitive (PI == pi)",
+);
+const badKind = orchMod.kindError("nope", ["pi", "claude"]);
+assert(
+	badKind !== null &&
+		badKind.error.code === "VALIDATION_ERROR" &&
+		/pi, claude/.test(badKind.error.message),
+	"kindError: unknown kind -> VALIDATION_ERROR listing valid kinds",
+);
+
+// argv dropped from the LLM schema; `agent` is now a free string validated
+// against the live list (the stale 4/5-kind enum is gone).
+assert(
+	!startTool?.parameters?.properties?.argv,
+	"herdr_start_agent no longer exposes argv (dropped dead custom-argv surface)",
+);
+assert(
+	!delegateTool?.parameters?.properties?.argv,
+	"herdr_delegate no longer exposes argv",
+);
+assert(
+	startTool?.parameters?.properties?.agent?.type === "string",
+	"herdr_start_agent `agent` is a free string (live-validated, not a stale enum)",
+);
+assert(
+	delegateTool?.parameters?.properties?.agent?.type === "string",
+	"herdr_delegate `agent` is a free string",
+);
+assert(
+	!!startTool?.parameters?.properties?.agentArgs,
+	"herdr_start_agent still exposes agentArgs (the supported local-ext loader)",
+);
+
+// ---------------------------------------------------------------------------
+console.log(
 	`\n${failed === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${passed} passed, ${failed} failed)`,
 );
 process.exit(failed === 0 ? 0 : 1);
