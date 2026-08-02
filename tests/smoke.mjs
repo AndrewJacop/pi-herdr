@@ -70,6 +70,27 @@ const expected = [
 	"herdr_wait_output",
 	"herdr_send_keys",
 	"herdr_close_pane",
+	// Tier 2 — layout (T5): panes (list/get/resize/zoom/move/swap; split+close reused from T4)
+	"herdr_list_panes",
+	"herdr_get_pane",
+	"herdr_resize_pane",
+	"herdr_zoom_pane",
+	"herdr_move_pane",
+	"herdr_swap_panes",
+	// Tier 2 — layout (T5): tabs
+	"herdr_list_tabs",
+	"herdr_create_tab",
+	"herdr_get_tab",
+	"herdr_focus_tab",
+	"herdr_rename_tab",
+	"herdr_close_tab",
+	// Tier 2 — layout (T5): workspaces
+	"herdr_list_workspaces",
+	"herdr_create_workspace",
+	"herdr_get_workspace",
+	"herdr_focus_workspace",
+	"herdr_rename_workspace",
+	"herdr_close_workspace",
 ];
 for (const n of expected) assert(names.includes(n), `registered ${n}`);
 assert(
@@ -625,6 +646,254 @@ assert(
 assert(
 	!!sendKeys?.parameters?.properties?.agentScope,
 	"herdr_send_keys exposes agentScope (pane send-keys vs agent send-keys)",
+);
+
+// ---------------------------------------------------------------------------
+console.log(
+	"\n[13] T5: Tier 2 layout tools (panes/tabs/workspaces CRUD)",
+);
+const layoutMod = await jiti.import(join(ROOT, "src/tools/layout.ts"), {
+	parent: ROOT,
+});
+const layoutTools = [
+	// panes (split + close are reused from T4, not re-registered here)
+	"herdr_list_panes",
+	"herdr_get_pane",
+	"herdr_resize_pane",
+	"herdr_zoom_pane",
+	"herdr_move_pane",
+	"herdr_swap_panes",
+	// tabs
+	"herdr_list_tabs",
+	"herdr_create_tab",
+	"herdr_get_tab",
+	"herdr_focus_tab",
+	"herdr_rename_tab",
+	"herdr_close_tab",
+	// workspaces
+	"herdr_list_workspaces",
+	"herdr_create_workspace",
+	"herdr_get_workspace",
+	"herdr_focus_workspace",
+	"herdr_rename_workspace",
+	"herdr_close_workspace",
+];
+for (const n of layoutTools) assert(names.includes(n), `registered ${n} (T5)`);
+// Each T5 tool has the documented LLM hints (CONTRIBUTING: promptSnippet + guidelines).
+for (const n of layoutTools) {
+	const t = tools.find((x) => x.name === n);
+	assert(!!t?.promptSnippet, `${n} has promptSnippet`);
+	assert(
+		Array.isArray(t?.promptGuidelines) && t.promptGuidelines.length > 0,
+		`${n} has promptGuidelines`,
+	);
+	assert(
+		/list_panes|get_pane|resize_pane|zoom_pane|move_pane|swap_panes|list_tabs|create_tab|get_tab|focus_tab|rename_tab|close_tab|list_workspaces|create_workspace|get_workspace|focus_workspace|rename_workspace|close_workspace/.test(
+			t.promptGuidelines.join(" "),
+		),
+		`${n} promptGuidelines name the tool`,
+	);
+}
+// AC7: destructive layout tools labeled ⚠️ (close terminates everything beneath).
+for (const n of ["herdr_close_tab", "herdr_close_workspace"]) {
+	const t = tools.find((x) => x.name === n);
+	assert(
+		/⚠️/.test(t.description),
+		`${n} description carries ⚠️ (AC7: closes panes/tabs beneath)`,
+	);
+}
+
+// Pure argv builders — representative subset covering the interesting branching.
+assert(
+	typeof layoutMod.listPanesArgs === "function",
+	"listPanesArgs exported from layout (pure argv builder, offline-testable)",
+);
+// list: --workspace filter optional.
+assert(
+	eq(layoutMod.listPanesArgs(), ["pane", "list"]),
+	"listPanesArgs: bare 'pane list' when no workspace",
+);
+assert(
+	eq(layoutMod.listPanesArgs({ workspaceId: "w2" }), [
+		"pane",
+		"list",
+		"--workspace",
+		"w2",
+	]),
+	"listPanesArgs: filters by --workspace when given",
+);
+// resize: direction required; amount optional; pane-id vs --current targeting.
+assert(
+	eq(layoutMod.resizePaneArgs({ direction: "up" }), [
+		"pane",
+		"resize",
+		"--direction",
+		"up",
+		"--current",
+	]),
+	"resizePaneArgs: defaults to --current (focused pane), no amount",
+);
+assert(
+	eq(layoutMod.resizePaneArgs({ direction: "left", amount: 0.5, paneId: "w1:p3" }), [
+		"pane",
+		"resize",
+		"--direction",
+		"left",
+		"--amount",
+		"0.5",
+		"--pane",
+		"w1:p3",
+	]),
+	"resizePaneArgs: --amount + explicit --pane targeting",
+);
+// zoom: mode toggle/on/off (default toggle) + targeting.
+assert(
+	eq(layoutMod.zoomPaneArgs(), ["pane", "zoom", "--toggle", "--current"]),
+	"zoomPaneArgs: default mode toggle on focused pane",
+);
+assert(
+	eq(layoutMod.zoomPaneArgs({ mode: "off", paneId: "w1:p3" }), [
+		"pane",
+		"zoom",
+		"--off",
+		"--pane",
+		"w1:p3",
+	]),
+	"zoomPaneArgs: mode 'off' + explicit pane",
+);
+// move: positional pane id + the full option set (tab/split/target-pane/ratio/new-tab/workspace/new-workspace).
+assert(
+	eq(
+		layoutMod.movePaneArgs({
+			paneId: "w1:p3",
+			tabId: "w1:t2",
+			split: "down",
+			targetPane: "w1:p1",
+			ratio: 0.25,
+			newTab: true,
+			workspaceId: "w2",
+			newWorkspace: true,
+		}),
+		[
+			"pane",
+			"move",
+			"w1:p3",
+			"--tab",
+			"w1:t2",
+			"--split",
+			"down",
+			"--target-pane",
+			"w1:p1",
+			"--ratio",
+			"0.25",
+			"--new-tab",
+			"--workspace",
+			"w2",
+			"--new-workspace",
+		],
+	),
+	"movePaneArgs: full option set serializes in documented flag order",
+);
+// swap: direction + source/target, defaults to --current.
+assert(
+	eq(layoutMod.swapPanesArgs({ sourcePane: "w1:p1", targetPane: "w1:p2" }), [
+		"pane",
+		"swap",
+		"--current",
+		"--source-pane",
+		"w1:p1",
+		"--target-pane",
+		"w1:p2",
+	]),
+	"swapPanesArgs: explicit source/target, focused pane by default",
+);
+// tabs: create serializes workspace/cwd/label/env/focus.
+assert(
+	eq(
+		layoutMod.createTabArgs({
+			workspaceId: "w2",
+			cwd: "/repo",
+			label: "build",
+			env: { FOO: "1" },
+			focus: true,
+		}),
+		[
+			"tab",
+			"create",
+			"--workspace",
+			"w2",
+			"--cwd",
+			"/repo",
+			"--label",
+			"build",
+			"--env",
+			"FOO=1",
+			"--focus",
+		],
+	),
+	"createTabArgs: workspace/cwd/label/env/focus in order",
+);
+assert(
+	eq(layoutMod.createTabArgs({ focus: false }), [
+		"tab",
+		"create",
+		"--no-focus",
+	]),
+	"createTabArgs: focus:false -> --no-focus; undefined options omitted",
+);
+// workspaces: create serializes cwd/label/env/focus (no --workspace).
+assert(
+	eq(layoutMod.createWorkspaceArgs({ cwd: "/repo", env: { BAR: "2" } }), [
+		"workspace",
+		"create",
+		"--cwd",
+		"/repo",
+		"--env",
+		"BAR=2",
+	]),
+	"createWorkspaceArgs: cwd/env, focus omitted when undefined",
+);
+// numeric options are stringified (spawn argv must be strings).
+assert(
+	typeof layoutMod.resizePaneArgs({ direction: "up", amount: 1 })[4] === "string",
+	"resizePaneArgs: --amount is stringified (spawn argv must be strings)",
+);
+// create tools expose an env map (KEY=VALUE), consistent with start_agent.
+assert(
+	!!tools.find((t) => t.name === "herdr_create_tab")?.parameters?.properties
+		?.env,
+	"herdr_create_tab exposes an env param",
+);
+assert(
+	!!tools.find((t) => t.name === "herdr_create_workspace")?.parameters
+		?.properties?.env,
+	"herdr_create_workspace exposes an env param",
+);
+// normalizers tolerate snake_case + missing fields.
+assert(
+	eq(layoutMod.normalizeTab({ tab_id: "w1:t1", label: "x", pane_count: 3 }), {
+		tabId: "w1:t1",
+		label: "x",
+		number: undefined,
+		paneCount: 3,
+		workspaceId: undefined,
+		focused: undefined,
+		agentStatus: undefined,
+	}),
+	"normalizeTab maps snake_case -> camelCase",
+);
+assert(
+	eq(layoutMod.normalizeWorkspace({ workspace_id: "w1", tab_count: 2, active_tab_id: "w1:t1", focused: true }), {
+		workspaceId: "w1",
+		label: undefined,
+		activeTabId: "w1:t1",
+		agentStatus: undefined,
+		number: undefined,
+		paneCount: undefined,
+		tabCount: 2,
+		focused: true,
+	}),
+	"normalizeWorkspace maps snake_case -> camelCase",
 );
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerOrchestration } from "./tools/orchestration.js";
 import { registerPaneSync } from "./tools/sync.js";
+import { registerLayout } from "./tools/layout.js";
 import { registerSelfReport } from "./selfreport.js";
 import { herdr } from "./herdr.js";
 import { formatVersion, probeHerdr, refreshHerdrProbe } from "./version.js";
@@ -15,6 +16,7 @@ export default function (pi: ExtensionAPI): void {
 
 	registerOrchestration(pi);
 	registerPaneSync(pi);
+	registerLayout(pi);
 
 	// Re-probe herdr on a fresh run (startup) or after /reload so an
 	// install/upgrade is noticed immediately; toast when it's missing/unparseable.
