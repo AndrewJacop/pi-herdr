@@ -405,6 +405,42 @@ assert(
 
 // ---------------------------------------------------------------------------
 console.log(
+	"\n[10] herdr_delegate submit+wait argv on herdr 0.7.5 (T2: 'agent prompt --wait')",
+);
+assert(
+	typeof orchMod.promptWaitArgs === "function",
+	"promptWaitArgs exported from orchestration",
+);
+// New API (>=0.7.5): atomic submit + settled wait in ONE call.
+assert(
+	eq(
+		orchMod.promptWaitArgs("w1:p2", "ping", 30000),
+		["agent", "prompt", "w1:p2", "ping", "--wait", "--timeout", "30000"],
+	),
+	"new API -> one 'agent prompt <target> <text> --wait --timeout <ms>' (replaces send → wait dance)",
+);
+assert(
+	eq(
+		orchMod.promptWaitArgs("w1:p2", "hello world", 120000),
+		[
+			"agent",
+			"prompt",
+			"w1:p2",
+			"hello world",
+			"--wait",
+			"--timeout",
+			"120000",
+		],
+	),
+	"prompt text with spaces stays a single positional argv element",
+);
+assert(
+	typeof orchMod.promptWaitArgs("w1:p2", "x", 1)[6] === "string",
+	"--timeout is stringified (spawn argv must be strings)",
+);
+
+// ---------------------------------------------------------------------------
+console.log(
 	`\n${failed === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${passed} passed, ${failed} failed)`,
 );
 process.exit(failed === 0 ? 0 : 1);

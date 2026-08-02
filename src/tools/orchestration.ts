@@ -591,6 +591,72 @@ async function driveOneTurn(
 	return raceIdleDone(paneId, opts.deadline, signal);
 }
 
+/**
+ * Build the atomic submit+wait argv for herdr 0.7.5+:
+ * `agent prompt <target> <text> --wait --timeout <ms>`.
+ *
+ * 0.7.5 `agent prompt --wait` submits (bracketed-paste) AND blocks until the
+ * first settled `idle`/`done`/`blocked` observed after submission, replacing
+ * the brittle `send → wait working → wait idle` dance. Legacy (<0.7.5) has no
+ * single-command equivalent and keeps the multi-step send + driveOneTurn path.
+ */
+export function promptWaitArgs(
+	target: string,
+	text: string,
+	timeoutMs: number,
+): string[] {
+	return [
+		"agent",
+		"prompt",
+		target,
+		text,
+		"--wait",
+		"--timeout",
+		String(timeoutMs),
+	];
+}
+
+/**
+ * Submit a prompt and wait for the turn to settle — one call on herdr 0.7.5+.
+ *
+ * New API (>=0.7.5): one `agent prompt <target> <text> --wait --timeout <ms>`.
+ * When the prompt is submitted from a non-working state but no working
+ * transition is observed within herdr's 5s grace window, herdr returns
+ * `agent_prompt_stalled` (the prompt was likely lost — e.g. sent before the TUI
+ * input was ready). Rather than hang, fall back to the wait/poll dance so the
+ * caller's retry loop can re-send. Any other error propagates unchanged.
+ *
+ * Legacy (<0.7.5): the multi-step `send → wait working → wait idle` dance.
+ *
+ * Returns `NOT_STARTED` (in `error.message`) when the turn never entered
+ * working, so the caller (herdr_delegate) can re-send.
+ */
+async function submitAndWait(
+	paneId: string,
+	text: string,
+	opts: { deadline: number; signal?: AbortSignal },
+): Promise<Result<true>> {
+	const { signal } = opts;
+	const budget = Math.max(2_000, opts.deadline - Date.now());
+	if (isNewAgentApi(await detectHerdrVersion())) {
+		const waitR = await herdr(promptWaitArgs(paneId, text, budget), {
+			timeoutMs: budget + 8_000,
+			signal,
+		});
+		if (waitR.ok) return { ok: true, data: true };
+		const code = (waitR.error.details as { code?: string } | undefined)?.code;
+		// agent_prompt_stalled: prompt submitted but no working transition within
+		// herdr's grace window — don't hang. Drive the already-submitted turn via
+		// wait/poll; NOT_STARTED lets the caller's retry re-send.
+		if (code !== "agent_prompt_stalled") return waitR;
+		return driveOneTurn(paneId, { deadline: opts.deadline, signal });
+	}
+	// Legacy (<0.7.5): send + submit, then drive the turn (working -> idle/done).
+	const sendR = await sendAgentPrompt(paneId, text, { submit: true, signal });
+	if (!sendR.ok) return sendR;
+	return driveOneTurn(paneId, { deadline: opts.deadline, signal });
+}
+
 // ---- registration ----------------------------------------------------------
 
 export function registerOrchestration(pi: ExtensionAPI): void {
@@ -965,8 +1031,10 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 	});
 
 	// 11. delegate (composite) ------------------------------------------------
-	// start -> wait idle (boot) -> send(submit) -> wait working -> wait idle -> read.
-	// Best-effort: the working-wait may be skipped if the turn is very short.
+	// start -> wait idle (boot) -> submit+wait (atomic `agent prompt --wait` on
+	// 0.7.5; send -> wait working -> wait idle dance on legacy) -> read.
+	// Best-effort: `agent_prompt_stalled` falls back to the wait/poll dance; the
+	// turn is re-sent if it never starts (prompt lost when sent too early).
 	pi.registerTool({
 		name: "herdr_delegate",
 		label: "Delegate to a herdr agent (one-shot)",
@@ -1055,8 +1123,11 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			}
 			await sleep(1500); // brief settle so the TUI input is ready (PRD §2.2)
 
-			// 3-5. send + submit, then drive the turn (working -> idle). Re-send if the
-			//      turn never starts (the prompt can be lost if sent too early).
+			// 3-5. submit + wait for the turn to settle. On herdr 0.7.5+ this is ONE
+			//      `agent prompt <text> --wait` call (atomic submit + settled wait);
+			//      `agent_prompt_stalled` falls back to the wait/poll dance instead of
+			//      hanging. Legacy keeps the multi-step send → wait dance. Re-send when
+			//      the turn never starts (the prompt can be lost if sent too early).
 			const turnDeadline = Date.now() + left();
 			let done: Result<true> = {
 				ok: false,
@@ -1068,19 +1139,8 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				attempt++
 			) {
 				if (attempt > 0) await sleep(2_000); // brief pause before re-sending
-				const sendR = await sendAgentPrompt(paneId, p.prompt, {
-					submit: true,
-					signal,
-				});
-				if (!sendR.ok) {
-					return partial(
-						`Started agent in pane ${paneId} but failed to send the prompt: ${sendR.error.message}`,
-						{ paneId, name, error: sendR.error },
-					);
-				}
-				done = await driveOneTurn(paneId, {
+				done = await submitAndWait(paneId, p.prompt, {
 					deadline: turnDeadline,
-					workingWindowMs: 30_000,
 					signal,
 				});
 				if (done.ok) break;
@@ -1106,7 +1166,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 
 			if (!done.ok) {
 				return partial(
-					`Timed out waiting for agent to finish. Partial response from pane ${paneId}:\n${response || "(none)"}`,
+					`Agent in pane ${paneId} did not finish (${done.error.code}): ${done.error.message}. Partial response from pane ${paneId}:\n${response || "(none)"}`,
 					{ paneId, name, response, error: done.error },
 				);
 			}
