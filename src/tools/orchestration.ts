@@ -421,15 +421,53 @@ const sleep = (ms: number): Promise<void> =>
  * reads whatever partial output exists.
  */
 /**
+ * Build a one-shot status-transition wait argv, version-branched.
+ *
+ * - new (>=0.7.5): `agent wait <target> --until <s> [--until <s>...] --timeout <ms>`.
+ *   `--until` is repeatable, so a single call can race several states (e.g.
+ *   idle+done) at once. The legacy `wait agent-status` group was removed in 0.7.5,
+ *   so without this branch every wait for `working`/`blocked`/`unknown` failed
+ *   outright on the new API (only `idle`/`done` survived via the poll fallback).
+ * - legacy (<0.7.5): `wait agent-status <target> --status <s> --timeout <ms>`.
+ *   One status per call — callers fan out one invocation per state.
+ */
+export function transitionWaitArgs(
+	target: string,
+	statuses: string[],
+	timeoutMs: number,
+	newApi: boolean,
+): string[] {
+	if (newApi) {
+		const args = ["agent", "wait", target];
+		for (const s of statuses) args.push("--until", s);
+		args.push("--timeout", String(timeoutMs));
+		return args;
+	}
+	return [
+		"wait",
+		"agent-status",
+		target,
+		"--status",
+		statuses[0],
+		"--timeout",
+		String(timeoutMs),
+	];
+}
+
+/**
  * Wait for `paneId` to reach one of `statuses`.
  *
- * Prefers herdr's event-based `wait agent-status` (prompt, no polling), but races
- * it against a polling fallback (`agent get`) because `wait agent-status` is
- * unreliable on some herdr builds (e.g. 0.7.3 returns `failed to decode pane get
- * error` on its probe step). The event promise resolves ONLY on success — on
- * error it stays pending so the poll decides. Whichever path sees a target
+ * Prefers herdr's event-based status wait (prompt, no polling), but races it
+ * against a polling fallback (`agent get`) because the event command is
+ * unreliable on some herdr builds (e.g. 0.7.3 returns `failed to decode pane
+ * get error` on its probe step). The event promise resolves ONLY on success —
+ * on error it stays pending so the poll decides. Whichever path sees a target
  * status first wins; the other is cancelled. The poll is what makes completion
  * detection robust instead of depending on a flaky event command.
+ *
+ * Version branch: herdr 0.7.5 replaced `wait agent-status` with
+ * `agent wait --until` (repeatable), so on the new API one call races every
+ * requested state; legacy fans out one `wait agent-status` per state.
  */
 async function waitForStatus(
 	paneId: string,
@@ -439,6 +477,7 @@ async function waitForStatus(
 ): Promise<Result<true>> {
 	const budget = Math.max(1_000, deadline - Date.now());
 	const want = new Set(statuses);
+	const newApi = isNewAgentApi(await detectHerdrVersion());
 	const ctrl = new AbortController();
 	const onParentAbort = () => ctrl.abort();
 	if (signal) {
@@ -449,21 +488,17 @@ async function waitForStatus(
 	}
 	type Resolved = { via: "event" | "poll"; r: Result<true> };
 	// Event path: resolves only on a successful transition (errors swallowed so
-	// the polling fallback gets to run).
+	// the polling fallback gets to run). New API: one `agent wait` with every
+	// state via repeatable `--until`; legacy: one `wait agent-status` per state.
 	const events = new Promise<Resolved>((resolve) => {
-		for (const s of statuses) {
-			herdr(
-				[
-					"wait",
-					"agent-status",
-					paneId,
-					"--status",
-					s,
-					"--timeout",
-					String(budget),
-				],
-				{ timeoutMs: budget + 5_000, signal: ctrl.signal },
-			).then((r) => {
+		const groups: string[][] = newApi
+			? [statuses]
+			: statuses.map((s) => [s]);
+		for (const group of groups) {
+			herdr(transitionWaitArgs(paneId, group, budget, newApi), {
+				timeoutMs: budget + 5_000,
+				signal: ctrl.signal,
+			}).then((r) => {
 				if (r.ok) resolve({ via: "event", r: { ok: true, data: true } });
 			});
 		}
@@ -746,17 +781,11 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 					p.status,
 				);
 			}
-			// working/blocked/unknown: herdr's transition wait.
+			// working/blocked/unknown: version-branched transition wait. The legacy
+			// `wait agent-status` group is gone on herdr 0.7.5, so use `agent wait --until`.
+			const newApi = isNewAgentApi(await detectHerdrVersion());
 			const r = await herdr<unknown>(
-				[
-					"wait",
-					"agent-status",
-					p.target,
-					"--status",
-					p.status,
-					"--timeout",
-					String(timeoutMs),
-				],
+				transitionWaitArgs(p.target, [p.status], timeoutMs, newApi),
 				{ timeoutMs: timeoutMs + 8_000, signal },
 			);
 			if (!r.ok) return fail(r);

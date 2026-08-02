@@ -353,6 +353,58 @@ assert(
 
 // ---------------------------------------------------------------------------
 console.log(
+	"\n[9] herdr_wait_agent argv branches on herdr version (T1: 'agent wait --until' on 0.7.5)",
+);
+const orchMod = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
+	parent: ROOT,
+});
+assert(
+	typeof orchMod.transitionWaitArgs === "function",
+	"transitionWaitArgs exported from orchestration",
+);
+// New API (>=0.7.5): one `agent wait` per call, `--until` is repeatable.
+assert(
+	eq(
+		orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000, true),
+		["agent", "wait", "w1:p2", "--until", "idle", "--timeout", "60000"],
+	),
+	"new API single status -> 'agent wait --until' (was 'wait agent-status', removed on 0.7.5)",
+);
+assert(
+	eq(
+		orchMod.transitionWaitArgs("w1:p2", ["idle", "done"], 90000, true),
+		[
+			"agent",
+			"wait",
+			"w1:p2",
+			"--until",
+			"idle",
+			"--until",
+			"done",
+			"--timeout",
+			"90000",
+		],
+	),
+	"new API multi-status -> one call with repeatable --until (idle+done raced together)",
+);
+assert(
+	eq(
+		orchMod.transitionWaitArgs("w1:p2", ["working"], 30000, true),
+		["agent", "wait", "w1:p2", "--until", "working", "--timeout", "30000"],
+	),
+	"new API working/blocked/unknown -> 'agent wait --until' (the previously-broken branch)",
+);
+// Legacy (<0.7.5): keep `wait agent-status` unchanged.
+assert(
+	eq(
+		orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000, false),
+		["wait", "agent-status", "w1:p2", "--status", "idle", "--timeout", "60000"],
+	),
+	"legacy keeps 'wait agent-status'",
+);
+
+// ---------------------------------------------------------------------------
+console.log(
 	`\n${failed === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${passed} passed, ${failed} failed)`,
 );
 process.exit(failed === 0 ? 0 : 1);
