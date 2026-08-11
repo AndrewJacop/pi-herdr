@@ -252,6 +252,12 @@ accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
 | `cwd` | — | Working directory for the spawned agent. |
 | `name` | `agent-<timestamp>` | Unique pane name. |
 
+`herdr_delegate` also takes **`onBlocked`** (`"wait"` default, `"return"`): when the
+spawned agent blocks on `ask_user`, `"wait"` holds the call open until a human
+answers in the spawned pane, then returns the final answer; `"return"` returns
+`{blocked, question, paneId}` so the orchestration session can relay the question
+itself. See [orchestration tools](docs/tools/orchestration.md#herdr_delegate).
+
 ## How completion is detected (and why it's reliable)
 
 herdr auto-detects a pi pane's state from its TUI. It reliably catches `idle → working`
@@ -260,12 +266,15 @@ but **sometimes misses `working → idle`**, which can leave a finished pane stu
 
 When pi runs inside a herdr pane, this extension pushes its real state to herdr on
 lifecycle hooks — `agent_start → working`, `agent_settled → idle` — and on the
-ask-blocked EventBus channels:
-`rpiv:ask-user:blocked` from
-[`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question)
-and `pi-cursor-sdk:ask-question:blocked` from
-[`pi-cursor-sdk`](https://github.com/fitchmultz/pi-cursor-sdk)
-(`active: true → blocked`, `active: false → working` so the turn resumes). herdr
+blocked EventBus channels. The current channel is `herdr:blocked`, emitted by
+[`pi-ask-user`](https://www.npmjs.com/package/pi-ask-user) (v0.14+) when `ask_user`
+waits/resumes **and** by `pi-subagents` for attention states; the legacy
+`rpiv:ask-user:blocked` ([`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question))
+and `pi-cursor-sdk:ask-question:blocked` ([`pi-cursor-sdk`](https://github.com/fitchmultz/pi-cursor-sdk))
+are kept for back-compat (`active: true → blocked`, `active: false → working` so
+the turn resumes). pi-herdr is the bridge that turns `herdr:blocked` into a herdr
+`pane report-agent --state blocked` — nothing else in JS consumes it, so without
+this bridge blocked detection relies on herdr's native TUI-watching. herdr
 renders that idle-after-working as `done` on builds that derive it;
 `herdr_delegate` / `herdr_wait_agent` race the `idle` and `done` transition waits
 (plus a polling fallback — see below). A global install
