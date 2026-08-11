@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`herdr_delegate` — `onBlocked` (`"wait"` \| `"return"`):** when a spawned agent
+  blocks on `ask_user`, herdr 0.7.5's `agent prompt --wait` settles on `blocked` and
+  returns ok — so previously the delegate treated the agent's *question text* as a
+  successful answer and returned control to the orchestrator. The delegate now
+  re-reads `agent get` after the turn settles and branches: `"wait"` (default) holds
+  the call open with **no time bound** until a human answers in the spawned pane,
+  then returns the final answer; `"return"` returns `{blocked, question, paneId}`
+  immediately (`isError`, pane kept alive) for the orchestration session to relay.
+  `timeoutMs` does not bound the `"wait"` phase.
+
+### Fixed
+
+- **Self-report now bridges `herdr:blocked`:** the current `pi-ask-user` (v0.14+)
+  and `pi-subagents` emit `herdr:blocked`, but self-report only listened on the stale
+  `rpiv:ask-user:blocked` channel — so blocked reporting silently relied on herdr's
+  native TUI detection. Self-report now consumes `herdr:blocked` (the legacy
+  `rpiv:ask-user:blocked` and `pi-cursor-sdk:ask-question:blocked` channels are kept
+  for back-compat), making pi-herdr the single JS bridge that reports `blocked` to
+  herdr.
+
+### Tests
+
+- `tests/blocked.mjs` (live): exercises both `onBlocked` modes against real spawned
+  `pi` sessions (return-and-relay, and wait-then-inject).
+- `tests/dev-load.mjs` (live): asserts `pi -ne -e <local pi-herdr> -e <pi-ask-user>`
+  boots without conflicting with the globally-installed copy. Both wired into
+  `test:live`; offline smoke gate grows to **380 checks**.
+
 ## [0.2.5] - 2026-08-02
 
 The "full herdr 0.7.5 surface" release. The extension now wraps **43 tools** across

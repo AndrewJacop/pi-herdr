@@ -124,8 +124,12 @@ if (selfReportActive) {
 		"self-report wired agent_settled",
 	);
 	assert(
+		(busEvents["herdr:blocked"]?.length ?? 0) >= 1,
+		"self-report wired herdr:blocked (current pi-ask-user + pi-subagents channel)",
+	);
+	assert(
 		(busEvents["rpiv:ask-user:blocked"]?.length ?? 0) >= 1,
-		"self-report wired rpiv:ask-user:blocked",
+		"self-report wired rpiv:ask-user:blocked (legacy)",
 	);
 	assert(
 		(busEvents["pi-cursor-sdk:ask-question:blocked"]?.length ?? 0) >= 1,
@@ -150,8 +154,12 @@ assert(
 	"ask-user blocked ignores malformed payload",
 );
 assert(
+	selfreport.HERDR_BLOCKED_EVENT === "herdr:blocked",
+	"herdr:blocked channel matches current pi-ask-user contract",
+);
+assert(
 	selfreport.ASK_USER_BLOCKED_EVENT === "rpiv:ask-user:blocked",
-	"ask-user blocked channel matches rpiv contract",
+	"ask-user blocked channel matches legacy rpiv contract",
 );
 assert(
 	selfreport.CURSOR_ASK_QUESTION_BLOCKED_EVENT ===
@@ -402,42 +410,54 @@ assert(
 );
 // New API (>=0.7.5): one `agent wait` per call, `--until` is repeatable.
 assert(
-	eq(
-		orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000, true),
-		["agent", "wait", "w1:p2", "--until", "idle", "--timeout", "60000"],
-	),
+	eq(orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000, true), [
+		"agent",
+		"wait",
+		"w1:p2",
+		"--until",
+		"idle",
+		"--timeout",
+		"60000",
+	]),
 	"new API single status -> 'agent wait --until' (was 'wait agent-status', removed on 0.7.5)",
 );
 assert(
-	eq(
-		orchMod.transitionWaitArgs("w1:p2", ["idle", "done"], 90000, true),
-		[
-			"agent",
-			"wait",
-			"w1:p2",
-			"--until",
-			"idle",
-			"--until",
-			"done",
-			"--timeout",
-			"90000",
-		],
-	),
+	eq(orchMod.transitionWaitArgs("w1:p2", ["idle", "done"], 90000, true), [
+		"agent",
+		"wait",
+		"w1:p2",
+		"--until",
+		"idle",
+		"--until",
+		"done",
+		"--timeout",
+		"90000",
+	]),
 	"new API multi-status -> one call with repeatable --until (idle+done raced together)",
 );
 assert(
-	eq(
-		orchMod.transitionWaitArgs("w1:p2", ["working"], 30000, true),
-		["agent", "wait", "w1:p2", "--until", "working", "--timeout", "30000"],
-	),
+	eq(orchMod.transitionWaitArgs("w1:p2", ["working"], 30000, true), [
+		"agent",
+		"wait",
+		"w1:p2",
+		"--until",
+		"working",
+		"--timeout",
+		"30000",
+	]),
 	"new API working/blocked/unknown -> 'agent wait --until' (the previously-broken branch)",
 );
 // Legacy (<0.7.5): keep `wait agent-status` unchanged.
 assert(
-	eq(
-		orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000, false),
-		["wait", "agent-status", "w1:p2", "--status", "idle", "--timeout", "60000"],
-	),
+	eq(orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000, false), [
+		"wait",
+		"agent-status",
+		"w1:p2",
+		"--status",
+		"idle",
+		"--timeout",
+		"60000",
+	]),
 	"legacy keeps 'wait agent-status'",
 );
 
@@ -451,25 +471,27 @@ assert(
 );
 // New API (>=0.7.5): atomic submit + settled wait in ONE call.
 assert(
-	eq(
-		orchMod.promptWaitArgs("w1:p2", "ping", 30000),
-		["agent", "prompt", "w1:p2", "ping", "--wait", "--timeout", "30000"],
-	),
+	eq(orchMod.promptWaitArgs("w1:p2", "ping", 30000), [
+		"agent",
+		"prompt",
+		"w1:p2",
+		"ping",
+		"--wait",
+		"--timeout",
+		"30000",
+	]),
 	"new API -> one 'agent prompt <target> <text> --wait --timeout <ms>' (replaces send → wait dance)",
 );
 assert(
-	eq(
-		orchMod.promptWaitArgs("w1:p2", "hello world", 120000),
-		[
-			"agent",
-			"prompt",
-			"w1:p2",
-			"hello world",
-			"--wait",
-			"--timeout",
-			"120000",
-		],
-	),
+	eq(orchMod.promptWaitArgs("w1:p2", "hello world", 120000), [
+		"agent",
+		"prompt",
+		"w1:p2",
+		"hello world",
+		"--wait",
+		"--timeout",
+		"120000",
+	]),
 	"prompt text with spaces stays a single positional argv element",
 );
 assert(
@@ -510,8 +532,7 @@ configMod.resetAgentKindsCache();
 process.env.HERDR_BIN = "Z:\\nonexistent\\herdr-binary.exe";
 const fbKinds = await configMod.getAgentKinds();
 assert(
-	Array.isArray(fbKinds) &&
-		eq(fbKinds, [...configMod.AGENT_KINDS_FALLBACK]),
+	Array.isArray(fbKinds) && eq(fbKinds, [...configMod.AGENT_KINDS_FALLBACK]),
 	"getAgentKinds falls back to AGENT_KINDS_FALLBACK when herdr unavailable",
 );
 assert(
@@ -598,10 +619,15 @@ for (const n of paneTools) {
 }
 // waitOutputArgs: match path (default timeout always emitted — no indefinite hang).
 assert(
-	eq(
-		syncMod.waitOutputArgs("w1:p3", { match: "ready" }),
-		["pane", "wait-output", "w1:p3", "--match", "ready", "--timeout", "30000"],
-	),
+	eq(syncMod.waitOutputArgs("w1:p3", { match: "ready" }), [
+		"pane",
+		"wait-output",
+		"w1:p3",
+		"--match",
+		"ready",
+		"--timeout",
+		"30000",
+	]),
 	"waitOutputArgs: --match path with default 30s timeout",
 );
 // waitOutputArgs: regex path + optional flags.
@@ -659,9 +685,7 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
-console.log(
-	"\n[13] T5: Tier 2 layout tools (panes/tabs/workspaces CRUD)",
-);
+console.log("\n[13] T5: Tier 2 layout tools (panes/tabs/workspaces CRUD)");
 const layoutMod = await jiti.import(join(ROOT, "src/tools/layout.ts"), {
 	parent: ROOT,
 });
@@ -744,16 +768,23 @@ assert(
 	"resizePaneArgs: defaults to --current (focused pane), no amount",
 );
 assert(
-	eq(layoutMod.resizePaneArgs({ direction: "left", amount: 0.5, paneId: "w1:p3" }), [
-		"pane",
-		"resize",
-		"--direction",
-		"left",
-		"--amount",
-		"0.5",
-		"--pane",
-		"w1:p3",
-	]),
+	eq(
+		layoutMod.resizePaneArgs({
+			direction: "left",
+			amount: 0.5,
+			paneId: "w1:p3",
+		}),
+		[
+			"pane",
+			"resize",
+			"--direction",
+			"left",
+			"--amount",
+			"0.5",
+			"--pane",
+			"w1:p3",
+		],
+	),
 	"resizePaneArgs: --amount + explicit --pane targeting",
 );
 // zoom: mode toggle/on/off (default toggle) + targeting.
@@ -865,7 +896,8 @@ assert(
 );
 // numeric options are stringified (spawn argv must be strings).
 assert(
-	typeof layoutMod.resizePaneArgs({ direction: "up", amount: 1 })[4] === "string",
+	typeof layoutMod.resizePaneArgs({ direction: "up", amount: 1 })[4] ===
+		"string",
 	"resizePaneArgs: --amount is stringified (spawn argv must be strings)",
 );
 // create tools expose an env map (KEY=VALUE), consistent with start_agent.
@@ -893,23 +925,29 @@ assert(
 	"normalizeTab maps snake_case -> camelCase",
 );
 assert(
-	eq(layoutMod.normalizeWorkspace({ workspace_id: "w1", tab_count: 2, active_tab_id: "w1:t1", focused: true }), {
-		workspaceId: "w1",
-		label: undefined,
-		activeTabId: "w1:t1",
-		agentStatus: undefined,
-		number: undefined,
-		paneCount: undefined,
-		tabCount: 2,
-		focused: true,
-	}),
+	eq(
+		layoutMod.normalizeWorkspace({
+			workspace_id: "w1",
+			tab_count: 2,
+			active_tab_id: "w1:t1",
+			focused: true,
+		}),
+		{
+			workspaceId: "w1",
+			label: undefined,
+			activeTabId: "w1:t1",
+			agentStatus: undefined,
+			number: undefined,
+			paneCount: undefined,
+			tabCount: 2,
+			focused: true,
+		},
+	),
 	"normalizeWorkspace maps snake_case -> camelCase",
 );
 
 // ---------------------------------------------------------------------------
-console.log(
-	"\n[14] T6: Tier 4 worktrees + Tier 5 snapshot/sessions",
-);
+console.log("\n[14] T6: Tier 4 worktrees + Tier 5 snapshot/sessions");
 const worktreesMod = await jiti.import(join(ROOT, "src/tools/worktrees.ts"), {
 	parent: ROOT,
 });
@@ -953,10 +991,7 @@ for (const n of [
 	"herdr_session_delete",
 ]) {
 	const t = tools.find((x) => x.name === n);
-	assert(
-		/⚠️/.test(t.description),
-		`${n} description carries ⚠️ (AC7)`,
-	);
+	assert(/⚠️/.test(t.description), `${n} description carries ⚠️ (AC7)`);
 }
 // `session attach` is interactive (TUI) -> excluded: it must NOT be registered.
 assert(
@@ -1014,7 +1049,11 @@ assert(
 // open: subset of create flags (no --base).
 assert(
 	eq(
-		worktreesMod.openWorktreeArgs({ path: "/wt/feat", branch: "feat", focus: true }),
+		worktreesMod.openWorktreeArgs({
+			path: "/wt/feat",
+			branch: "feat",
+			focus: true,
+		}),
 		[
 			"worktree",
 			"open",
@@ -1047,18 +1086,14 @@ assert(
 );
 // remove: workspace optional, force optional, --json always.
 assert(
-	eq(worktreesMod.removeWorktreeArgs({}), [
-		"worktree",
-		"remove",
-		"--json",
-	]),
+	eq(worktreesMod.removeWorktreeArgs({}), ["worktree", "remove", "--json"]),
 	"removeWorktreeArgs: bare 'worktree remove --json'",
 );
 assert(
 	eq(worktreesMod.removeWorktreeArgs({ workspaceId: "w2", force: true }), [
 		"worktree",
 		"remove",
-			"--workspace",
+		"--workspace",
 		"w2",
 		"--force",
 		"--json",

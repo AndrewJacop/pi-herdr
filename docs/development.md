@@ -103,7 +103,13 @@ The cross-cutting contract is spelled out in [`CONTRIBUTING.md`](../CONTRIBUTING
    herdr. `npm run typecheck && npm test` must stay green.
 
 For a no-install live check while developing: open a herdr tab and run
-`pi -ne -e ./src/index.ts` (`-ne` loads only your local `src/`).
+`pi -ne -e ./src/index.ts -e <pi-ask-user>/index.ts`. `-ne` is **required** here —
+the globally-installed `@andrewjacop/pi-herdr` would otherwise collide with your
+local copy on tool names and refuse to boot; `-e` then re-adds your local `src/`
+plus any other plugin you need (`pi-ask-user` lives at
+`~/.pi/agent/npm/node_modules/pi-ask-user/index.ts` — load it to exercise the
+blocked / self-report path). `npm run test:live` includes `tests/dev-load.mjs`,
+which asserts this combination boots cleanly.
 
 ## Cross-links
 

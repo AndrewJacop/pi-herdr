@@ -11,6 +11,7 @@ composite one-shot `herdr_delegate`.
 ---
 
 ### `herdr_start_agent`  ·  [Tier 1]
+
 Launch a new AI agent (`pi`/`claude`/`codex`/…) in a herdr pane and return its pane id
 and state. Platform argv handling (Windows `cmd /c` wrapper) is automatic.
 
@@ -39,6 +40,7 @@ on success; on error likely `VALIDATION_ERROR` (unknown kind), `HERDR_UNAVAILABL
 agent not detected within budget).
 
 **Example**
+
 ```text
 herdr_start_agent  name="helper"  agent="claude"  cwd="/repo"  split="down"
 ```
@@ -52,6 +54,7 @@ find `node`.
 ---
 
 ### `herdr_send_prompt`
+
 Send a prompt to an agent pane; with `submit=true` (default) the text is also submitted
 (Enter). Use to drive an agent you started with `herdr_start_agent`.
 
@@ -70,6 +73,7 @@ Legacy (<0.7.5): `agent send <id> <text>`, plus `pane send-keys <id> Enter` when
 or the underlying send error code.
 
 **Example**
+
 ```text
 herdr_send_prompt  target="helper"  text="run the test suite"  submit=true
 ```
@@ -81,6 +85,7 @@ cycle in one call.
 ---
 
 ### `herdr_read_agent`
+
 Read recent/visible output text from an agent pane. Returns the text and whether it was
 truncated.
 
@@ -97,6 +102,7 @@ truncated.
 mapped code (e.g. `NOT_FOUND`).
 
 **Example**
+
 ```text
 herdr_read_agent  target="helper"  source="recent"  lines="80"
 ```
@@ -107,6 +113,7 @@ grab partial output.
 ---
 
 ### `herdr_wait_agent`
+
 Block until an agent pane reaches a given status (`idle`/`working`/`blocked`/`done`).
 Tolerates the brief `unknown` window right after spawn. Returns `TIMEOUT` on expiry.
 
@@ -126,6 +133,7 @@ Legacy (<0.7.5): `wait agent-status <target> --status <s> --timeout <ms>`.
 on error likely `TIMEOUT` (budget/abort), or `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_wait_agent  target="helper"  status="idle"  timeoutMs="300000"
 ```
@@ -138,6 +146,7 @@ even when the event command is flaky (e.g. herdr 0.7.3's probe decode error). Wa
 ---
 
 ### `herdr_list_agents`
+
 List all agents currently running in herdr with their status.
 
 **Wraps:** `agent list`.
@@ -150,6 +159,7 @@ List all agents currently running in herdr with their status.
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_list_agents
 ```
@@ -161,6 +171,7 @@ named persistent sessions.
 ---
 
 ### `herdr_get_agent`
+
 Get details of a single agent pane by id/name/label.
 
 **Wraps:** `agent get <target>`.
@@ -173,6 +184,7 @@ Get details of a single agent pane by id/name/label.
 on error likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_get_agent  target="helper"
 ```
@@ -183,6 +195,7 @@ concrete pane id before other orchestration tools act.
 ---
 
 ### `herdr_stop_agent`  ·  [Tier 1]  ·  ⚠️ destructive
+
 ⚠️ Closes the agent's pane and **terminates the agent process**. Use when an agent is
 stuck or no longer needed.
 
@@ -196,6 +209,7 @@ stuck or no longer needed.
 error likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_stop_agent  target="helper"
 ```
@@ -207,6 +221,7 @@ a name/label first. To interrupt without killing, use `herdr_send_keys` with
 ---
 
 ### `herdr_rename_agent`
+
 Rename an agent pane, or clear its name.
 
 **Wraps:** `agent rename <target> <name>` (or `agent rename <target> --clear` when
@@ -221,6 +236,7 @@ Rename an agent pane, or clear its name.
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_rename_agent  target="w1:p3"  name="reviewer"
 ```
@@ -230,6 +246,7 @@ herdr_rename_agent  target="w1:p3"  name="reviewer"
 ---
 
 ### `herdr_focus_agent`
+
 Focus an agent pane in the herdr UI.
 
 **Wraps:** `agent focus <target>`.
@@ -242,6 +259,7 @@ Focus an agent pane in the herdr UI.
 the mapped code.
 
 **Example**
+
 ```text
 herdr_focus_agent  target="helper"
 ```
@@ -251,6 +269,7 @@ herdr_focus_agent  target="helper"
 ---
 
 ### `herdr_explain_agent`
+
 Get a natural-language explanation of what an agent pane is/does.
 
 **Wraps:** `agent explain <target>` (raw text allowed).
@@ -263,6 +282,7 @@ Get a natural-language explanation of what an agent pane is/does.
 error the mapped code.
 
 **Example**
+
 ```text
 herdr_explain_agent  target="w1:p3"
 ```
@@ -273,6 +293,7 @@ its detected kind and lifecycle state.
 ---
 
 ### `herdr_delegate`
+
 Spawn a fresh agent, send a prompt, wait for it to finish, and return its response text —
 all in one call. The default is to keep the pane alive for follow-ups (set `closeOnSuccess`
 to close it).
@@ -282,6 +303,8 @@ Submit+wait is version-branched: new (≥0.7.5) uses one atomic
 `agent prompt <id> <text> --wait --timeout <ms>` (`agent_prompt_stalled` falls back to
 the wait/poll dance; the turn is re-sent up to 3× if it never starts); legacy uses the
 multi-step `send → wait working → wait idle` dance. Final read is `agent read <id> --source recent --lines 50 --format text`.
+After the turn settles the live `agent_status` is re-checked, so an ask-user `blocked`
+state is never mistaken for a finished answer (see `onBlocked`).
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -292,6 +315,7 @@ multi-step `send → wait working → wait idle` dance. Final read is `agent rea
 | `cwd` | string | no | Working directory for the agent. |
 | `timeoutMs` | integer | no | Overall budget in ms (default 120000). |
 | `closeOnSuccess` | boolean | no | Close the pane after a successful response (default false, keep alive). |
+| `onBlocked` | enum `wait` \| `return` | no | What to do if the spawned agent blocks on `ask_user`. **`"wait"`** (default): hold the call open with **no time bound** (only the parent abort stops it) until a human answers in the spawned pane, then return the final answer. **`"return"`**: return immediately with `{blocked:true, question, paneId}` (`isError`, pane kept alive) for the orchestration session to relay via its own `ask_user` → `herdr_send_prompt` → `herdr_wait_agent` → `herdr_read_agent`. `timeoutMs` does **not** bound the `"wait"` phase. *(v0.3.0)* |
 | `env` | record<string,string> | no | Extra env vars. On macOS, set `PATH` to your shell PATH if herdr runs under launchd's minimal PATH. |
 
 **Returns:** `okText(<response> || "(agent produced no captured output)", {paneId, name, response, closed})`
@@ -300,6 +324,7 @@ read plus `{paneId, name, response, error}` — error codes include `TIMEOUT` an
 start-failure codes.
 
 **Example**
+
 ```text
 herdr_delegate  prompt="Write tests for auth.ts and summarize what you changed."  agent="pi"  timeoutMs="180000"
 ```
@@ -309,3 +334,12 @@ herdr_delegate  prompt="Write tests for auth.ts and summarize what you changed."
 to 90 s for `idle` because a spawned pi that inherits host extensions/skills can spend
 ~40–60 s in `unknown` first. If the turn times out, the pane is left alive with partial
 output for inspection.
+
+**Blocked (ask-user) handling:** on herdr 0.7.5+, `agent prompt --wait` settles on
+`blocked` too (the spawned agent is waiting on `ask_user`) and returns ok — so a plain
+`done.ok` check can't tell "answered" from "waiting for a human". The delegate re-reads
+`agent get` after the turn settles and branches on `onBlocked` (above). With `"return"`,,
+the returned text is the agent's **question**, not an answer — the prompt guideline tells
+the orchestrator to relay it. Note: pi's ask-user overlay is freeform *or* multi-choice;
+`herdr_send_prompt` (text + Enter) covers freeform, and for multi-choice the orchestrator
+types the chosen option title.

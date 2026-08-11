@@ -29,22 +29,22 @@ const agentFields = {
 	name: Type.Optional(
 		Type.String({
 			description:
-			"Agent pane name (must be unique). Default: agent-<timestamp>.",
+				"Agent pane name (must be unique). Default: agent-<timestamp>.",
 		}),
 	),
 	agent: Type.Optional(
 		Type.String({
 			description:
-			"Agent kind to launch (default 'pi'), e.g. pi/claude/codex/gemini/cursor/omp/copilot. " +
-			"On herdr 0.7.5+ this is passed as `agent start --kind`; an unknown kind returns a " +
-			"VALIDATION_ERROR listing the kinds this herdr supports. To load a local extension " +
-			"pass agentArgs (e.g. [\"-e\",\"./src/index.ts\"]) instead of the removed `custom`/`argv`.",
+				"Agent kind to launch (default 'pi'), e.g. pi/claude/codex/gemini/cursor/omp/copilot. " +
+				"On herdr 0.7.5+ this is passed as `agent start --kind`; an unknown kind returns a " +
+				"VALIDATION_ERROR listing the kinds this herdr supports. To load a local extension " +
+				'pass agentArgs (e.g. ["-e","./src/index.ts"]) instead of the removed `custom`/`argv`.',
 		}),
 	),
 	agentArgs: Type.Optional(
 		Type.Array(Type.String(), {
 			description:
-			"Extra flags appended to the agent CLI after launch, e.g. [\"-ne\",\"-e\",\"./src/index.ts\"] to load a local extension instead of the installed one. On 0.7.5 these follow `--` in `agent start`; on the Windows pane-run path they join the command line; on legacy they extend the preset argv.",
+				'Extra flags appended to the agent CLI after launch, e.g. ["-ne","-e","./src/index.ts"] to load a local extension instead of the installed one. On 0.7.5 these follow `--` in `agent start`; on the Windows pane-run path they join the command line; on legacy they extend the preset argv.',
 		}),
 	),
 	cwd: Type.Optional(
@@ -152,7 +152,7 @@ async function startAgentLegacy(
 	if (input.env)
 		for (const [k, v] of Object.entries(input.env))
 			args.push("--env", `${k}=${v}`);
-	args.push(input.focus ? "--focus" : "--no-focus");	// legacy `agent start -- <argv>`: preset argv, then any extra agent flags.
+	args.push(input.focus ? "--focus" : "--no-focus"); // legacy `agent start -- <argv>`: preset argv, then any extra agent flags.
 	args.push("--", ...spec.data, ...(input.agentArgs ?? []));
 	const r = await herdr<{ agent?: Record<string, unknown> }>(args, {
 		timeoutMs: 20_000,
@@ -481,9 +481,7 @@ async function waitForStatus(
 	// the polling fallback gets to run). New API: one `agent wait` with every
 	// state via repeatable `--until`; legacy: one `wait agent-status` per state.
 	const events = new Promise<Resolved>((resolve) => {
-		const groups: string[][] = newApi
-			? [statuses]
-			: statuses.map((s) => [s]);
+		const groups: string[][] = newApi ? [statuses] : statuses.map((s) => [s]);
 		for (const group of groups) {
 			herdr(transitionWaitArgs(paneId, group, budget, newApi), {
 				timeoutMs: budget + 5_000,
@@ -545,6 +543,57 @@ async function raceIdleDone(
 	signal?: AbortSignal,
 ): Promise<Result<true>> {
 	return waitForStatus(paneId, ["idle", "done"], deadline, signal);
+}
+
+/** Read the live agent_status of a pane (idle/working/blocked/done/unknown). */
+async function getAgentStatus(
+	paneId: string,
+	signal?: AbortSignal,
+): Promise<Result<string>> {
+	const r = await herdr<{
+		agent?: { agent_status?: string };
+		agent_status?: string;
+	}>(["agent", "get", paneId], { timeoutMs: 10_000, signal });
+	if (!r.ok) return r;
+	const st = (r.data?.agent ?? r.data)?.agent_status;
+	if (!st) {
+		return err(
+			"VALIDATION_ERROR",
+			`agent get returned no status for ${paneId}`,
+		);
+	}
+	return { ok: true, data: st };
+}
+
+/**
+ * Wait for a BLOCKED (ask-user) pane to resolve, with NO time bound — only the
+ * parent signal aborts. A human answers in the spawned pane; ask-user fires
+ * active:false → working → idle (see src/selfreport.ts), and we return once the
+ * pane is truly settled (idle/done), looping past follow-up questions (blocked
+ * again) and the resumed working phase. Chunked into 60s raceIdleDone calls so
+ * we never hand herdr a huge --timeout, re-checking status each chunk.
+ */
+async function waitForBlockedResolved(
+	paneId: string,
+	signal?: AbortSignal,
+): Promise<Result<true>> {
+	if (signal?.aborted) {
+		return { ok: false, error: { code: "TIMEOUT", message: "aborted" } };
+	}
+	for (;;) {
+		const r = await raceIdleDone(paneId, Date.now() + 60_000, signal);
+		if (signal?.aborted) {
+			return { ok: false, error: { code: "TIMEOUT", message: "aborted" } };
+		}
+		if (r.ok) {
+			const s = await getAgentStatus(paneId, signal);
+			if (s.ok && (s.data === "idle" || s.data === "done")) {
+				return { ok: true, data: true };
+			}
+			// else: blocked again (another question) or resumed working — keep waiting
+		}
+		// chunk timed out without settling → loop (unbounded unless aborted)
+	}
 }
 
 /**
@@ -657,7 +706,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 		description:
 			"Launch a new AI agent (pi/claude/codex/...) in a herdr pane and return its pane id and state. " +
 			"Platform argv handling (Windows cmd /c wrapper) is automatic. " +
-			"Pass agentArgs (e.g. [\"-ne\",\"-e\",\"./src/index.ts\"]) to give the agent CLI extra flags — used to load a local extension instead of the installed one.",
+			'Pass agentArgs (e.g. ["-ne","-e","./src/index.ts"]) to give the agent CLI extra flags — used to load a local extension instead of the installed one.',
 		promptSnippet:
 			"Spawn a herdr agent pane (pi/claude/codex/...) and drive it",
 		promptGuidelines: [
@@ -1029,11 +1078,15 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 		label: "Delegate to a herdr agent (one-shot)",
 		description:
 			"Spawn a fresh agent, send a prompt, wait for it to finish, and return its response text — " +
-			"all in one call. The default is to keep the pane alive for follow-ups (set closeOnSuccess to close it).",
+			"all in one call. The default is to keep the pane alive for follow-ups (set closeOnSuccess to close it). " +
+			"If the agent blocks on an ask-user question, onBlocked decides whether this call waits for a " +
+			'human in the spawned pane ("wait", default, no time bound) or returns the question for the ' +
+			'orchestration session to relay ("return").',
 		promptSnippet:
 			"One-shot delegate: spawn an agent, send a prompt, wait, return its reply",
 		promptGuidelines: [
 			"Use herdr_delegate for one-shot delegation: it spawns an agent, sends the prompt, waits for idle, and returns the response.",
+			'If herdr_delegate returns a BLOCKED result (details.blocked === true), the returned text is the agent\'s QUESTION, not its answer — relay it: call ask_user with the question, then herdr_send_prompt(paneId, answer), herdr_wait_agent(paneId, idle), herdr_read_agent(paneId). This only happens with onBlocked: "return".',
 		],
 		parameters: Type.Object({
 			...agentFields,
@@ -1049,6 +1102,18 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 						"Close the pane after a successful response (default false, keep alive).",
 				}),
 			),
+			onBlocked: Type.Optional(
+				StringEnum(["wait", "return"] as const, {
+					description:
+						"What to do when the spawned agent blocks on an ask-user question. " +
+						'"wait" (default): keep this call open with NO time bound (only the ' +
+						"parent abort stops it) until a human answers in the spawned pane, " +
+						'then return the final answer. "return": return immediately with ' +
+						"{blocked, question, paneId} so the orchestration session relays the " +
+						"question (ask_user → herdr_send_prompt → herdr_wait_agent → " +
+						'herdr_read_agent). timeoutMs does NOT bound the "wait" phase.',
+				}),
+			),
 			env: Type.Optional(
 				Type.Record(Type.String(), Type.String(), {
 					description:
@@ -1062,6 +1127,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			const overall = p.timeoutMs ?? 120_000;
 			const startedAt = Date.now();
 			const left = () => Math.max(2_000, overall - (Date.now() - startedAt));
+			const onBlocked = p.onBlocked ?? "wait";
 
 			const partial = (
 				message: string,
@@ -1135,22 +1201,83 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				if (done.error.message !== "NOT_STARTED") break; // only retry when the turn never started
 			}
 
-			// 6. read (always attempt, even on timeout, to grab partial output)
-			const readR = await herdr<unknown>(
-				[
-					"agent",
-					"read",
-					paneId,
-					"--source",
-					"recent",
-					"--lines",
-					"50",
-					"--format",
-					"text",
-				],
-				{ timeoutMs: 15_000, signal, textOk: true },
-			);
+			// 6. read (always attempt — the question text if blocked, the answer if done)
+			const readArgs = [
+				"agent",
+				"read",
+				paneId,
+				"--source",
+				"recent",
+				"--lines",
+				"50",
+				"--format",
+				"text",
+			];
+			const readR = await herdr<unknown>(readArgs, {
+				timeoutMs: 15_000,
+				signal,
+				textOk: true,
+			});
 			const response = readR.ok ? extractText(readR.data) : "";
+
+			// 6b. ask-user BLOCKED? On herdr 0.7.5+ `agent prompt --wait` settles on
+			//     `blocked` and returns ok, so done.ok alone can't tell "answered" from
+			//     "waiting for a human". Check the live status and branch on onBlocked.
+			const statusR = await getAgentStatus(paneId, signal);
+			const settled = statusR.ok ? statusR.data : null;
+			if (settled === "blocked") {
+				if (onBlocked === "return") {
+					// Relay to the orchestration session: keep the pane alive and hand back
+					// the question + paneId so the orchestrator asks its OWN user, injects
+					// the answer, then waits + reads (see promptGuidelines).
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Agent in pane ${paneId} is BLOCKED waiting for human input (ask-user). The text below is the QUESTION, not an answer — do not treat it as a result. To resolve: call ask_user with the question, then herdr_send_prompt("${paneId}", <answer>), then herdr_wait_agent("${paneId}", idle), then herdr_read_agent("${paneId}").\n\nQuestion from pane ${paneId}:\n${response || "(no question text captured)"}`,
+							},
+						],
+						details: {
+							blocked: true,
+							question: response,
+							paneId,
+							name,
+							onBlocked,
+						},
+						isError: true,
+					};
+				}
+				// onBlocked === "wait" (default): keep this call open until a human
+				// answers in the spawned pane, then return the final answer. No time
+				// bound by default — only the parent signal aborts.
+				const resume = await waitForBlockedResolved(paneId, signal);
+				if (!resume.ok) {
+					return partial(
+						`Agent in pane ${paneId} was blocked (ask-user) and the wait did not resolve: ${resume.error.message}. Last output from pane ${paneId}:\n${response || "(none)"}`,
+						{ paneId, name, response, error: resume.error, wasBlocked: true },
+					);
+				}
+				// turn finished after the answer — read the final answer
+				const finalR = await herdr<unknown>(readArgs, {
+					timeoutMs: 15_000,
+					signal,
+					textOk: true,
+				});
+				const finalResponse = finalR.ok ? extractText(finalR.data) : response;
+				if (p.closeOnSuccess) {
+					await herdr(["pane", "close", paneId], {
+						timeoutMs: 15_000,
+						signal,
+					});
+				}
+				return okText(finalResponse || "(agent produced no captured output)", {
+					paneId,
+					name,
+					response: finalResponse,
+					wasBlocked: true,
+					closed: Boolean(p.closeOnSuccess),
+				});
+			}
 
 			if (!done.ok) {
 				return partial(

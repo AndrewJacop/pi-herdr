@@ -22,11 +22,23 @@ const ENABLED =
 const SOURCE = "pi-herdr";
 
 /**
- * Public channel from `@juicesharp/rpiv-ask-user-question` (`events.ts`).
- * Channel names are immutable once shipped — keep this string in sync, do not
- * invent a `herdr:*` alias here.
+ * Legacy channel from older `@juicesharp/rpiv-ask-user-question` (`events.ts`).
+ * Channel names are immutable once shipped, so this is kept for back-compat
+ * with installs that still emit it. Current `pi-ask-user` (v0.14+) emits
+ * `herdr:blocked` instead — see HERDR_BLOCKED_EVENT. Don't invent a `herdr:*`
+ * alias yourself; `herdr:blocked` below is the producer's real, current name.
  */
 export const ASK_USER_BLOCKED_EVENT = "rpiv:ask-user:blocked" as const;
+
+/**
+ * Channel emitted by the CURRENT `pi-ask-user` (v0.14+) when ask_user blocks /
+ * resumes (`{ active: boolean, label: string }`), and — same payload shape —
+ * by `pi-subagents` for attention/blocked states. pi-herdr is the bridge that
+ * turns this in-process signal into a herdr `pane report-agent --state blocked`
+ * so every observer (herdr_wait_agent / herdr_delegate) sees it: nothing else in
+ * JS consumes it, and herdr's native TUI detection can miss it on some builds.
+ */
+export const HERDR_BLOCKED_EVENT = "herdr:blocked" as const;
 
 /**
  * Public channel from `pi-cursor-sdk` (`CURSOR_ASK_QUESTION_BLOCKED_EVENT`).
@@ -60,8 +72,9 @@ function report(state: "idle" | "working" | "blocked" | "unknown"): void {
 }
 
 /**
- * Map ask-blocked payload (`{ active: boolean }`) → herdr state.
- * Shared by `rpiv:ask-user:blocked` and `pi-cursor-sdk:ask-question:blocked`.
+ * Map a blocked payload (`{ active: boolean }`) → herdr state.
+ * Shared by `herdr:blocked`, `rpiv:ask-user:blocked`, and
+ * `pi-cursor-sdk:ask-question:blocked` (all the same `{ active }` shape).
  * `active: false` returns `working` (turn still in progress), not `idle`.
  * Unknown payloads return `null` (ignore).
  */
@@ -82,8 +95,10 @@ export function mapAskUserBlockedToState(
  *   agent_start     -> working (a run began)
  *   agent_settled   -> idle   (pi will not auto-retry/compact/follow-up — truly done)
  *   session_shutdown-> idle
- *   rpiv:ask-user:blocked { active: true }              -> blocked
- *   rpiv:ask-user:blocked { active: false }             -> working (resume the turn)
+ *   herdr:blocked { active: true }              -> blocked
+ *   herdr:blocked { active: false }             -> working (resume the turn)
+ *   rpiv:ask-user:blocked { active: true }      -> blocked  (legacy channel)
+ *   rpiv:ask-user:blocked { active: false }     -> working   (legacy channel)
  *   pi-cursor-sdk:ask-question:blocked { active: true } -> blocked
  *   pi-cursor-sdk:ask-question:blocked { active: false }-> working (resume the turn)
  *
@@ -102,7 +117,10 @@ export function registerSelfReport(pi: ExtensionAPI): void {
 		const state = mapAskUserBlockedToState(data);
 		if (state) report(state);
 	};
-	// Questionnaire wait (TUI + RPC) — emitted by rpiv-ask-user-question.
+	// Current pi-ask-user (v0.14+) ask_user wait + pi-subagents attention. This is
+	// the channel producers actually emit today; nothing else bridges it to herdr.
+	pi.events.on(HERDR_BLOCKED_EVENT, onAskBlocked);
+	// Legacy ask-user wait (TUI + RPC) — older rpiv-ask-user-question builds.
 	pi.events.on(ASK_USER_BLOCKED_EVENT, onAskBlocked);
 	// cursor_ask_question wait — emitted by pi-cursor-sdk.
 	pi.events.on(CURSOR_ASK_QUESTION_BLOCKED_EVENT, onAskBlocked);
