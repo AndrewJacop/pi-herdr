@@ -12,6 +12,7 @@ export type HerdrErrorCode =
 	| "NOT_FOUND"
 	| "VALIDATION_ERROR"
 	| "AGENT_START_FAILED"
+	| "AGENT_NOT_READY"
 	| "HERDR_UNAVAILABLE"
 	| "PANE_GONE";
 

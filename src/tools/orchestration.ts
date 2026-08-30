@@ -28,8 +28,7 @@ import {
 const agentFields = {
 	name: Type.Optional(
 		Type.String({
-			description:
-				"Agent pane name (must be unique). Default: agent-<timestamp>.",
+			description: "Agent pane name (must be unique). Default: agent-<timestamp>.",
 		}),
 	),
 	agent: Type.Optional(
@@ -196,11 +195,7 @@ async function startAgentNew(
 	if (!splitR.ok) return splitR;
 	const paneId = extractPaneId(splitR.data);
 	if (!paneId) {
-		return err(
-			"PANE_GONE",
-			"herdr pane split returned no pane id",
-			splitR.data,
-		);
+		return err("PANE_GONE", "herdr pane split returned no pane id", splitR.data);
 	}
 
 	// 2. attach the agent to the pane. herdr 0.7.5-preview's `agent start --kind`
@@ -321,9 +316,7 @@ async function startHerdrAgent(
 	input: StartInput,
 ): Promise<Result<{ agent: Record<string, unknown> }>> {
 	const version = await detectHerdrVersion();
-	return isNewAgentApi(version)
-		? startAgentNew(input)
-		: startAgentLegacy(input);
+	return isNewAgentApi(version) ? startAgentNew(input) : startAgentLegacy(input);
 }
 
 /**
@@ -339,16 +332,25 @@ async function sendAgentPrompt(
 	const submit = opts.submit !== false;
 	const version = await detectHerdrVersion();
 	if (isNewAgentApi(version)) {
-		const r = submit
-			? await herdr(["agent", "prompt", paneId, text], {
-					timeoutMs: 15_000,
-					signal: opts.signal,
-				})
-			: await herdr(["pane", "send-text", paneId, text], {
-					timeoutMs: 15_000,
-					signal: opts.signal,
-				});
-		return r.ok ? { ok: true, data: true } : r;
+		if (!submit) {
+			const r = await herdr(["pane", "send-text", paneId, text], {
+				timeoutMs: 15_000,
+				signal: opts.signal,
+			});
+			return r.ok ? { ok: true, data: true } : r;
+		}
+		const r = await herdr(["agent", "prompt", paneId, text], {
+			timeoutMs: 15_000,
+			signal: opts.signal,
+		});
+		if (r.ok) return { ok: true, data: true };
+		// herdr 0.8.2 (Windows + pi): `agent prompt` rejects an interactive-ready
+		// pane with `agent_not_ready`. Submit pane-level instead — same bytes, no
+		// agent-surface validation.
+		if (r.error.code === "AGENT_NOT_READY") {
+			return paneLevelSubmit(paneId, text, opts);
+		}
+		return r;
 	}
 	const sendR = await herdr(["agent", "send", paneId, text], {
 		timeoutMs: 15_000,
@@ -363,6 +365,35 @@ async function sendAgentPrompt(
 		if (!enterR.ok) return enterR;
 	}
 	return { ok: true, data: true };
+}
+
+/**
+ * Pane-level prompt submission for panes the agent surface refuses to prompt
+ * (`AGENT_NOT_READY` — herdr 0.8.2 Windows/pi rejects `agent prompt` /
+ * `agent send-keys` on interactive-ready panes). `pane send-text` + settled
+ * Enter needs no agent validation and delivers the same bytes `agent prompt`
+ * would (herdr's own text-then-Enter semantics, one layer down). The settle
+ * delay is load-bearing: Enter racing the paste loses the turn (herdr #1878).
+ */
+async function paneLevelSubmit(
+	paneId: string,
+	text: string,
+	opts: { signal?: AbortSignal } = {},
+): Promise<Result<true>> {
+	const tx = await herdr(["pane", "send-text", paneId, text], {
+		timeoutMs: 15_000,
+		signal: opts.signal,
+	});
+	if (!tx.ok) return tx;
+	await sleep(600);
+	if (opts.signal?.aborted) {
+		return err("TIMEOUT", `prompt to pane ${paneId} aborted`);
+	}
+	const enter = await herdr(["pane", "send-keys", paneId, "Enter"], {
+		timeoutMs: 15_000,
+		signal: opts.signal,
+	});
+	return enter.ok ? { ok: true, data: true } : enter;
 }
 
 /** Resolve a flexible target (name/label/paneId) to a concrete pane id. */
@@ -557,10 +588,7 @@ async function getAgentStatus(
 	if (!r.ok) return r;
 	const st = (r.data?.agent ?? r.data)?.agent_status;
 	if (!st) {
-		return err(
-			"VALIDATION_ERROR",
-			`agent get returned no status for ${paneId}`,
-		);
+		return err("VALIDATION_ERROR", `agent get returned no status for ${paneId}`);
 	}
 	return { ok: true, data: st };
 }
@@ -630,6 +658,70 @@ async function driveOneTurn(
 	return raceIdleDone(paneId, opts.deadline, signal);
 }
 
+/** Stability polls / minimum elapsed before a degraded-mode turn reads as done. */
+const READ_STABLE_POLLS = 3;
+const READ_STABLE_FLOOR_MS = 10_000;
+
+/**
+ * Degraded-mode turn driver for panes where herdr's lifecycle tracking is
+ * unusable (0.8.2 Windows/pi `agent_not_ready` panes report `idle` through an
+ * entire working turn, so `agent wait` returns instantly). Completion = screen
+ * stability: a working pi TUI repaints continuously (spinner, status line,
+ * token counts), so STABLE_POLLS consecutive identical reads after the floor
+ * mean the turn settled. ponytail: heuristic — swap back to `agent wait`
+ * once herdr's process tracking is fixed upstream.
+ */
+async function driveOneTurnReadStable(
+	paneId: string,
+	opts: {
+		deadline: number;
+		signal?: AbortSignal;
+		/** Set `sawBlocked = true` if the pane ever reports `blocked` — a short
+		 * ask-user episode can resolve before the caller samples status. */
+		observed?: { sawBlocked?: boolean };
+	},
+): Promise<Result<true>> {
+	const t0 = Date.now();
+	let last: string | null = null;
+	let stable = 0;
+	while (Date.now() < opts.deadline) {
+		const r = await herdr<unknown>(
+			[
+				"agent",
+				"read",
+				paneId,
+				"--source",
+				"recent-unwrapped",
+				"--lines",
+				"80",
+				"--format",
+				"text",
+			],
+			{ textOk: true, timeoutMs: 15_000, signal: opts.signal },
+		);
+		const txt = r.ok
+			? String(extractText(r.data) ?? "")
+			: `__read_err_${r.error?.code}`;
+		if (txt === last) stable++;
+		else {
+			stable = 0;
+			last = txt;
+		}
+		if (opts.observed && !opts.observed.sawBlocked) {
+			const s = await getAgentStatus(paneId, opts.signal);
+			if (s.ok && s.data === "blocked") opts.observed.sawBlocked = true;
+		}
+		if (stable >= READ_STABLE_POLLS && Date.now() - t0 >= READ_STABLE_FLOOR_MS) {
+			return { ok: true, data: true };
+		}
+		await sleep(2_000);
+	}
+	return err(
+		"TIMEOUT",
+		`turn in pane ${paneId} did not settle (screen still changing) before deadline`,
+	);
+}
+
 /**
  * Build the atomic submit+wait argv for herdr 0.7.5+:
  * `agent prompt <target> <text> --wait --timeout <ms>`.
@@ -673,7 +765,11 @@ export function promptWaitArgs(
 async function submitAndWait(
 	paneId: string,
 	text: string,
-	opts: { deadline: number; signal?: AbortSignal },
+	opts: {
+		deadline: number;
+		signal?: AbortSignal;
+		observed?: { sawBlocked?: boolean };
+	},
 ): Promise<Result<true>> {
 	const { signal } = opts;
 	const budget = Math.max(2_000, opts.deadline - Date.now());
@@ -683,6 +779,19 @@ async function submitAndWait(
 			signal,
 		});
 		if (waitR.ok) return { ok: true, data: true };
+		// herdr 0.8.2 (Windows + pi): every agent-surface readiness check fails
+		// on an interactive-ready pane and lifecycle states are stuck `idle`, so
+		// `agent prompt --wait` can neither submit nor observe. Submit
+		// pane-level, then drive the turn by screen stability.
+		if (waitR.error.code === "AGENT_NOT_READY") {
+			const sent = await paneLevelSubmit(paneId, text, opts);
+			if (!sent.ok) return sent;
+			return driveOneTurnReadStable(paneId, {
+				deadline: opts.deadline,
+				signal,
+				observed: opts.observed,
+			});
+		}
 		const code = (waitR.error.details as { code?: string } | undefined)?.code;
 		// agent_prompt_stalled: prompt submitted but no working transition within
 		// herdr's grace window — don't hang. Drive the already-submitted turn via
@@ -707,8 +816,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			"Launch a new AI agent (pi/claude/codex/...) in a herdr pane and return its pane id and state. " +
 			"Platform argv handling (Windows cmd /c wrapper) is automatic. " +
 			'Pass agentArgs (e.g. ["-ne","-e","./src/index.ts"]) to give the agent CLI extra flags — used to load a local extension instead of the installed one.',
-		promptSnippet:
-			"Spawn a herdr agent pane (pi/claude/codex/...) and drive it",
+		promptSnippet: "Spawn a herdr agent pane (pi/claude/codex/...) and drive it",
 		promptGuidelines: [
 			"Use herdr_start_agent to run another AI agent in a visible herdr pane; use herdr_delegate for one-shot spawn→send→wait→read.",
 		],
@@ -767,6 +875,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 		promptSnippet: "Send/submit a prompt to a running herdr agent pane",
 		promptGuidelines: [
 			"Use herdr_send_prompt to send a prompt to an agent pane, then herdr_wait_agent + herdr_read_agent to get the reply.",
+			"Multi-choice overlays: typed text does NOT reach a pi ask-user option list — select with herdr_send_keys instead (bare 'Enter' picks option 1, 'down' then 'Enter' picks option 2). Typed text only lands in a focused freeform row.",
 		],
 		parameters: Type.Object({
 			target: Type.String({
@@ -798,7 +907,9 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 		name: "herdr_read_agent",
 		label: "Read herdr agent output",
 		description:
-			"Read recent/visible output text from an agent pane. Returns the text and whether it was truncated.",
+			"Read recent/visible output text from an agent pane. Returns the text and whether it was truncated. " +
+			"Alternate-screen TUIs (pi, claude, …) keep long answers off the host scrollback: if truncated=true and raising 'lines' doesn't help, " +
+			"ask the agent to write its full response to a file and reply with the path, then read the file.",
 		promptSnippet: "Read an agent pane's output text",
 		promptGuidelines: [
 			"Use herdr_read_agent to fetch an agent's response after herdr_wait_agent reports idle.",
@@ -904,8 +1015,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "herdr_list_agents",
 		label: "List herdr agents",
-		description:
-			"List all agents currently running in herdr with their status.",
+		description: "List all agents currently running in herdr with their status.",
 		promptSnippet: "List all herdr agent panes and their statuses",
 		promptGuidelines: [
 			"Use herdr_list_agents to see what agent panes exist and their idle/working status.",
@@ -1086,7 +1196,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			"One-shot delegate: spawn an agent, send a prompt, wait, return its reply",
 		promptGuidelines: [
 			"Use herdr_delegate for one-shot delegation: it spawns an agent, sends the prompt, waits for idle, and returns the response.",
-			'If herdr_delegate returns a BLOCKED result (details.blocked === true), the returned text is the agent\'s QUESTION, not its answer — relay it: call ask_user with the question, then herdr_send_prompt(paneId, answer), herdr_wait_agent(paneId, idle), herdr_read_agent(paneId). This only happens with onBlocked: "return".',
+			'If herdr_delegate returns a BLOCKED result (details.blocked === true), the returned text is the agent\'s QUESTION, not its answer — relay it: call ask_user with the question, then inject the answer — herdr_send_prompt(paneId, answer) for a FREEFORM overlay, or herdr_send_keys(paneId, ["enter"])/["down","enter"] to SELECT AN OPTION (typed text never reaches an option list) — then herdr_wait_agent(paneId, idle), herdr_read_agent(paneId). This only happens with onBlocked: "return".',
 		],
 		parameters: Type.Object({
 			...agentFields,
@@ -1183,19 +1293,17 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			//      hanging. Legacy keeps the multi-step send → wait dance. Re-send when
 			//      the turn never starts (the prompt can be lost if sent too early).
 			const turnDeadline = Date.now() + left();
+			const turnObs: { sawBlocked?: boolean } = {};
 			let done: Result<true> = {
 				ok: false,
 				error: { code: "TIMEOUT", message: "no send attempt was made" },
 			};
-			for (
-				let attempt = 0;
-				attempt < 3 && Date.now() < turnDeadline;
-				attempt++
-			) {
+			for (let attempt = 0; attempt < 3 && Date.now() < turnDeadline; attempt++) {
 				if (attempt > 0) await sleep(2_000); // brief pause before re-sending
 				done = await submitAndWait(paneId, p.prompt, {
 					deadline: turnDeadline,
 					signal,
+					observed: turnObs,
 				});
 				if (done.ok) break;
 				if (done.error.message !== "NOT_STARTED") break; // only retry when the turn never started
@@ -1234,7 +1342,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 						content: [
 							{
 								type: "text",
-								text: `Agent in pane ${paneId} is BLOCKED waiting for human input (ask-user). The text below is the QUESTION, not an answer — do not treat it as a result. To resolve: call ask_user with the question, then herdr_send_prompt("${paneId}", <answer>), then herdr_wait_agent("${paneId}", idle), then herdr_read_agent("${paneId}").\n\nQuestion from pane ${paneId}:\n${response || "(no question text captured)"}`,
+								text: `Agent in pane ${paneId} is BLOCKED waiting for human input (ask-user). The text below is the QUESTION, not an answer — do not treat it as a result. To resolve: call ask_user with the question, then inject the answer — herdr_send_prompt("${paneId}", <answer>) for a FREEFORM overlay, or herdr_send_keys("${paneId}", ["enter"]) / ["down","enter"] to SELECT AN OPTION (typed text never reaches an option list) — then herdr_wait_agent("${paneId}", idle), then herdr_read_agent("${paneId}").\n\nQuestion from pane ${paneId}:\n${response || "(no question text captured)"}`,
 							},
 						],
 						details: {
@@ -1296,6 +1404,9 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				name,
 				response,
 				closed: Boolean(p.closeOnSuccess),
+				// ask-user episode that resolved DURING the fallback-driven turn
+				// (the status was already done when sampled) — keep the metadata.
+				...(turnObs.sawBlocked ? { wasBlocked: true } : {}),
 			});
 		},
 	});

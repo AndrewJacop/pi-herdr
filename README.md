@@ -88,6 +88,16 @@ server. If herdr is missing or not running, every tool returns a clean
 > **auto-detect** it; `agent prompt` / `get` / `read` / `rename` / `close` then
 > work normally. macOS/Linux keep the `agent start --kind` path. See
 > [Platform notes](#platform-notes).
+>
+> ⚠️ **herdr 0.8.2 (Windows).** herdr 0.8.2's agent-surface readiness validation
+> is broken for pi panes: `agent prompt` and `agent send-keys` fail with
+> `agent_not_ready` ("no longer the pane foreground process") even on
+> interactive-ready panes, and `agent start --kind`-launched panes additionally
+> lose state self-reporting. `pi-herdr` **v0.4.0+** works around both transparently:
+> prompting falls back to pane-level submission (`pane send-text` + settled `Enter`),
+> fallback-driven turns are driven by screen stability, and the Windows spawn path
+> (bare `pane run`, which keeps self-report working) is unchanged. Verified by the
+> full `/herdr-qa all` sweep: 43/43 tools PASS on 0.8.2 stable.
 
 > ⚠️ **macOS — do not manage herdr with `brew services`.** `brew services` runs the
 > herdr server under launchd, which gives it macOS's *minimal* PATH

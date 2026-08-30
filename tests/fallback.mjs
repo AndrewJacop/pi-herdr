@@ -46,20 +46,10 @@ const check = (c, m) => {
 
 try {
 	console.log("[1] fallback: herdr_wait_agent(idle) on an already-idle pane");
-	const s = await herdr(
-		[
-			"agent",
-			"start",
-			"fb-probe",
-			"--cwd",
-			process.cwd(),
-			"--no-focus",
-			"--",
-			"pi",
-		],
-		{ timeoutMs: 20000 },
-	);
-	const pid = s.data?.agent?.pane_id;
+	const spawned = await (await import("./_spawn.mjs")).spawnPiAgent("fb-probe", {
+		cwd: process.cwd(),
+	});
+	const pid = spawned.paneId;
 	for (let i = 0; i < 40; i++) {
 		if ((await getStatus(pid)) === "idle") break;
 		await sleep(1000);

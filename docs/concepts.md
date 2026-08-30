@@ -40,11 +40,12 @@ Each tool then maps that `Result<T>` to a pi tool return value (`ToolReturn`):
 | `NOT_FOUND` | Target pane/agent/tab/workspace/session doesn't exist (herdr `not_found` / `no_such_agent` / `no_such_pane`). |
 | `VALIDATION_ERROR` | Bad input — unknown agent kind, empty required field, mutually-exclusive params, or any unmapped herdr server error. |
 | `AGENT_START_FAILED` | A spawned agent was not detected by herdr within budget (`agent_start_failed`). |
+| `AGENT_NOT_READY` | herdr's agent-surface readiness validation rejected the pane (`agent_not_ready`) — on herdr 0.8.2 Windows this fires on interactive-ready panes and triggers the pane-level prompt fallback *(v0.4.0)*. |
 | `HERDR_UNAVAILABLE` | The `herdr` binary could not be resolved/spawned (ENOENT), or is missing from PATH. |
 | `PANE_GONE` | A split/create returned no pane/tab id, or a pane vanished mid-operation. |
 
 The mapping is in [`mapCode()` in `herdr.ts`](../src/herdr.ts): `agent_start_failed →
-AGENT_START_FAILED`; `*not_found*`/`no_such_agent`/`no_such_pane → NOT_FOUND`;
+AGENT_START_FAILED`; `agent_not_ready → AGENT_NOT_READY`; `*not_found*`/`no_such_agent`/`no_such_pane → NOT_FOUND`;
 `*gone* → PANE_GONE`; `*timeout*`/`*timed_out* → TIMEOUT`; everything else →
 `VALIDATION_ERROR`. herdr 0.7.5+ emits error envelopes on **stderr** (stdout empty,
 non-zero exit); `herdr()` parses both stdout and stderr so codes map correctly rather

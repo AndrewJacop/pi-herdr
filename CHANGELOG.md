@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-27
+
+### Added
+
+- **herdr 0.8.2 compatibility (Windows).** herdr 0.8.2's agent-surface readiness
+  validation is broken for pi panes: `agent prompt` and `agent send-keys` fail with
+  `agent_not_ready` ("no longer the pane foreground process") even on
+  interactive-ready panes, and `agent start --kind`-launched panes additionally
+  lose state self-reporting. Prompting now detects that error and transparently
+  falls back to pane-level submission (`pane send-text` + 600 ms settle +
+  `pane send-keys Enter` — the same bytes `agent prompt` sends), so
+  `herdr_send_prompt` and `herdr_delegate` keep working. The fallback is
+  self-gating: it only triggers on `agent_not_ready`, so healthy herdr versions
+  are unaffected.
+- **Degraded-mode turn driving in `herdr_delegate`.** On fallback-driven turns,
+  lifecycle states are unreliable (stuck `idle`), so the delegate completes the
+  turn by screen stability: 3 identical consecutive `agent read` polls after a
+  10 s floor (a working TUI repaints continuously, so a stable screen means the
+  turn settled). The driver samples `agent get` throughout, so an ask-user
+  episode that resolves mid-turn still reports `details.wasBlocked: true`.
+- **New `AGENT_NOT_READY` error code** in the normalized `HerdrErrorCode` set
+  (mapped from herdr's `agent_not_ready`).
+- **Validated multi-choice overlay semantics, documented everywhere relevant**
+  (send_prompt guidelines, delegate blocked-relay instructions, docs):
+  typed text never reaches a pi ask-user option list — bare `Enter` selects
+  option 1 (preselected), `down`×n then `Enter` selects option n+1; typed text
+  only lands in a focused freeform row. Answer freeform overlays with
+  `herdr_send_prompt`, select options with `herdr_send_keys`.
+- **`herdr_read_agent` now documents the alternate-screen scrollback limit**
+  (in its tool description and docs): alternate-screen TUIs keep long answers
+  off the host scrollback — ask the agent to write its response to a file and
+  reply with the path, then read the file.
+
+### Changed
+
+- **Live test suite migrated to the herdr 0.7.5+/0.8.x CLI surface** — the
+  legacy `agent start <name> --no-focus -- <argv>` form was removed upstream and
+  all five affected tests now spawn through the current path. New shared helper
+  `tests/_spawn.mjs` (split → `pane run` on Windows / `agent start --kind` on
+  POSIX → detect → rename, plus `waitStatus`/`panePrompt`/overlay-answer
+  helpers); `live.mjs` exercises the registered `herdr_start_agent` tool;
+  `pong.mjs` drives `herdr_send_prompt` and polls the read; `selfreport.mjs`
+  spawns with `-ne -e <local src>` (the global npm pi-herdr collides on tool
+  names otherwise and crashes the spawned pi at boot); `blocked.mjs` answers
+  overlays by key navigation with explicit `Red/Blue/Green` options and
+  per-mode temp cwds.
+
+### Verified
+
+- Full offline gate: `typecheck` ✅, smoke 380/380 ✅.
+- Full live suite on herdr 0.8.2 (stable, Windows): live 5/5, selfreport 4/4,
+  pong 5/5, delegate 4/4, fallback 4/4, blocked 12/12, dev-load 11/11.
+- Real-plugin QA sweep (`/herdr-qa all` in a fresh pi running the local
+  extension): `FUNCTIONAL: pass`, `LIVE: pass`, `TOOLS: 43/43 pass`,
+  `VERDICT: PASS`.
+
 ## [0.3.0] - 2026-08-11
 
 ### Added

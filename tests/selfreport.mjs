@@ -1,18 +1,24 @@
-// Verify self-report: spawn a pi WITH pi-herdr loaded (via -e), send it a prompt,
-// and confirm herdr's agent_status transitions working -> idle RELIABLY (instead
-// of sticking on "working" after the turn finishes). Requires a running herdr.
+// Verify self-report: spawn a pi WITH pi-herdr loaded (via -e), send it a prompt
+// (pane-level), and confirm herdr's agent_status transitions working -> idle/done
+// RELIABLY (instead of sticking on "working" after the turn finishes).
+// Requires a running herdr. NOTE: this only holds for shell-typed launches
+// (`pane run`, like the extension's Windows path) — `agent start --kind`
+// launches lose the pane env and their self-report on herdr 0.8.2.
 //
 // Run: node tests/selfreport.mjs
 
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { piArgv } from "./_platform.mjs";
+import { tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
+import { spawnPiAgent, panePrompt, waitStatus } from "./_spawn.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
-const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT }))
-	.herdr;
+const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
+	parent: ROOT,
+});
 
 const statusOf = async (pane) => {
 	const r = await herdr(["agent", "get", pane], { timeoutMs: 8_000 });
@@ -20,22 +26,6 @@ const statusOf = async (pane) => {
 	const a = r.data?.agent ?? r.data;
 	return a?.agent_status ?? "?";
 };
-
-// Spawn a pi that loads this extension so it self-reports.
-const start = await herdr(
-	[
-		"agent",
-		"start",
-		"sr-probe",
-		"--no-focus",
-		"--",
-		...piArgv(["-e", join(ROOT, "src", "index.ts")]),
-	],
-	{ timeoutMs: 20_000 },
-);
-const pane = start.data?.agent?.pane_id;
-console.log("spawned pane:", pane, "ok:", start.ok);
-if (!pane) process.exit(1);
 
 let pass = 0,
 	fail = 0;
@@ -45,24 +35,29 @@ const check = (c, m) => {
 	console.log((c ? "  ✓ " : "  ✗ ") + m);
 };
 
+// Neutral cwd so the local package.json does not auto-load a second copy of
+// the extension alongside the explicit -e below.
+const CWD = mkdtempSync(join(tmpdir(), "pi-herdr-selfreport-"));
+
+// Spawn a pi that loads ONLY this local extension (-ne skips the user's global
+// extension set, which includes the npm-published pi-herdr — loading both
+// crashes pi on tool-name conflicts).
+const spawned = await spawnPiAgent("sr-probe", {
+	agentArgs: ["-ne", "-e", join(ROOT, "src", "index.ts")],
+	cwd: CWD,
+});
+const pane = spawned.paneId;
+console.log("spawned pane:", pane, spawned.error ? spawned.error.message : "");
+if (!pane) process.exit(1);
+
 try {
 	console.log("--- wait for boot (idle) ---");
-	let booted = false;
-	for (let i = 0; i < 60; i++) {
-		const s = await statusOf(pane);
-		if (s === "idle") {
-			booted = true;
-			break;
-		}
-		await new Promise((r) => setTimeout(r, 2_000));
-	}
-	check(booted, "reached idle after boot");
+	const boot = await waitStatus(pane, ["idle", "done"], 120_000);
+	check(!!boot, `reached idle/done after boot (got ${boot})`);
 
-	console.log("--- send prompt + enter ---");
-	await herdr(["agent", "send", pane, "Reply with exactly one word: pong"], {
-		timeoutMs: 15_000,
-	});
-	await herdr(["pane", "send-keys", pane, "Enter"], { timeoutMs: 15_000 });
+	console.log("--- send prompt pane-level (text + settled Enter) ---");
+	const sent = await panePrompt(pane, "Reply with exactly one word: pong");
+	check(sent.ok, "prompt submitted");
 
 	console.log("--- watch status through the turn (self-reported) ---");
 	let sawWorking = false;

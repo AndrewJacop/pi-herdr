@@ -19,6 +19,11 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync } from "node:fs";
 
+/** Fresh temp cwd PER MODE — a shared one leaks the previous grandchild's
+ * session context into the next run (observed as "User answered Blue"
+ * replaying mode 1's answer inside mode 2's pane). */
+const freshCwd = () => mkdtempSync(join(tmpdir(), "pi-herdr-blocked-"));
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
@@ -37,18 +42,20 @@ if (!delegate) {
 	process.exit(1);
 }
 
-// A neutral cwd so the project's package.json `pi.extensions` does NOT auto-load
-// a second copy of pi-herdr alongside the global install (tool-name collision).
-// The child loads the GLOBAL @andrewjacop/pi-herdr for self-report (unchanged);
-// the new delegate logic runs in THIS harness via the jiti import above.
-const CWD = mkdtempSync(join(tmpdir(), "pi-herdr-blocked-"));
+// A neutral cwd (per mode — see freshCwd) so the project's package.json
+// `pi.extensions` does NOT auto-load a second copy of pi-herdr alongside the
+// global install (tool-name collision). The child loads the GLOBAL
+// @andrewjacop/pi-herdr for self-report (unchanged); the new delegate logic
+// runs in THIS harness via the jiti import above.
+const CWD = freshCwd();
 
 const ASK_PROMPT = [
 	"You MUST call the ask_user tool right now to ask the user this question:",
 	"  'What is your favorite color?'",
-	"Pass allowFreeform: true and do NOT pass any options. Do not guess an answer.",
-	"Block until the user answers. After you receive the answer, reply with EXACTLY",
-	"this single line and nothing else:",
+	"Pass the options exactly and in this order: Red, Blue, Green — and",
+	"allowFreeform: true. Do not guess an answer. Block until the user answers.",
+	"After you receive the answer, reply with EXACTLY this single line and",
+	"nothing else:",
 	"  The color is <answer>",
 ].join("\n");
 
@@ -104,6 +111,23 @@ async function readPane(target, lines = 60) {
 	return d?.text ?? "";
 }
 
+/**
+ * Answer a blocked pane's ask-user OVERLAY by key navigation (validated
+ * empirically): focus starts on option 1 — bare Enter submits it; `Down` first
+ * selects option 2. Typed text does NOT reach the option list, so freeform
+ * injection is unusable without focusing the "Type something." row.
+ */
+async function answerOverlay(paneId, { down = 0 } = {}) {
+	for (let i = 0; i < down; i++) {
+		const d = await herdr(["pane", "send-keys", paneId, "down"], {
+			timeoutMs: 10_000,
+		});
+		if (!d.ok) return d;
+		await sleep(300);
+	}
+	return herdr(["pane", "send-keys", paneId, "Enter"], { timeoutMs: 10_000 });
+}
+
 async function closePane(target) {
 	await herdr(["pane", "close", target], { timeoutMs: 10_000 }).catch(() => {});
 }
@@ -152,11 +176,10 @@ async function testReturnMode() {
 	console.log("    grandchild status after return:", st);
 	check(st === "blocked", `return mode: grandchild is blocked (got "${st}")`);
 
-	// Relay: inject the answer, wait for idle, read the final line.
-	const inj = await herdr(["agent", "prompt", det.paneId, "Blue"], {
-		timeoutMs: 15_000,
-	});
-	check(inj.ok, "return mode: relay injected answer (Blue) via agent prompt");
+	// Relay: select option 2 (Blue) on the ask overlay, wait, read the final line.
+	// (`agent prompt` is broken on herdr 0.8.2 Windows — key-nav at pane level.)
+	const inj = await answerOverlay(det.paneId, { down: 1 });
+	check(inj.ok, "return mode: relay selected answer (Blue) via overlay keys");
 	const settled = await waitStatus(det.paneId, ["idle", "done"], 120_000);
 	check(
 		!!settled,
@@ -185,6 +208,7 @@ async function testReturnMode() {
 async function testWaitMode() {
 	console.log('\n=== MODE 2: onBlocked === "wait" (default) ===');
 	const name = `blocked-wait-${Date.now()}`;
+	const waitCwd = freshCwd();
 
 	// Concurrent injector: poll the named pane until it is BLOCKED, then answer.
 	// This is the "human answers in the spawned pane" stand-in.
@@ -193,11 +217,29 @@ async function testWaitMode() {
 			await sleep(1500);
 			const s = await getStatus(name);
 			if (s === "blocked") {
+				console.log(`    [injector] saw blocked at t=${(i + 1) * 1.5}s`);
 				await sleep(800); // let the ask overlay fully settle
-				const r = await herdr(["agent", "prompt", name, "Red"], {
-					timeoutMs: 15_000,
-				});
-				return r.ok ? "injected" : "inject-failed";
+				// pane commands take pane IDs, not agent names — resolve first.
+				const g = await herdr(["agent", "get", name], { timeoutMs: 10_000 });
+				const pid = g.ok ? (g.data?.agent ?? g.data)?.pane_id : null;
+				if (!pid) return "resolve-failed";
+				// bare Enter = option 1 = "Red" (validated overlay semantics)
+				const r = await answerOverlay(pid);
+				console.log(
+					`    [injector] answerOverlay(Enter->Red) -> ${r.ok ? "sent" : "FAILED: " + r.error?.message}`,
+				);
+				if (!r.ok) return "inject-failed";
+				await sleep(2500);
+				const after = await readPane(pid, 25);
+				console.log(
+					"    [injector] pane after inject (tail):\n" +
+						after
+							.split("\n")
+							.slice(-10)
+							.map((l) => "      " + l)
+							.join("\n"),
+				);
+				return "injected";
 			}
 		}
 		return "never-blocked";
@@ -208,7 +250,7 @@ async function testWaitMode() {
 		{
 			name,
 			agent: "pi",
-			cwd: CWD,
+			cwd: waitCwd,
 			onBlocked: "wait",
 			prompt: ASK_PROMPT,
 			timeoutMs: 300_000,

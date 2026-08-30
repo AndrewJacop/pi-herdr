@@ -23,6 +23,7 @@ export interface HerdrOpts {
 function mapCode(rawCode: string): HerdrErrorCode {
 	const c = rawCode.toLowerCase();
 	if (c === "agent_start_failed") return "AGENT_START_FAILED";
+	if (c === "agent_not_ready") return "AGENT_NOT_READY";
 	if (c.includes("not_found") || c === "no_such_agent" || c === "no_such_pane")
 		return "NOT_FOUND";
 	if (c.includes("gone")) return "PANE_GONE";
@@ -79,10 +80,7 @@ export function herdr<T = unknown>(
 				/* ignore */
 			}
 			finish(
-				err(
-					"TIMEOUT",
-					`herdr ${args.join(" ")} timed out after ${timeoutMs}ms`,
-				),
+				err("TIMEOUT", `herdr ${args.join(" ")} timed out after ${timeoutMs}ms`),
 			);
 		}, timeoutMs);
 
@@ -110,10 +108,7 @@ export function herdr<T = unknown>(
 			const code = (e as NodeJS.ErrnoException).code;
 			if (code === "ENOENT") {
 				finish(
-					err(
-						"HERDR_UNAVAILABLE",
-						"herdr binary not found on PATH (set HERDR_BIN)",
-					),
+					err("HERDR_UNAVAILABLE", "herdr binary not found on PATH (set HERDR_BIN)"),
 				);
 			} else {
 				finish(err("HERDR_UNAVAILABLE", `failed to run herdr: ${msg(e)}`));
@@ -143,8 +138,9 @@ export function herdr<T = unknown>(
 					finish({ ok: true, data: {} as T });
 					return;
 				}
-				// Allow raw text on success (e.g. `agent read --format text`).
 				if (opts.textOk && exitCode === 0 && out.trim()) {
+					// SAFETY: callers pass textOk only when T is string/unknown; the raw
+					// stdout text is exactly the payload they expect.
 					finish({ ok: true, data: out as unknown as T });
 					return;
 				}

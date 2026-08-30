@@ -61,6 +61,10 @@ Send a prompt to an agent pane; with `submit=true` (default) the text is also su
 **Wraps:** resolves `target` → pane id via `agent get <target>`, then version-branched.
 New (≥0.7.5): submit → `agent prompt <id> <text>`; text-only → `pane send-text <id> <text>`.
 Legacy (<0.7.5): `agent send <id> <text>`, plus `pane send-keys <id> Enter` when submitting.
+**herdr 0.8.2 fallback *(v0.4.0)*:** on Windows, herdr 0.8.2's readiness validation
+rejects interactive-ready panes (`agent_not_ready`), so `agent prompt` always fails —
+the tool transparently resubmits pane-level: `pane send-text` + 600 ms settle +
+`pane send-keys Enter` (the same bytes `agent prompt` would send).
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -81,6 +85,12 @@ herdr_send_prompt  target="helper"  text="run the test suite"  submit=true
 **Notes:** This only types/submits — it does **not** wait for the turn to finish. Follow
 with `herdr_wait_agent` + `herdr_read_agent`, or use `herdr_delegate` for the whole
 cycle in one call.
+
+**Multi-choice overlays *(v0.4.0, validated):*** pi's ask-user overlay is freeform *or*
+an option list — and **typed text never reaches an option list** (focus is the list):
+bare `Enter` submits option 1 (preselected), `down`×n then `Enter` selects option n+1.
+Use `herdr_send_prompt` for freeform answers; select options with `herdr_send_keys`
+(`["enter"]` / `["down","enter"]`).
 
 ---
 
@@ -108,7 +118,11 @@ herdr_read_agent  target="helper"  source="recent"  lines="80"
 ```
 
 **Notes:** Read is non-blocking and safe to call any time — including on timeout — to
-grab partial output.
+harvest partial output. **Alternate-screen limitation *(v0.4.0)*:** alternate-screen TUIs
+(pi, claude, …) do not put scrolled-off content into the host scrollback — if
+`truncated` is `true` and raising `lines` doesn't reveal more, ask the agent to write
+its full response as Markdown to a temp file and reply with only the path, then read
+the file directly.
 
 ---
 
@@ -141,7 +155,11 @@ herdr_wait_agent  target="helper"  status="idle"  timeoutMs="300000"
 **Notes:** Completion is read from herdr's state events, never inferred from the rendered
 spinner (tool-call output replaces it mid-work). The polling fallback makes this robust
 even when the event command is flaky (e.g. herdr 0.7.3's probe decode error). Waiting for
-`unknown` is rarely useful — it's the brief post-spawn state.
+`unknown` is rarely useful — it's the brief post-spawn state. **herdr 0.8.2 caveat
+*(v0.4.0)*:** on panes spawned via `agent start --kind`, self-reporting is broken and
+status stays `idle` through a working turn — `herdr_wait_agent(idle)` returns
+immediately. Use `herdr_delegate` (its degraded-mode driver handles this), or drive
+such panes with `herdr_send_prompt` + read polling.
 
 ---
 
@@ -302,7 +320,15 @@ to close it).
 Submit+wait is version-branched: new (≥0.7.5) uses one atomic
 `agent prompt <id> <text> --wait --timeout <ms>` (`agent_prompt_stalled` falls back to
 the wait/poll dance; the turn is re-sent up to 3× if it never starts); legacy uses the
-multi-step `send → wait working → wait idle` dance. Final read is `agent read <id> --source recent --lines 50 --format text`.
+multi-step `send → wait working → wait idle` dance. **herdr 0.8.2 fallback *(v0.4.0)*:**
+when `agent prompt` fails with `agent_not_ready` (Windows 0.8.2 readiness bug), the
+delegate submits pane-level (`send-text` + settled `Enter`) and drives the turn by
+**screen stability** — a working TUI repaints continuously (spinner, status line), so
+3 identical consecutive reads after a 10 s floor mean the turn settled — because
+lifecycle states are unreliable on those panes. The driver samples `agent get`
+throughout, so an ask-user episode that resolves mid-turn still surfaces
+`details.wasBlocked: true`.
+Final read is `agent read <id> --source recent --lines 50 --format text`.
 After the turn settles the live `agent_status` is re-checked, so an ask-user `blocked`
 state is never mistaken for a finished answer (see `onBlocked`).
 
@@ -338,8 +364,11 @@ output for inspection.
 **Blocked (ask-user) handling:** on herdr 0.7.5+, `agent prompt --wait` settles on
 `blocked` too (the spawned agent is waiting on `ask_user`) and returns ok — so a plain
 `done.ok` check can't tell "answered" from "waiting for a human". The delegate re-reads
-`agent get` after the turn settles and branches on `onBlocked` (above). With `"return"`,,
+`agent get` after the turn settles and branches on `onBlocked` (above). With `"return"`,
 the returned text is the agent's **question**, not an answer — the prompt guideline tells
-the orchestrator to relay it. Note: pi's ask-user overlay is freeform *or* multi-choice;
-`herdr_send_prompt` (text + Enter) covers freeform, and for multi-choice the orchestrator
-types the chosen option title.
+the orchestrator to relay it. **Overlay semantics *(v0.4.0, validated empirically):***
+pi's ask-user overlay is freeform *or* multi-choice, and **typed text never reaches an
+option list** — bare `Enter` selects option 1 (preselected), `down`×n then `Enter`
+selects option n+1; typed text only lands in a focused freeform row. So answer freeform
+overlays with `herdr_send_prompt` (text + Enter) and multi-choice overlays with
+`herdr_send_keys` (`["enter"]` / `["down","enter"]`).

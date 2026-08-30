@@ -1,21 +1,34 @@
-// Live end-to-end: reproduce the Appendix D ping -> pong flow through the real
-// herdr.ts helper against a live herdr server + a spawned `pi` agent (AC2).
-// Requires a running herdr session and a working model/API key for the spawned pi.
+// Live end-to-end: ping -> pong through the extension's real send path
+// (herdr_send_prompt tool, which carries the AGENT_NOT_READY pane-level
+// fallback) against a live herdr server + a spawned `pi` agent (AC2).
+// Requires a running herdr session and a working model/API key.
 //
 // Run: node tests/pong.mjs
 
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { piArgv } from "./_platform.mjs";
+import { tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
+import { spawnPiAgent, waitStatus } from "./_spawn.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
-const mod = await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT });
-const herdr = mod.herdr;
-const extractText = (
-	await jiti.import(join(ROOT, "src/env.ts"), { parent: ROOT })
-).extractText;
+const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
+	parent: ROOT,
+});
+const { extractText } = await jiti.import(join(ROOT, "src/env.ts"), {
+	parent: ROOT,
+});
+const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
+	parent: ROOT,
+});
+const tools = [];
+orch.registerOrchestration({
+	registerTool: (d) => tools.push(d),
+	on: () => {},
+});
+const sendTool = tools.find((t) => t.name === "herdr_send_prompt");
 
 let pass = 0,
 	fail = 0;
@@ -24,111 +37,66 @@ const check = (c, m) => {
 	fail += c ? 0 : 1;
 	console.log((c ? "  ✓ " : "  ✗ ") + m);
 };
-const rawText = (d) => {
-	const t = extractText(d);
-	return t.slice(-400);
-};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const PANE = {};
+// Neutral cwd so the project's package.json does not auto-load extensions.
+const CWD = mkdtempSync(join(tmpdir(), "pi-herdr-pong-"));
+const spawned = await spawnPiAgent("pi-pong", { cwd: CWD });
+const paneId = spawned.paneId ?? null;
 
 try {
-	console.log("[pong] 1. start pi agent (platform preset)");
-	const start = await herdr(
-		["agent", "start", "pi-pong", "--no-focus", "--", ...piArgv()],
-		{
-			timeoutMs: 20_000,
-		},
-	);
-	check(start.ok, `start ok (code=${start.error?.code})`);
-	PANE.id = start.data?.agent?.pane_id;
-	check(!!PANE.id, `pane: ${PANE.id}`);
-	if (!PANE.id) throw new Error("no pane");
+	check(!!paneId, `1. spawned pi agent (pane: ${paneId})`);
+	if (!paneId) throw new Error(spawned.error?.message ?? "spawn failed");
 
-	console.log(
-		"\n[pong] 2. wait for boot (idle), tolerating the 'unknown' window",
-	);
-	const boot = await herdr(
-		["wait", "agent-status", PANE.id, "--status", "idle", "--timeout", "60000"],
-		{
-			timeoutMs: 70_000,
-		},
-	);
-	check(boot.ok, `boot -> idle (code=${boot.error?.code})`);
+	// Wait for the pane to reach an interactive state. herdr 0.8.2 Windows
+	// panes settle at `idle` via screen detection; `done` is equally fine.
+	const boot = await waitStatus(paneId, ["idle", "done"], 60_000);
+	check(!!boot, `2. booted to idle/done (got ${boot})`);
+	await sleep(1_500); // brief settle so the TUI input is ready
 
-	console.log("\n[pong] 3. send prompt + Enter");
-	const send = await herdr(
-		["agent", "send", PANE.id, "Reply with exactly one word: pong"],
-		{
-			timeoutMs: 15_000,
-		},
+	console.log("\n[pong] 3. send via herdr_send_prompt (fallback path)");
+	const send = await sendTool.execute(
+		"t",
+		{ target: paneId, text: "Reply with exactly one word: pong" },
+		undefined,
 	);
-	check(send.ok, `send ok`);
-	const enter = await herdr(["pane", "send-keys", PANE.id, "Enter"], {
-		timeoutMs: 15_000,
-	});
-	check(enter.ok, `enter ok`);
+	check(send.isError !== true, `send ok (isError=${send.isError})`);
 
-	console.log("\n[pong] 4. trace the turn: working -> idle");
-	await herdr(
-		[
-			"wait",
-			"agent-status",
-			PANE.id,
-			"--status",
-			"working",
-			"--timeout",
-			"30000",
-		],
-		{
-			timeoutMs: 35_000,
-		},
-	);
-	const idle = await herdr(
-		[
-			"wait",
-			"agent-status",
-			PANE.id,
-			"--status",
-			"idle",
-			"--timeout",
-			"120000",
-		],
-		{
-			timeoutMs: 130_000,
-		},
-	);
-	check(idle.ok, `turn complete -> idle (code=${idle.error?.code})`);
-
-	console.log("\n[pong] 5. read response");
-	const read = await herdr(
-		[
-			"agent",
-			"read",
-			PANE.id,
-			"--source",
-			"recent",
-			"--lines",
-			"40",
-			"--format",
-			"text",
-		],
-		{ timeoutMs: 15_000, textOk: true },
-	);
-	check(read.ok, `read ok (code=${read.error?.code})`);
-	const text = rawText(read.data);
+	console.log("\n[pong] 4. poll read until the answer appears");
+	let text = "";
+	for (let i = 0; i < 60; i++) {
+		const r = await herdr(
+			[
+				"agent",
+				"read",
+				paneId,
+				"--source",
+				"recent",
+				"--lines",
+				"40",
+				"--format",
+				"text",
+			],
+			{ timeoutMs: 15_000, textOk: true },
+		);
+		text = r.ok ? String(extractText(r.data) ?? "") : text;
+		if (/pong/i.test(text)) break;
+		await sleep(2_000);
+	}
 	console.log("    --- tail of response ---");
 	console.log(
 		text
 			.split("\n")
+			.slice(-8)
 			.map((l) => "    " + l)
 			.join("\n"),
 	);
-	check(/pong/i.test(text), "response contains 'pong' (AC2)");
+	check(/pong/i.test(text), "5. response contains 'pong' (AC2)");
 } finally {
-	if (PANE.id) {
+	if (paneId) {
 		console.log("\n[pong] cleanup");
-		const c = await herdr(["pane", "close", PANE.id], { timeoutMs: 10_000 });
-		check(c.ok, `closed ${PANE.id}`);
+		const c = await herdr(["pane", "close", paneId], { timeoutMs: 10_000 });
+		check(c.ok, `closed ${paneId}`);
 	}
 }
 
