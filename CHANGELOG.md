@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Spawned panes landed in the herdr daemon's cwd, not the session's project.**
+  When `cwd` was omitted, `herdr_start_agent`/`herdr_delegate`,
+  `herdr_split_pane`, `herdr_create_tab`, and `herdr_create_workspace` let
+  herdr default the new pane to the daemon process's cwd — which for a
+  restored headless session is the user's home folder (e.g. an OPTOLINK
+  session restored after reboot spawned agents in `C:\Users\Andrew`). All
+  spawn surfaces now default `--cwd` to the pi process's own cwd, so panes
+  land in the session root unless explicitly told otherwise.
+
 ## [0.4.0] - 2026-08-27
 
 ### Added

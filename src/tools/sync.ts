@@ -126,17 +126,12 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, p, signal) {
 			const dir = p.direction ?? "right";
-			const args = [
-				"pane",
-				"split",
-				"--current",
-				"--direction",
-				dir,
-			];
+			const args = ["pane", "split", "--current", "--direction", dir];
+			// Same daemon-cwd trap as agent start: default to this process's cwd.
+			p.cwd ??= process.cwd();
 			if (p.cwd) args.push("--cwd", p.cwd);
 			if (p.env)
-				for (const [k, v] of Object.entries(p.env))
-					args.push("--env", `${k}=${v}`);
+				for (const [k, v] of Object.entries(p.env)) args.push("--env", `${k}=${v}`);
 			if (p.focus) args.push("--focus");
 			const r = await herdr<unknown>(args, { timeoutMs: 20_000, signal });
 			if (!r.ok) return fail(r);
@@ -232,9 +227,7 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 			);
 			if (!r.ok) return fail(r);
 			const text = extractText(r.data);
-			const truncated = Boolean(
-				(r.data as { truncated?: boolean })?.truncated,
-			);
+			const truncated = Boolean((r.data as { truncated?: boolean })?.truncated);
 			return okText(text || "(no output)", {
 				paneId: p.paneId,
 				text,
@@ -332,7 +325,8 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 			"⚠️ Destructive. Send logical key presses (e.g. 'ctrl+c', 'esc', 'Enter') to a pane. " +
 			"By default targets the raw pane surface (paneId); set agentScope to target an agent by name/label. " +
 			"Use herdr_run_command / herdr_send_prompt to type TEXT — this only sends key NAMES.",
-		promptSnippet: "Send logical key presses (ctrl+c/esc/Enter) to a pane (destructive)",
+		promptSnippet:
+			"Send logical key presses (ctrl+c/esc/Enter) to a pane (destructive)",
 		promptGuidelines: [
 			"Use herdr_send_keys to interrupt (ctrl+c) or dismiss (esc) a pane; it sends key NAMES only — use herdr_run_command for text.",
 		],
@@ -341,7 +335,8 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 				description: "Pane id (default) or, with agentScope, agent name/label.",
 			}),
 			keys: Type.Array(Type.String(), {
-				description: "Logical key names to send, e.g. ['ctrl+c'], ['esc'], ['Enter'].",
+				description:
+					"Logical key names to send, e.g. ['ctrl+c'], ['esc'], ['Enter'].",
 			}),
 			agentScope: Type.Optional(
 				Type.Boolean({
@@ -353,14 +348,9 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 		async execute(_id, p, signal) {
 			if (!p.keys?.length)
 				return fail(
-					err(
-						"VALIDATION_ERROR",
-						"'keys' must be a non-empty array of key names.",
-					),
+					err("VALIDATION_ERROR", "'keys' must be a non-empty array of key names."),
 				);
-			const scope = p.agentScope
-				? ["agent", "send-keys"]
-				: ["pane", "send-keys"];
+			const scope = p.agentScope ? ["agent", "send-keys"] : ["pane", "send-keys"];
 			const r = await herdr([...scope, p.target, ...p.keys], {
 				timeoutMs: 10_000,
 				signal,

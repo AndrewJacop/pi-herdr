@@ -315,6 +315,10 @@ async function waitForAgentDetected(
 async function startHerdrAgent(
 	input: StartInput,
 ): Promise<Result<{ agent: Record<string, unknown> }>> {
+	// Without --cwd, herdr spawns the pane in the DAEMON's cwd (home folder for a
+	// restored headless session), not the caller's project. Default to this pi
+	// process's cwd so spawned agents land in the session root.
+	input.cwd ??= process.cwd();
 	const version = await detectHerdrVersion();
 	return isNewAgentApi(version) ? startAgentNew(input) : startAgentLegacy(input);
 }

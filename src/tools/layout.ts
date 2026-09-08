@@ -48,7 +48,10 @@ function okText(text: string, details: unknown): ToolReturn {
 	return { content: [{ type: "text", text }], details };
 }
 
-function pickStr(o: Record<string, unknown>, ...keys: string[]): string | undefined {
+function pickStr(
+	o: Record<string, unknown>,
+	...keys: string[]
+): string | undefined {
 	for (const k of keys) {
 		const v = o[k];
 		if (typeof v === "string") return v;
@@ -56,7 +59,10 @@ function pickStr(o: Record<string, unknown>, ...keys: string[]): string | undefi
 	return undefined;
 }
 
-function pickNum(o: Record<string, unknown>, ...keys: string[]): number | undefined {
+function pickNum(
+	o: Record<string, unknown>,
+	...keys: string[]
+): number | undefined {
 	for (const k of keys) {
 		const v = o[k];
 		if (typeof v === "number") return v;
@@ -130,7 +136,8 @@ function extractId(
 		wrapperKey && o[wrapperKey] && typeof o[wrapperKey] === "object"
 			? (o[wrapperKey] as Record<string, unknown>)
 			: o;
-	for (const k of idKeys) if (typeof src[k] === "string") return src[k] as string;
+	for (const k of idKeys)
+		if (typeof src[k] === "string") return src[k] as string;
 	return undefined;
 }
 
@@ -149,7 +156,8 @@ function focusFlag(focus: boolean | undefined): string[] {
 /** Expand an env map into repeated `--env KEY=VALUE` args. */
 function envArgs(env?: Record<string, string>): string[] {
 	const out: string[] = [];
-	if (env) for (const [k, v] of Object.entries(env)) out.push("--env", `${k}=${v}`);
+	if (env)
+		for (const [k, v] of Object.entries(env)) out.push("--env", `${k}=${v}`);
 	return out;
 }
 
@@ -175,10 +183,9 @@ export function resizePaneArgs(opts: {
 }
 
 /** `pane zoom [--toggle|--on|--off] (--pane <id> | --current)` */
-export function zoomPaneArgs(opts: {
-	mode?: "toggle" | "on" | "off";
-	paneId?: string;
-} = {}): string[] {
+export function zoomPaneArgs(
+	opts: { mode?: "toggle" | "on" | "off"; paneId?: string } = {},
+): string[] {
 	const mode = opts.mode ?? "toggle";
 	const args = ["pane", "zoom"];
 	if (mode === "on") args.push("--on");
@@ -211,12 +218,14 @@ export function movePaneArgs(opts: {
 }
 
 /** `pane swap [--direction] (--pane <id> | --current) [--source-pane] [--target-pane]` */
-export function swapPanesArgs(opts: {
-	direction?: string;
-	paneId?: string;
-	sourcePane?: string;
-	targetPane?: string;
-} = {}): string[] {
+export function swapPanesArgs(
+	opts: {
+		direction?: string;
+		paneId?: string;
+		sourcePane?: string;
+		targetPane?: string;
+	} = {},
+): string[] {
 	const args = ["pane", "swap"];
 	if (opts.direction) args.push("--direction", opts.direction);
 	args.push(...targetArgs(opts.paneId));
@@ -292,12 +301,12 @@ export function registerLayout(pi: ExtensionAPI): void {
 			return okText(
 				panes.length
 					? `${panes.length} pane(s):\n` +
-						panes
-							.map(
-								(a) =>
-									`- ${a.paneId ?? "?"} [${a.agentStatus ?? "?"}] ${a.agent ?? "?"} ${a.focused ? "(focused) " : ""}${a.cwd ?? ""}`,
-							)
-							.join("\n")
+							panes
+								.map(
+									(a) =>
+										`- ${a.paneId ?? "?"} [${a.agentStatus ?? "?"}] ${a.agent ?? "?"} ${a.focused ? "(focused) " : ""}${a.cwd ?? ""}`,
+								)
+								.join("\n")
 					: "No panes.",
 				{ panes },
 			);
@@ -395,10 +404,10 @@ export function registerLayout(pi: ExtensionAPI): void {
 			),
 		}),
 		async execute(_id, p, signal) {
-			const r = await herdr(
-				zoomPaneArgs({ mode: p.mode, paneId: p.paneId }),
-				{ timeoutMs: 10_000, signal },
-			);
+			const r = await herdr(zoomPaneArgs({ mode: p.mode, paneId: p.paneId }), {
+				timeoutMs: 10_000,
+				signal,
+			});
 			if (!r.ok) return fail(r);
 			const mode = p.mode ?? "toggle";
 			return okText(
@@ -414,15 +423,14 @@ export function registerLayout(pi: ExtensionAPI): void {
 		label: "Move herdr pane",
 		description:
 			"Move a pane to another tab/workspace, or next to a target pane. Supports splitting direction and ratio at the destination, or opening a new tab/workspace.",
-		promptSnippet: "Move a pane to another tab/workspace or next to a target pane",
+		promptSnippet:
+			"Move a pane to another tab/workspace or next to a target pane",
 		promptGuidelines: [
 			"Use herdr_move_pane to relocate a pane (e.g. into a tab, next to a target pane, or a brand-new tab/workspace).",
 		],
 		parameters: Type.Object({
 			paneId: Type.String({ description: "Pane to move." }),
-			tabId: Type.Optional(
-				Type.String({ description: "Destination tab id." }),
-			),
+			tabId: Type.Optional(Type.String({ description: "Destination tab id." })),
 			split: Type.Optional(
 				StringEnum(["right", "down"] as const, {
 					description: "Split direction at the destination.",
@@ -550,12 +558,12 @@ export function registerLayout(pi: ExtensionAPI): void {
 			return okText(
 				tabs.length
 					? `${tabs.length} tab(s):\n` +
-						tabs
-							.map(
-								(t) =>
-									`- ${t.tabId ?? "?"} #${t.number ?? "?"} "${t.label ?? ""}" ${t.paneCount ?? 0} pane(s)${t.focused ? " (focused)" : ""}`,
-							)
-							.join("\n")
+							tabs
+								.map(
+									(t) =>
+										`- ${t.tabId ?? "?"} #${t.number ?? "?"} "${t.label ?? ""}" ${t.paneCount ?? 0} pane(s)${t.focused ? " (focused)" : ""}`,
+								)
+								.join("\n")
 					: "No tabs.",
 				{ tabs },
 			);
@@ -574,7 +582,9 @@ export function registerLayout(pi: ExtensionAPI): void {
 		],
 		parameters: Type.Object({
 			workspaceId: Type.Optional(
-				Type.String({ description: "Workspace to create the tab in (default: current)." }),
+				Type.String({
+					description: "Workspace to create the tab in (default: current).",
+				}),
 			),
 			cwd: Type.Optional(
 				Type.String({ description: "Working directory for the tab's shell." }),
@@ -586,14 +596,16 @@ export function registerLayout(pi: ExtensionAPI): void {
 				}),
 			),
 			focus: Type.Optional(
-				Type.Boolean({ description: "Focus the new tab (default herdr-determined)." }),
+				Type.Boolean({
+					description: "Focus the new tab (default herdr-determined).",
+				}),
 			),
 		}),
 		async execute(_id, p, signal) {
 			const r = await herdr<unknown>(
 				createTabArgs({
 					workspaceId: p.workspaceId,
-					cwd: p.cwd,
+					cwd: p.cwd ?? process.cwd(),
 					label: p.label,
 					env: p.env,
 					focus: p.focus,
@@ -642,9 +654,7 @@ export function registerLayout(pi: ExtensionAPI): void {
 		label: "Focus herdr tab",
 		description: "Focus a tab in the herdr UI.",
 		promptSnippet: "Focus a herdr tab",
-		promptGuidelines: [
-			"Use herdr_focus_tab to switch the focused tab by id.",
-		],
+		promptGuidelines: ["Use herdr_focus_tab to switch the focused tab by id."],
 		parameters: Type.Object({
 			tabId: Type.String({ description: "Tab id to focus." }),
 		}),
@@ -664,18 +674,14 @@ export function registerLayout(pi: ExtensionAPI): void {
 		label: "Rename herdr tab",
 		description: "Rename a tab.",
 		promptSnippet: "Rename a herdr tab",
-		promptGuidelines: [
-			"Use herdr_rename_tab to change a tab's label by id.",
-		],
+		promptGuidelines: ["Use herdr_rename_tab to change a tab's label by id."],
 		parameters: Type.Object({
 			tabId: Type.String({ description: "Tab id to rename." }),
 			label: Type.String({ description: "New tab label." }),
 		}),
 		async execute(_id, p, signal) {
 			if (!p.label?.length)
-				return fail(
-					err("VALIDATION_ERROR", "'label' must be a non-empty string."),
-				);
+				return fail(err("VALIDATION_ERROR", "'label' must be a non-empty string."));
 			const r = await herdr(["tab", "rename", p.tabId, p.label], {
 				timeoutMs: 10_000,
 				signal,
@@ -734,12 +740,12 @@ export function registerLayout(pi: ExtensionAPI): void {
 			return okText(
 				workspaces.length
 					? `${workspaces.length} workspace(s):\n` +
-						workspaces
-							.map(
-								(w) =>
-									`- ${w.workspaceId ?? "?"} #${w.number ?? "?"} "${w.label ?? ""}" ${w.tabCount ?? 0} tab(s)/${w.paneCount ?? 0} pane(s) active=${w.activeTabId ?? "?"}${w.focused ? " (focused)" : ""}`,
-							)
-							.join("\n")
+							workspaces
+								.map(
+									(w) =>
+										`- ${w.workspaceId ?? "?"} #${w.number ?? "?"} "${w.label ?? ""}" ${w.tabCount ?? 0} tab(s)/${w.paneCount ?? 0} pane(s) active=${w.activeTabId ?? "?"}${w.focused ? " (focused)" : ""}`,
+								)
+								.join("\n")
 					: "No workspaces.",
 				{ workspaces },
 			);
@@ -767,13 +773,15 @@ export function registerLayout(pi: ExtensionAPI): void {
 				}),
 			),
 			focus: Type.Optional(
-				Type.Boolean({ description: "Focus the new workspace (default herdr-determined)." }),
+				Type.Boolean({
+					description: "Focus the new workspace (default herdr-determined).",
+				}),
 			),
 		}),
 		async execute(_id, p, signal) {
 			const r = await herdr<unknown>(
 				createWorkspaceArgs({
-					cwd: p.cwd,
+					cwd: p.cwd ?? process.cwd(),
 					label: p.label,
 					env: p.env,
 					focus: p.focus,
@@ -781,10 +789,18 @@ export function registerLayout(pi: ExtensionAPI): void {
 				{ timeoutMs: 15_000, signal },
 			);
 			if (!r.ok) return fail(r);
-			const workspaceId = extractId(r.data, ["workspace_id", "workspaceId"], "workspace");
+			const workspaceId = extractId(
+				r.data,
+				["workspace_id", "workspaceId"],
+				"workspace",
+			);
 			if (!workspaceId)
 				return fail(
-					err("PANE_GONE", "herdr workspace create returned no workspace id", r.data),
+					err(
+						"PANE_GONE",
+						"herdr workspace create returned no workspace id",
+						r.data,
+					),
 				);
 			return okText(`Created workspace ${workspaceId}.`, { workspaceId });
 		},
@@ -856,9 +872,7 @@ export function registerLayout(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, p, signal) {
 			if (!p.label?.length)
-				return fail(
-					err("VALIDATION_ERROR", "'label' must be a non-empty string."),
-				);
+				return fail(err("VALIDATION_ERROR", "'label' must be a non-empty string."));
 			const r = await herdr(["workspace", "rename", p.workspaceId, p.label], {
 				timeoutMs: 10_000,
 				signal,
