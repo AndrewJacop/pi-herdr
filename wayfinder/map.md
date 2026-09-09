@@ -23,13 +23,13 @@ A fully-decided spec for **pi-herdr v0.5**, the agent-experience layer: `spawn_a
 
 ## Decisions so far
 
-<!-- one line per closed ticket — closed during charting: none -->
+- [Capability→flag matrix for agent CLIs](tickets/08-capability-matrix.md) — portable: model pin, system prompt, headless, cwd; portable-ish: tool allow/deny (codex config-only); kind-specific: skills (pi-only), extensions/MCP; never promise child worktree creation. Detail: [research/capability-matrix.md](research/capability-matrix.md)
+- [nicobailon pi-subagents prior art](tickets/09-nicobailon-prior-art.md) — its herdr integration is status-bridge + inspector panes via the herdr CLI (coexistable); it abandoned env-var child-config (07 must pin pi-intercom's live contract); borrow its notification-reliability patterns for 04; avoid its runner machinery — herdr panes replace it. Detail: [research/nicobailon-prior-art.md](research/nicobailon-prior-art.md)
 
 ## Not yet specified
 
 - Blocking ask/reply semantics — revisit after v0.5: grow native vs adopt pi-intercom (pi-only). Decide from real usage pain.
 - Widget activity lines for pi children via self-report v2 (child reports current tool to herdr).
-- Skills injection per kind — graduates from the capability-matrix research (ticket `08`).
 - Spawn-prompt etiquette for open addressing (how spawners pass names down) — sharpens with the messaging spec.
 - `@agent` mentions + FleetView — post-v0.5 revisit.
 
