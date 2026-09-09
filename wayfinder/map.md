@@ -23,6 +23,7 @@ A fully-decided spec for **pi-herdr v0.5**, the agent-experience layer: `spawn_a
 
 ## Decisions so far
 
+- [spawn_agent surface](tickets/01-spawn-agent-surface.md) — `type` xor `agent` (full field set, enforce-or-error per kind); `name` = pane handle w/ fallback chain; `kind`/`model` overridable (merge+validate); `isolated: true` boolean (herdr-side worktree); background default + `wait?: ms | true` (terminal = done or blocked); blocked = distinct terminal state w/ question, no auto-relay; no resume; depth via `PI_HERDR_SPAWN_DEPTH` env counter checked before side effects; no layout params.
 - [Capability→flag matrix for agent CLIs](tickets/08-capability-matrix.md) — portable: model pin, system prompt, headless, cwd; portable-ish: tool allow/deny (codex config-only); kind-specific: skills (pi-only), extensions/MCP; never promise child worktree creation. Detail: [research/capability-matrix.md](research/capability-matrix.md)
 - [nicobailon pi-subagents prior art](tickets/09-nicobailon-prior-art.md) — its herdr integration is status-bridge + inspector panes via the herdr CLI (coexistable); it abandoned env-var child-config (07 must pin pi-intercom's live contract); borrow its notification-reliability patterns for 04; avoid its runner machinery — herdr panes replace it. Detail: [research/nicobailon-prior-art.md](research/nicobailon-prior-art.md)
 
