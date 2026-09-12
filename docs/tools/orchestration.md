@@ -18,8 +18,10 @@ and state. Platform argv handling (Windows `cmd /c` wrapper) is automatic.
 **Wraps:** version-branched.
 New (≥0.7.5): `pane split --current --direction <right|down> [--cwd --env…] [--focus]`
 then `agent start <name> --kind <kind> --pane <id> [-- <agentArgs>]`. On Windows
-0.7.5-preview, the `agent start --kind` step is broken, so it launches the bare command
-via `pane run <id> <cmdline>`, polls `agent get` until detected, then `agent rename <id> <name>`.
+0.7.5–0.8.x the `agent start --kind` step is broken (and shim-launched agents were
+flakily detected), so it launches the bare command via `pane run <id> <cmdline>`,
+polls `agent get` until detected, then `agent rename <id> <name>`; on Windows ≥0.9.0
+(fixed) it uses `agent start --kind` like macOS/Linux.
 Legacy (<0.7.5): `agent start <name> [--cwd --split --tab --workspace --env…] [--focus|--no-focus] -- <preset-argv> <agentArgs>`.
 
 | Param | Type | Required | Notes |

@@ -77,3 +77,16 @@ export function isNewAgentApi(v: HerdrVersion | null): boolean {
 	if (!v) return false;
 	return v.major > 0 || v.minor > 7 || (v.minor === 7 && v.patch >= 5);
 }
+
+/**
+ * True when the detected herdr is at least MAJOR.MINOR (patch ignored — we only
+ * gate on feature-level releases like the 0.9.0 Windows `agent start --kind` fix).
+ */
+export function isAtLeast(
+	v: HerdrVersion | null,
+	major: number,
+	minor: number,
+): boolean {
+	if (!v) return false;
+	return v.major > major || (v.major === major && v.minor >= minor);
+}

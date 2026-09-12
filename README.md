@@ -80,14 +80,18 @@ server. If herdr is missing or not running, every tool returns a clean
 > binary is missing you get a warning toast with the install link; the detected
 > version shows in the footer, e.g. `herdr: 3 agents (1 working) (0.7.5)`.
 >
-> ⚠️ **Windows + herdr 0.7.5-preview.** herdr's `agent start --kind` is broken on
-> Windows: it launches the agent via PowerShell `Start-Process -FilePath <kind>`,
+> ⚠️ **Windows + herdr 0.7.5–0.8.x.** herdr's `agent start --kind` was broken on
+> Windows through 0.8.x: it launches the agent via PowerShell `Start-Process -FilePath <kind>`,
 > which can't run npm `.cmd` shims (`pi`, `claude`, …) — "%1 is not a valid Win32
-> application". On Windows, `pi-herdr` instead runs the **bare** agent command via
-> `pane run` (the pane's shell resolves the `.cmd` shim) and lets herdr
+> application" — and its process-tree detection of shim-launched agents was flaky
+> (panes intermittently dropped out of the agents sidebar while still running —
+> herdrdev/herdr #3032/#3205). Both are **fixed in herdr 0.9.0**: on Windows
+> ≥ 0.9.0, `pi-herdr` uses `agent start --kind` (named registration, lifecycle
+> self-report, `-- <agentArgs>` passthrough) exactly like macOS/Linux. On older
+> Windows herdr it keeps the workaround: run the **bare** agent command via
+> `pane run` (the pane's shell resolves the `.cmd` shim) and let herdr
 > **auto-detect** it; `agent prompt` / `get` / `read` / `rename` / `close` then
-> work normally. macOS/Linux keep the `agent start --kind` path. See
-> [Platform notes](#platform-notes).
+> work normally. See [Platform notes](#platform-notes).
 >
 > ⚠️ **herdr 0.8.2 (Windows).** herdr 0.8.2's agent-surface readiness validation
 > is broken for pi panes: `agent prompt` and `agent send-keys` fail with
@@ -258,7 +262,7 @@ accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
 | Field | Default | Notes |
 | --- | --- | --- |
 | `agent` | `"pi"` | Agent kind, passed as `agent start --kind` on 0.7.5. herdr 0.7.5 ships ~20 kinds (`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `maki`); an unknown kind returns a `VALIDATION_ERROR` listing the kinds your herdr supports (the list is fetched live and cached per session, with this hardcoded fallback offline). The old `custom`/`argv` launch surface is gone — use `agentArgs` to load a local extension instead. |
-| `agentArgs` | — | Extra flags appended to the agent CLI after launch, e.g. `["-ne","-e","./src/index.ts"]` to load a **local extension** instead of the installed copy (the dev / self-host loop). 0.7.5: after `--` in `agent start`; Windows pane-run: joined into the command line; legacy: extends the preset argv. *(v0.2.4)* |
+| `agentArgs` | — | Extra flags appended to the agent CLI after launch, e.g. `["-ne","-e","./src/index.ts"]` to load a **local extension** instead of the installed copy (the dev / self-host loop). 0.7.5+: after `--` in `agent start` (Windows too on ≥0.9.0); Windows pane-run (<0.9.0): joined into the command line; legacy: extends the preset argv. *(v0.2.4)* |
 | `cwd` | — | Working directory for the spawned agent. |
 | `name` | `agent-<timestamp>` | Unique pane name. |
 
@@ -324,11 +328,14 @@ launched as `cmd /c <cli>`; elsewhere as the bare command.
   a native executable spawned directly (no shell), so argv is passed literally.
   - On herdr **0.7.3** (legacy), agents launch via the `agent start … -- cmd /c <cmd>`
     form (the `cmd /c` wrapper is the launcher's job).
-  - On herdr **0.7.5-preview**, `agent start --kind` can't launch them (PowerShell
+  - On herdr **0.7.5–0.8.x**, `agent start --kind` can't launch them (PowerShell
     `Start-Process` rejects npm shims), so `pi-herdr` launches the **bare** command
     via `pane run <cmd>` (the pane's shell resolves the `.cmd` shim) and relies on
     herdr's auto-detection. The `cmd /c` wrapper is **not** used here — it nests a
     shell and breaks auto-detection.
+  - On herdr **≥ 0.9.0** (which fixed both the shim launch and the flaky
+    process-tree detection), Windows uses `agent start --kind <kind> --pane <id>`
+    with native `-- <agentArgs>` passthrough, same as macOS/Linux.
 - **macOS:** agents are spawned the same way (`shell:false`, literal argv). The only
   macOS gotcha is environmental: a herdr server started by `brew services` / launchd
   (or a GUI launch) inherits macOS's minimal PATH, so node-based agents like `pi`

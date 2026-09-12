@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-12
+
+### Changed
+
+- **Windows + herdr ≥0.9.0 now uses `agent start --kind`.** herdr 0.9.0 fixed the
+  Windows `agent start --kind` launch (PowerShell `Start-Process` couldn't launch
+  npm `.cmd` shims) and the flaky process-tree detection that made shim-launched
+  agents intermittently drop out of the agents sidebar while still running
+  (herdrdev/herdr #3032/#3205). On Windows with herdr ≥0.9.0, `herdr_start_agent`
+  and `herdr_delegate` now register the agent with `agent start <name> --kind
+  <kind> --pane <id> [-- <agentArgs>]` — proper named registration, lifecycle
+  self-report, and native `--plan`/`-e` argument passthrough — identical to the
+  macOS/Linux path. Windows herdr 0.7.5–0.8.x keeps the `pane run` + auto-detect
+  fallback, and non-Windows platforms are unchanged. Validated e2e on Windows
+  herdr 0.9.0: `--kind pi -- --plan` spawns named, stably-detected agents through
+  a full plan-mode lifecycle (`tests/win-start.mjs` 13/13, plus a live `pi -e`
+  self-host session spawning and driving a `--plan` agent).
+
 ### Fixed
 
 - **Spawned panes landed in the herdr daemon's cwd, not the session's project.**

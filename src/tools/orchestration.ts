@@ -8,7 +8,12 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { herdr } from "../herdr.js";
 import { getAgentKinds } from "../config.js";
 import { expandAgentSpec } from "../launcher.js";
-import { detectHerdrVersion, isNewAgentApi } from "../version.js";
+import {
+	detectHerdrVersion,
+	isAtLeast,
+	isNewAgentApi,
+	type HerdrVersion,
+} from "../version.js";
 import {
 	extractText,
 	normalizeAgent,
@@ -167,6 +172,7 @@ async function startAgentLegacy(
 /** New (>=0.7.5) launch: split a pane, then attach an agent to it by --kind. */
 async function startAgentNew(
 	input: StartInput,
+	version: HerdrVersion | null,
 ): Promise<Result<{ agent: Record<string, unknown> }>> {
 	// 0.7.5 `agent start` takes --kind, not a raw command. Validate the kind
 	// against the live `herdr agent` kind list (cached, hardcoded fallback) so an
@@ -198,14 +204,16 @@ async function startAgentNew(
 		return err("PANE_GONE", "herdr pane split returned no pane id", splitR.data);
 	}
 
-	// 2. attach the agent to the pane. herdr 0.7.5-preview's `agent start --kind`
-	//    is broken on Windows (Start-Process can't launch npm-shim agents — "%1
-	//    is not a valid Win32 application"), so on Windows launch the bare agent
-	//    command via `pane run` and let herdr auto-detect it (validated e2e). On
-	//    macOS/Linux `agent start --kind` works but fails fast with
-	//    `agent_pane_busy` while the freshly-split shell reaches its prompt, so
-	//    retry briefly.
-	if (process.platform === "win32") {
+	// 2. attach the agent to the pane. `agent start --kind` was broken on Windows
+	//    from 0.7.5 through 0.8.x (Start-Process couldn't launch npm-shim agents
+	//    like pi.cmd) and process-tree detection of shim-launched agents was flaky
+	//    (panes dropped out of the agents list while still running — herdrdev/herdr
+	//    #3032/#3205). Both fixed in 0.9.0; validated e2e on Windows 0.9.0 with
+	//    `--kind pi -- --plan`. Keep the pane-run auto-detect fallback only for
+	//    older Windows herdr. On macOS/Linux `agent start --kind` works but fails
+	//    fast with `agent_pane_busy` while the freshly-split shell reaches its
+	//    prompt, so retry briefly.
+	if (process.platform === "win32" && !isAtLeast(version, 0, 9)) {
 		return startAgentWindowsPaneRun(input, paneId);
 	}
 	const startArgs = [
@@ -245,19 +253,18 @@ async function startAgentNew(
 }
 
 /**
- * Windows launch fallback for herdr 0.7.5-preview, whose `agent start --kind` is
- * broken (Start-Process can't launch npm-shim agents like pi.cmd — "%1 is not a
- * valid Win32 application"). Launch the BARE agent command via `pane run` — the
- * pane's shell resolves the .cmd shim (PATHEXT) — wait for herdr to auto-detect
- * it, then name the pane.
+ * Windows fallback for herdr 0.7.5–0.8.x, whose `agent start --kind` is broken
+ * on Windows (Start-Process can't launch npm-shim agents like pi.cmd — "%1 is
+ * not a valid Win32 application") and whose process-tree detection of
+ * shim-launched agents is flaky. Launch the BARE agent command via `pane run` —
+ * the pane's shell resolves the .cmd shim (PATHEXT) — wait for herdr to
+ * auto-detect it, then name the pane.
  *
  * Use the bare command (e.g. "pi"), NOT the `cmd /c` wrapper: the wrapper nests
  * a shell and herdr's auto-detection then sees `cmd`, not the agent.
  *
- * ponytail: platform-gated. When herdr fixes Windows `agent start --kind`, revisit
- * to use it (gives proper --kind/session registration); until then pane-run is the
- * only working Windows launch, and all tools (prompt/get/read/rename/close) work
- * on the auto-detected pane.
+ * Superseded on herdr >= 0.9.0 (fixed `agent start --kind` + shim detection);
+ * kept only for older Windows herdr.
  */
 async function startAgentWindowsPaneRun(
 	input: StartInput,
@@ -320,7 +327,9 @@ async function startHerdrAgent(
 	// process's cwd so spawned agents land in the session root.
 	input.cwd ??= process.cwd();
 	const version = await detectHerdrVersion();
-	return isNewAgentApi(version) ? startAgentNew(input) : startAgentLegacy(input);
+	return isNewAgentApi(version)
+		? startAgentNew(input, version)
+		: startAgentLegacy(input);
 }
 
 /**
