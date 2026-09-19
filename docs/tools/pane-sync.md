@@ -5,17 +5,18 @@
 output, wait for a marker, send logical keys, and close it. Use case: `heroku logs
 --tail`, a test suite, a dev server — anything that is *not* an AI agent.
 
-> Count: **6 tools.** These commands are **0.7.5-only** — they don't exist on `<0.7.5`,
-> where herdr surfaces a server-side error. `herdr_send_keys` and `herdr_close_pane` are
+> Count: **6 tools.** These commands are current-surface herdr (≥ 0.9.0 is the
+> version floor; anything older refuses with `HERDR_TOO_OLD`). `herdr_send_keys` and `herdr_close_pane` are
 > the pane create/destroy primitives also reused by the layout tier. See [concepts](../concepts.md).
 
 ---
 
 ### `herdr_split_pane`
+
 Split the current herdr pane (raw terminal, no agent) and return the new pane id. Pair
 with `herdr_run_command` to run a shell command, build, or log stream in it.
 
-**Wraps:** 0.7.5-only. `pane split --current --direction <right|down> [--cwd --env…] [--focus]`.
+**Wraps:** `pane split --current --direction <right|down> [--cwd --env…] [--focus]`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -28,6 +29,7 @@ with `herdr_run_command` to run a shell command, build, or log stream in it.
 on error likely `PANE_GONE` (split returned no pane id) or `HERDR_UNAVAILABLE`.
 
 **Example**
+
 ```text
 herdr_split_pane  direction="down"  cwd="/repo"
 ```
@@ -38,10 +40,11 @@ instead, use `herdr_start_agent` (Tier 1).
 ---
 
 ### `herdr_run_command`
+
 Run a shell command (text + Enter) in a herdr pane — a raw process, not an agent. Use for
 logs, test suites, builds, one-off shell commands.
 
-**Wraps:** 0.7.5-only. `pane run <paneId> <command>` (the command is one argv element;
+**Wraps:** `pane run <paneId> <command>` (the command is one argv element;
 the pane's shell types the line + Enter).
 
 | Param | Type | Required | Notes |
@@ -53,21 +56,22 @@ the pane's shell types the line + Enter).
 error the mapped code.
 
 **Example**
+
 ```text
 herdr_run_command  paneId="w1:p4"  command="npm test"
 ```
 
 **Notes:** This types into the pane's existing shell. To run a long-lived stream
-(`heroku logs --tail`), follow with `herdr_wait_output` / `herdr_read_pane`. This is the
-same primitive the Windows launch path uses internally to start agents.
+(`heroku logs --tail`), follow with `herdr_wait_output` / `herdr_read_pane`.
 
 ---
 
 ### `herdr_read_pane`
+
 Read recent/visible terminal output from a herdr pane (raw terminal, not an agent).
 Returns the text and whether it was truncated.
 
-**Wraps:** 0.7.5-only. `pane read <paneId> --source <s> --lines <n> --format <f>` (raw text allowed).
+**Wraps:** `pane read <paneId> --source <s> --lines <n> --format <f>` (raw text allowed).
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -80,6 +84,7 @@ Returns the text and whether it was truncated.
 mapped code.
 
 **Example**
+
 ```text
 herdr_read_pane  paneId="w1:p4"  source="recent"  lines="120"
 ```
@@ -90,11 +95,12 @@ to block until a specific line appears.
 ---
 
 ### `herdr_wait_output`
+
 Block until a herdr pane emits output matching a literal substring (`--match`) or a regex
 (`--regex`). Searches existing output, then polls. Returns the matched line. Useful for
 waiting on a server "ready" marker.
 
-**Wraps:** 0.7.5-only. `pane wait-output <paneId> (--match <s> | --regex <r>) [--source <s>] [--lines <n>] --timeout <ms> [--raw]`.
+**Wraps:** `pane wait-output <paneId> (--match <s> | --regex <r>) [--source <s>] [--lines <n>] --timeout <ms> [--raw]`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -110,6 +116,7 @@ waiting on a server "ready" marker.
 on error likely `VALIDATION_ERROR` (neither/both of `match`/`regex`) or `TIMEOUT`.
 
 **Example**
+
 ```text
 herdr_wait_output  paneId="w1:p4"  match="ready in"  timeoutMs="60000"
 ```
@@ -121,10 +128,11 @@ indefinitely.
 ---
 
 ### `herdr_send_keys`  ·  [Tier 3]  ·  ⚠️ destructive
+
 ⚠️ Sends logical key presses (`ctrl+c` interrupts a process, `esc` dismisses, `Enter`).
 Send key **names** only — to type text use `herdr_run_command` (pane) or `herdr_send_prompt` (agent).
 
-**Wraps:** 0.7.5-only. `pane send-keys <target> <key> [<key>…]` (default), or
+**Wraps:** `pane send-keys <target> <key> [<key>…]` (default), or
 `agent send-keys <target> <key> [<key>…]` when `agentScope:true`.
 
 | Param | Type | Required | Notes |
@@ -137,6 +145,7 @@ Send key **names** only — to type text use `herdr_run_command` (pane) or `herd
 on error likely `VALIDATION_ERROR` (empty `keys`) or the mapped code.
 
 **Example**
+
 ```text
 herdr_send_keys  target="w1:p4"  keys=["ctrl+c"]
 herdr_send_keys  target="helper"  keys=["esc"]  agentScope=true
@@ -149,9 +158,10 @@ without killing it (contrast `herdr_stop_agent` / `herdr_close_pane`).
 ---
 
 ### `herdr_close_pane`  ·  [Tier 3]  ·  ⚠️ destructive
+
 ⚠️ Closes a herdr pane by id and **terminates whatever runs in it**.
 
-**Wraps:** 0.7.5-only. `pane close <paneId>`.
+**Wraps:** `pane close <paneId>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -160,6 +170,7 @@ without killing it (contrast `herdr_stop_agent` / `herdr_close_pane`).
 **Returns:** `okText("Closed pane <id>.", {paneId, closed:true})`; on error likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_close_pane  paneId="w1:p4"
 ```

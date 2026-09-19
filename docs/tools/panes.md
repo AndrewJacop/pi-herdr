@@ -3,7 +3,7 @@
 **Tier 2 — pane layout operations** (list/get/resize/zoom/move/swap). These target
 herdr's **pane surface** and operate on existing panes.
 
-> Count: **6 tools.** 0.7.5-only. Pane **create/destroy** (`herdr_split_pane`,
+> Count: **6 tools.** Pane **create/destroy** (`herdr_split_pane`,
 > `herdr_close_pane`) lives in [pane-sync](pane-sync.md) and is reused, not re-defined
 > here. Tabs are in [tabs](tabs.md); workspaces in [workspaces](workspaces.md). See
 > [concepts](../concepts.md).
@@ -11,10 +11,11 @@ herdr's **pane surface** and operate on existing panes.
 ---
 
 ### `herdr_list_panes`
+
 List panes (raw terminals and agent panes) in a workspace. Returns each pane's id, agent
 kind, status, cwd, and focus.
 
-**Wraps:** 0.7.5-only. `pane list [--workspace <id>]`.
+**Wraps:** `pane list [--workspace <id>]`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -24,6 +25,7 @@ kind, status, cwd, and focus.
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_list_panes  workspaceId="w1"
 ```
@@ -34,9 +36,10 @@ use `herdr_list_agents` (Tier 1).
 ---
 
 ### `herdr_get_pane`
+
 Show details of a single pane by id.
 
-**Wraps:** 0.7.5-only. `pane get <paneId>`.
+**Wraps:** `pane get <paneId>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -46,6 +49,7 @@ Show details of a single pane by id.
 on error likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_get_pane  paneId="w1:p3"
 ```
@@ -55,10 +59,11 @@ herdr_get_pane  paneId="w1:p3"
 ---
 
 ### `herdr_resize_pane`
+
 Resize a pane split by moving an edge in a direction. Targets the focused pane by
 default, or a specific `paneId`.
 
-**Wraps:** 0.7.5-only. `pane resize --direction <d> [--amount <f>] (--pane <id> | --current)`.
+**Wraps:** `pane resize --direction <d> [--amount <f>] (--pane <id> | --current)`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -70,6 +75,7 @@ default, or a specific `paneId`.
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_resize_pane  direction="down"  amount="0.3"  paneId="w1:p3"
 ```
@@ -80,10 +86,11 @@ bottom edge. Omitting `paneId` acts on the currently focused pane.
 ---
 
 ### `herdr_zoom_pane`
+
 Toggle, enable, or disable pane zoom (full-pane focus within a split). Targets the
 focused pane by default, or a specific `paneId`.
 
-**Wraps:** 0.7.5-only. `pane zoom (--toggle|--on|--off) (--pane <id> | --current)`.
+**Wraps:** `pane zoom (--toggle|--on|--off) (--pane <id> | --current)`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -94,6 +101,7 @@ focused pane by default, or a specific `paneId`.
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_zoom_pane  mode="on"  paneId="w1:p3"
 ```
@@ -103,11 +111,11 @@ herdr_zoom_pane  mode="on"  paneId="w1:p3"
 ---
 
 ### `herdr_move_pane`
+
 Move a pane to another tab/workspace, or next to a target pane. Supports splitting
 direction and ratio at the destination, or opening a new tab/workspace.
 
-**Wraps:** 0.7.5-only.
-`pane move <paneId> [--tab <id>] [--split <right|down>] [--target-pane <id>] [--ratio <f>] [--new-tab] [--workspace <id>] [--new-workspace]`.
+**Wraps:** `pane move <paneId> [--tab <id>] [--split <right|down>] [--target-pane <id>] [--ratio <f>] [--new-tab] [--workspace <id>] [--new-workspace]`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -123,6 +131,7 @@ direction and ratio at the destination, or opening a new tab/workspace.
 **Returns:** `okText("Moved pane <id>.", {paneId, …echoed opts})`; on error the mapped code.
 
 **Example**
+
 ```text
 herdr_move_pane  paneId="w1:p3"  targetPane="w2:p1"  split="down"  ratio="0.5"
 ```
@@ -134,10 +143,11 @@ The destination may be auto-created when `newTab`/`newWorkspace` is set.
 ---
 
 ### `herdr_swap_panes`
+
 Swap two panes: by neighbor direction, or explicit source/target pane ids. Defaults to
 the focused pane.
 
-**Wraps:** 0.7.5-only. `pane swap [--direction <d>] (--pane <id> | --current) [--source-pane <id>] [--target-pane <id>]`.
+**Wraps:** `pane swap [--direction <d>] (--pane <id> | --current) [--source-pane <id>] [--target-pane <id>]`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -150,6 +160,7 @@ the focused pane.
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_swap_panes  sourcePane="w1:p1"  targetPane="w1:p2"
 ```

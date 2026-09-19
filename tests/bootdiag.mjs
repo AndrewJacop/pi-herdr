@@ -67,10 +67,9 @@ console.log(extractText(vis.data).split("\n").slice(-12).join("\n"));
 
 if (booted) {
 	console.log("--- send + enter, then watch for working ---");
-	await herdr(["agent", "send", pane, "Reply with exactly one word: pong"], {
+	await herdr(["agent", "prompt", pane, "Reply with exactly one word: pong"], {
 		timeoutMs: 15_000,
 	});
-	await herdr(["pane", "send-keys", pane, "Enter"], { timeoutMs: 15_000 });
 	for (let i = 0; i < 20; i++) {
 		const s = await statusOf(pane);
 		console.log(`t=${((Date.now() - t0) / 1000).toFixed(0)}s status=${s}`);

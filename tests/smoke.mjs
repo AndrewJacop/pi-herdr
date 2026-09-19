@@ -1,5 +1,6 @@
 // Smoke test for pi-herdr (no live herdr server required).
-// Validates: extension load + tool registration (AC1), launcher argv (AC4),
+// Validates: extension load + tool registration (AC1), the version floor
+// (v0.6 issue 01: pure classification + the gate inside herdr()),
 // herdr() unavailable path (AC5), timeout (AC6), destructive labels (AC7),
 // and end-to-end envelope parse / error mapping / raw-text via a node.exe fake.
 //
@@ -186,23 +187,96 @@ for (const t of tools) {
 }
 
 // ---------------------------------------------------------------------------
-console.log("\n[2] Launcher preset -> argv (AC4)");
-const launcher = await jiti.import(join(ROOT, "src/launcher.ts"), {
+console.log("\n[2] Version floor: pure classification (v0.6 issue 01)");
+const versionMod = await jiti.import(join(ROOT, "src/version.ts"), {
 	parent: ROOT,
 });
-const isWin = process.platform === "win32";
-const piSpec = launcher.expandAgentSpec({ agent: "pi" });
-assert(piSpec.ok, "expandAgentSpec(pi) ok");
 assert(
-	eq(piSpec.data, isWin ? ["cmd", "/c", "pi"] : ["pi"]),
-	`pi argv correct for platform (got ${JSON.stringify(piSpec.data)}) (AC4)`,
+	eq(versionMod.parseVersion("herdr 0.9.0"), { major: 0, minor: 9, patch: 0 }),
+	"parseVersion('herdr 0.9.0') -> {0,9,0}",
 );
-const custom = launcher.expandAgentSpec({ argv: ["my", "agent"] });
-assert(eq(custom.data, ["my", "agent"]), "explicit argv overrides preset");
-const bad = launcher.expandAgentSpec({ agent: "nope" });
 assert(
-	!bad.ok && bad.error.code === "VALIDATION_ERROR",
-	"unknown preset -> VALIDATION_ERROR",
+	eq(versionMod.parseVersion("herdr 0.7.3-preview"), {
+		major: 0,
+		minor: 7,
+		patch: 3,
+	}),
+	"parseVersion tolerates pre-release suffix (0.7.3-preview)",
+);
+assert(
+	versionMod.parseVersion("garbage") === null,
+	"parseVersion -> null on garbage",
+);
+assert(versionMod.parseVersion("") === null, "parseVersion -> null on empty");
+assert(
+	eq(versionMod.MIN_HERDR_VERSION, { major: 0, minor: 9, patch: 0 }),
+	"MIN_HERDR_VERSION is 0.9.0",
+);
+// isAtLeast: the floor comparison (patch ignored).
+assert(
+	versionMod.isAtLeast({ major: 0, minor: 9, patch: 0 }, 0, 9) === true,
+	"0.9.0 -> at least 0.9",
+);
+assert(
+	versionMod.isAtLeast({ major: 0, minor: 9, patch: 5 }, 0, 9) === true,
+	"0.9.5 -> at least 0.9 (patch ignored)",
+);
+assert(
+	versionMod.isAtLeast({ major: 1, minor: 0, patch: 0 }, 0, 9) === true,
+	"1.0.0 -> at least 0.9",
+);
+assert(
+	versionMod.isAtLeast({ major: 0, minor: 8, patch: 9 }, 0, 9) === false,
+	"0.8.9 -> below 0.9",
+);
+assert(
+	versionMod.isAtLeast(null, 0, 9) === false,
+	"null version -> below (safe refusal)",
+);
+// floorError: at/above the floor -> null (run normally).
+assert(
+	versionMod.floorError({
+		state: "ok",
+		version: { major: 0, minor: 9, patch: 0 },
+	}) === null,
+	"floorError: 0.9.0 (at the floor) -> null",
+);
+assert(
+	versionMod.floorError({
+		state: "ok",
+		version: { major: 0, minor: 10, patch: 1 },
+	}) === null,
+	"floorError: 0.10.1 -> null",
+);
+// floorError: below the floor -> one HERDR_TOO_OLD naming version + pointer.
+for (const old of [
+	{ major: 0, minor: 7, patch: 3 },
+	{ major: 0, minor: 7, patch: 5 },
+	{ major: 0, minor: 8, patch: 9 },
+]) {
+	const e = versionMod.floorError({ state: "ok", version: old });
+	assert(
+		e !== null &&
+			e.error.code === "HERDR_TOO_OLD" &&
+			new RegExp(`${old.major}.${old.minor}.${old.patch}`).test(e.error.message) &&
+			/herdr\.dev/.test(e.error.message) &&
+			/>= 0\.9\.0/.test(e.error.message),
+		`floorError: ${versionMod.formatVersion(old)} -> HERDR_TOO_OLD naming version + upgrade pointer`,
+	);
+}
+// floorError: unverifiable -> refused (a hard floor doesn't guess).
+const unknownFloor = versionMod.floorError({ state: "unknown" });
+assert(
+	unknownFloor !== null &&
+		unknownFloor.error.code === "HERDR_TOO_OLD" &&
+		/could not be determined/.test(unknownFloor.error.message),
+	"floorError: unknown version -> HERDR_TOO_OLD (refuses rather than guess)",
+);
+// floorError: missing -> null — the binary won't spawn anyway, so the natural
+// HERDR_UNAVAILABLE stays the single clean error (not two stacked errors).
+assert(
+	versionMod.floorError({ state: "missing" }) === null,
+	"floorError: missing binary -> null (natural HERDR_UNAVAILABLE, one error)",
 );
 
 // ---------------------------------------------------------------------------
@@ -301,94 +375,88 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
-console.log("\n[7] Version detection + agent-start API boundary (issue #2)");
-const versionMod = await jiti.import(join(ROOT, "src/version.ts"), {
-	parent: ROOT,
-});
-assert(
-	eq(versionMod.parseVersion("herdr 0.7.5"), { major: 0, minor: 7, patch: 5 }),
-	"parseVersion('herdr 0.7.5') -> {0,7,5}",
+console.log(
+	"\n[7] Version probe + floor gate (e2e, node fake — v0.6 issue 01)",
 );
-assert(
-	eq(versionMod.parseVersion("herdr 0.7.3-preview"), {
-		major: 0,
-		minor: 7,
-		patch: 3,
-	}),
-	"parseVersion tolerates pre-release suffix (0.7.3-preview)",
-);
-assert(
-	versionMod.parseVersion("garbage") === null,
-	"parseVersion -> null on garbage",
-);
-assert(versionMod.parseVersion("") === null, "parseVersion -> null on empty");
-// Legacy API (<0.7.5): one `agent start` creates the pane.
-assert(
-	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 2 }) === false,
-	"0.7.2 -> legacy",
-);
-assert(
-	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 3 }) === false,
-	"0.7.3 -> legacy (Windows stable)",
-);
-assert(
-	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 4 }) === false,
-	"0.7.4 -> legacy",
-);
-// Redesigned API (>=0.7.5): needs pane split + --kind/--pane.
-assert(
-	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 5 }) === true,
-	"0.7.5 -> new API",
-);
-assert(
-	versionMod.isNewAgentApi({ major: 0, minor: 7, patch: 10 }) === true,
-	"0.7.10 -> new API",
-);
-assert(
-	versionMod.isNewAgentApi({ major: 0, minor: 8, patch: 0 }) === true,
-	"0.8.0 -> new API",
-);
-assert(
-	versionMod.isNewAgentApi({ major: 1, minor: 0, patch: 0 }) === true,
-	"1.0.0 -> new API",
-);
-assert(
-	versionMod.isNewAgentApi(null) === false,
-	"unknown version -> legacy (safe default)",
-);
-// e2e: detectHerdrVersion spawns `herdr --version` and parses it. Use node as a
-// fake herdr (its --version prints "vMAJOR.MINOR.PATCH" -> major >= 1 -> new API).
+// probe state machine: "ok" when herdr runs, "missing" when the binary is
+// absent. Use node as a fake herdr (its --version prints "vMAJOR.MINOR.PATCH").
 process.env.HERDR_BIN = NODE;
-const detected = await versionMod.detectHerdrVersion();
-assert(
-	detected &&
-		typeof detected.major === "number" &&
-		typeof detected.minor === "number" &&
-		typeof detected.patch === "number",
-	"detectHerdrVersion spawns + parses --version (e2e)",
-);
-assert(
-	versionMod.isNewAgentApi(detected) === true,
-	"detectHerdrVersion result classified (node fake -> new API)",
-);
-// probe state machine: "ok" when herdr runs, "missing" when the binary is absent.
-process.env.HERDR_BIN = NODE;
-const okProbe = await versionMod.refreshHerdrProbe();
+const okProbe = await herdrMod.refreshHerdrProbe();
 assert(
 	okProbe.state === "ok" && typeof okProbe.version?.major === "number",
-	"probe -> ok when herdr runs",
+	"probe -> ok when herdr runs (spawns + parses --version, e2e)",
 );
 assert(
 	typeof versionMod.formatVersion(okProbe.version) === "string",
 	"formatVersion returns a string",
 );
 process.env.HERDR_BIN = "Z:\\nonexistent\\herdr-binary.exe";
-const missingProbe = await versionMod.refreshHerdrProbe();
+const missingProbe = await herdrMod.refreshHerdrProbe();
 assert(
 	missingProbe.state === "missing",
 	"probe -> missing when herdr binary absent",
 );
-
+// The GATE: every herdr() call is refused below the floor — the call below
+// would "work" (node fake prints a valid envelope) but must not run at all.
+process.env.HERDR_BIN = NODE;
+herdrMod.setProbeForTests({
+	state: "ok",
+	version: { major: 0, minor: 8, patch: 2 },
+});
+const refused = await herdrMod.herdr(
+	["-e", 'console.log(JSON.stringify({result:{agents:[]},id:"x"}))'],
+	{ timeoutMs: 5_000 },
+);
+assert(
+	!refused.ok &&
+		refused.error.code === "HERDR_TOO_OLD" &&
+		/0\.8\.2 is too old/.test(refused.error.message) &&
+		/herdr\.dev/.test(refused.error.message),
+	"below floor -> HERDR_TOO_OLD naming the version + upgrade pointer",
+);
+const refusedList = await herdrMod.herdr(["agent", "list"], {
+	timeoutMs: 5_000,
+});
+assert(
+	refusedList.error.code === "HERDR_TOO_OLD",
+	"every call refused below the floor (no tool half-works)",
+);
+// Unverifiable version -> refused too (a hard floor does not guess).
+herdrMod.setProbeForTests({ state: "unknown" });
+const unknownRefused = await herdrMod.herdr(["agent", "list"], {
+	timeoutMs: 5_000,
+});
+assert(
+	unknownRefused.error.code === "HERDR_TOO_OLD" &&
+		/could not be determined/.test(unknownRefused.error.message),
+	"unparseable version -> HERDR_TOO_OLD",
+);
+// Missing binary -> NOT gated: the natural HERDR_UNAVAILABLE stays the error.
+herdrMod.setProbeForTests({ state: "missing" });
+process.env.HERDR_BIN = "Z:\\nonexistent\\herdr-binary.exe";
+const missingCall = await herdrMod.herdr(["agent", "list"], {
+	timeoutMs: 3_000,
+});
+assert(
+	!missingCall.ok && missingCall.error.code === "HERDR_UNAVAILABLE",
+	"missing binary -> HERDR_UNAVAILABLE (single clean error, no double-up)",
+);
+// At the floor -> the call proceeds through the single exec path.
+herdrMod.setProbeForTests({
+	state: "ok",
+	version: { major: 0, minor: 9, patch: 0 },
+});
+process.env.HERDR_BIN = NODE;
+const passThrough = await herdrMod.herdr(
+	["-e", 'console.log(JSON.stringify({result:{agents:[]},id:"x"}))'],
+	{ timeoutMs: 5_000 },
+);
+assert(
+	passThrough.ok && eq(passThrough.data, { agents: [] }),
+	"at floor (0.9.0) -> call proceeds through the single exec path",
+);
+// restore a cold probe cache for later sections
+herdrMod.setProbeForTests(null);
 // ---------------------------------------------------------------------------
 console.log("\n[8] agentArgs param exposed on start/delegate tools (v0.2.4)");
 const startTool = tools.find((t) => t.name === "herdr_start_agent");
@@ -406,7 +474,7 @@ assert(
 
 // ---------------------------------------------------------------------------
 console.log(
-	"\n[9] herdr_wait_agent argv branches on herdr version (T1: 'agent wait --until' on 0.7.5)",
+	"\n[9] herdr_wait_agent argv — 'agent wait --until' (the one wait path)",
 );
 const orchMod = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
 	parent: ROOT,
@@ -415,9 +483,8 @@ assert(
 	typeof orchMod.transitionWaitArgs === "function",
 	"transitionWaitArgs exported from orchestration",
 );
-// New API (>=0.7.5): one `agent wait` per call, `--until` is repeatable.
 assert(
-	eq(orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000, true), [
+	eq(orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000), [
 		"agent",
 		"wait",
 		"w1:p2",
@@ -426,10 +493,10 @@ assert(
 		"--timeout",
 		"60000",
 	]),
-	"new API single status -> 'agent wait --until' (was 'wait agent-status', removed on 0.7.5)",
+	"single status -> 'agent wait --until'",
 );
 assert(
-	eq(orchMod.transitionWaitArgs("w1:p2", ["idle", "done"], 90000, true), [
+	eq(orchMod.transitionWaitArgs("w1:p2", ["idle", "done"], 90000), [
 		"agent",
 		"wait",
 		"w1:p2",
@@ -440,10 +507,10 @@ assert(
 		"--timeout",
 		"90000",
 	]),
-	"new API multi-status -> one call with repeatable --until (idle+done raced together)",
+	"multi-status -> one call with repeatable --until (idle+done raced together)",
 );
 assert(
-	eq(orchMod.transitionWaitArgs("w1:p2", ["working"], 30000, true), [
+	eq(orchMod.transitionWaitArgs("w1:p2", ["working"], 30000), [
 		"agent",
 		"wait",
 		"w1:p2",
@@ -452,31 +519,16 @@ assert(
 		"--timeout",
 		"30000",
 	]),
-	"new API working/blocked/unknown -> 'agent wait --until' (the previously-broken branch)",
-);
-// Legacy (<0.7.5): keep `wait agent-status` unchanged.
-assert(
-	eq(orchMod.transitionWaitArgs("w1:p2", ["idle"], 60000, false), [
-		"wait",
-		"agent-status",
-		"w1:p2",
-		"--status",
-		"idle",
-		"--timeout",
-		"60000",
-	]),
-	"legacy keeps 'wait agent-status'",
+	"working/blocked/unknown -> the same 'agent wait --until' path (no version branch)",
 );
 
 // ---------------------------------------------------------------------------
-console.log(
-	"\n[10] herdr_delegate submit+wait argv on herdr 0.7.5 (T2: 'agent prompt --wait')",
-);
+console.log("\n[10] herdr_delegate submit+wait argv ('agent prompt --wait')");
 assert(
 	typeof orchMod.promptWaitArgs === "function",
 	"promptWaitArgs exported from orchestration",
 );
-// New API (>=0.7.5): atomic submit + settled wait in ONE call.
+// Atomic submit + settled wait in ONE call.
 assert(
 	eq(orchMod.promptWaitArgs("w1:p2", "ping", 30000), [
 		"agent",
@@ -487,7 +539,7 @@ assert(
 		"--timeout",
 		"30000",
 	]),
-	"new API -> one 'agent prompt <target> <text> --wait --timeout <ms>' (replaces send → wait dance)",
+	"one 'agent prompt <target> <text> --wait --timeout <ms>' call",
 );
 assert(
 	eq(orchMod.promptWaitArgs("w1:p2", "hello world", 120000), [

@@ -4,16 +4,17 @@
 the top level of herdr's **workspaces → tabs → panes** hierarchy; it can hold multiple
 tabs.
 
-> Count: **6 tools.** 0.7.5-only. Tabs are in [tabs](tabs.md); panes in [panes](panes.md)
+> Count: **6 tools.** Tabs are in [tabs](tabs.md); panes in [panes](panes.md)
 > (+ [pane-sync](pane-sync.md) for create/destroy). See [concepts](../concepts.md).
 
 ---
 
 ### `herdr_list_workspaces`
+
 List all workspaces. Returns each workspace's id, label, number, tab/pane counts, active
 tab, and focus.
 
-**Wraps:** 0.7.5-only. `workspace list`.
+**Wraps:** `workspace list`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -23,6 +24,7 @@ tab, and focus.
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_list_workspaces
 ```
@@ -33,10 +35,11 @@ and server version; this is the lightweight workspace-only list.
 ---
 
 ### `herdr_create_workspace`
+
 Create a new workspace (optionally with a cwd/label/env, focused or not). Returns the new
 workspace id.
 
-**Wraps:** 0.7.5-only. `workspace create [--cwd <dir>] [--label <s>] [--env KEY=VALUE…] [--focus|--no-focus]`.
+**Wraps:** `workspace create [--cwd <dir>] [--label <s>] [--env KEY=VALUE…] [--focus|--no-focus]`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -49,6 +52,7 @@ workspace id.
 (create returned no workspace id) or the mapped code.
 
 **Example**
+
 ```text
 herdr_create_workspace  label="review"  cwd="/repo"
 ```
@@ -59,9 +63,10 @@ starts with one tab/pane. For a parallel git checkout instead, use `herdr_worktr
 ---
 
 ### `herdr_get_workspace`
+
 Show details of a single workspace by id.
 
-**Wraps:** 0.7.5-only. `workspace get <workspaceId>`.
+**Wraps:** `workspace get <workspaceId>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -71,6 +76,7 @@ Show details of a single workspace by id.
 on error likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_get_workspace  workspaceId="w1"
 ```
@@ -80,9 +86,10 @@ herdr_get_workspace  workspaceId="w1"
 ---
 
 ### `herdr_focus_workspace`
+
 Focus a workspace in the herdr UI.
 
-**Wraps:** 0.7.5-only. `workspace focus <workspaceId>`.
+**Wraps:** `workspace focus <workspaceId>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -92,6 +99,7 @@ Focus a workspace in the herdr UI.
 likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_focus_workspace  workspaceId="w2"
 ```
@@ -101,9 +109,10 @@ herdr_focus_workspace  workspaceId="w2"
 ---
 
 ### `herdr_rename_workspace`
+
 Rename a workspace.
 
-**Wraps:** 0.7.5-only. `workspace rename <workspaceId> <label>`.
+**Wraps:** `workspace rename <workspaceId> <label>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -114,6 +123,7 @@ Rename a workspace.
 error likely `VALIDATION_ERROR` (empty `label`) or the mapped code.
 
 **Example**
+
 ```text
 herdr_rename_workspace  workspaceId="w1"  label="main"
 ```
@@ -124,9 +134,10 @@ herdr_rename_workspace  workspaceId="w1"  label="main"
 ---
 
 ### `herdr_close_workspace`  ·  [Tier 2]  ·  ⚠️ destructive
+
 ⚠️ Closes a workspace by id and **terminates every tab and pane in it**.
 
-**Wraps:** 0.7.5-only. `workspace close <workspaceId>`.
+**Wraps:** `workspace close <workspaceId>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -136,6 +147,7 @@ herdr_rename_workspace  workspaceId="w1"  label="main"
 likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_close_workspace  workspaceId="w3"
 ```

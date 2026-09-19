@@ -166,8 +166,7 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, p, signal) {
 			// `pane run <pane> <command>` takes the command as one argv element
-			// (validated e2e in startAgentWindowsPaneRun): the pane's shell types
-			// the line + Enter. Matches the existing launch path.
+			// (text + Enter): the pane's shell types the line and submits it.
 			const r = await herdr(["pane", "run", p.paneId, p.command], {
 				timeoutMs: 15_000,
 				signal,

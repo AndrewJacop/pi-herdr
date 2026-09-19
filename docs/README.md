@@ -17,7 +17,7 @@ user-facing reference for **all 43 tools** the extension registers.
 ```bash
 npm install -g @earendil-works/pi-coding-agent   # pi, the host agent
 # install + launch herdr from https://herdr.dev
-herdr --version      # e.g. herdr 0.7.5
+herdr --version      # e.g. herdr 0.9.0 — pi-herdr requires ≥ 0.9.0 (hard floor)
 herdr                # launch the workspace (starts its local JSON server)
 ```
 
@@ -85,9 +85,10 @@ Every tool that targets an existing pane accepts `target` as a **pane id**
 - **Uniform `Result<T>` envelope.** Every tool normalizes herdr output into
   `{ok:true,data}` or `{ok:false,error:{code,message,details?}}`, then maps it to a
   pi tool return. See [concepts › The `Result<T>` envelope](concepts.md#the-resultt-envelope).
-- **Version-branched for herdr 0.7.5.** `isNewAgentApi(v)` selects the redesigned
-  `agent start` / `agent prompt` / `agent wait` API on ≥0.7.5 vs the legacy
-  (<0.7.5) commands. See [concepts › Version detection & branching](concepts.md#version-detection--branching).
+- **Version floor: herdr ≥ 0.9.0 (hard).** One launch path on every OS
+  (`agent start --kind`); below the floor every call refuses with one clean
+  `HERDR_TOO_OLD`. See
+  [concepts › Version floor](concepts.md#version-floor-herdr--090).
 - **Pane surface vs agent surface.** herdr 0.7.5 splits raw-process panes from AI
   agent panes; each tool targets one. See [concepts › Pane surface vs agent surface](concepts.md#pane-surface-vs-agent-surface).
 - **Targeting.** Agents are targeted by **pane id** (`w1:p3`) or **name/label**
@@ -106,6 +107,7 @@ For testing and extending the extension, see [development.md](development.md).
 
 ## Status
 
-- Targets **herdr 0.7.5** (also supports legacy **0.7.3**).
+- Requires **herdr ≥ 0.9.0** (hard floor — one launch path on every OS; older
+  herdr refuses with `HERDR_TOO_OLD`).
 - Extension **v0.2.5** (package `@andrewjacop/pi-herdr`).
-- Offline smoke gate: **378 checks, all pass** (`npm test`; see [development.md](development.md)).
+- Offline smoke gate: **387 checks, all pass** (`npm test`; see [development.md](development.md)).

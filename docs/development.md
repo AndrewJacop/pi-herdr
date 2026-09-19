@@ -18,16 +18,17 @@ It covers:
 - **Extension load + tool registration** — all **43** tools register with the
   expected names, each has a `parameters` schema and an `execute()`, and the
   self-report hooks wire up when running inside herdr.
-- **Launcher argv** — preset → platform argv expansion (`pi` → `cmd /c pi` on
-  Windows, `pi` elsewhere), explicit-`argv` override, unknown-preset → `VALIDATION_ERROR`.
 - **`herdr()` envelope & error mapping** — success envelope → `result`; error
-  envelope → mapped code; **stderr** error envelope (0.7.5 emits errors on stderr);
-  `textOk` raw-text path; missing binary → `HERDR_UNAVAILABLE` (no throw/hang);
-  hanging process → `TIMEOUT` (fires promptly).
-- **Version detection** — `parseVersion`, `isNewAgentApi` boundary at 0.7.5,
-  probe `ok`/`missing` states, `detectHerdrVersion` e2e.
-- **Version-branched argv builders** — `transitionWaitArgs` (`agent wait --until`
-  vs `wait agent-status`), `promptWaitArgs` (`agent prompt --wait`), with multi-status
+  envelope → mapped code; **stderr** error envelope; `textOk` raw-text path;
+  missing binary → `HERDR_UNAVAILABLE` (no throw/hang); hanging process →
+  `TIMEOUT` (fires promptly).
+- **Version floor** — `parseVersion` / `isAtLeast` / `floorError`
+  classification (at/above → run, below → `HERDR_TOO_OLD` naming version +
+  upgrade pointer, unknown → refused, missing → natural `HERDR_UNAVAILABLE`),
+  probe `ok`/`missing` states e2e, and the gate inside `herdr()` itself
+  (below-floor calls never spawn; at-floor calls pass through).
+- **Argv builders** — `transitionWaitArgs` (`agent wait --until`),
+  `promptWaitArgs` (`agent prompt --wait`), with multi-status
   and stringified `--timeout`.
 - **Agent-kind validation** — `parseAgentKinds`, `AGENT_KINDS_FALLBACK`, per-session
   cache, and the pure `kindError` unknown-kind path; confirms `argv` is dropped and
@@ -91,10 +92,10 @@ The cross-cutting contract is spelled out in [`CONTRIBUTING.md`](../CONTRIBUTING
    `err()` for local validation). **All** herdr invocations go through the single
    spawn module `src/herdr.ts` — never shell out elsewhere. Treat herdr output as
    untrusted; parse the envelope, never pass raw stdout to the model.
-3. **Version-branch on 0.7.5** when the underlying `herdr` command changed (see
-   [concepts › version branching](concepts.md#version-detection--branching)); use the
-   pure argv-builder pattern so the branch is unit-testable offline. **Platform-gate**
-   when a command is broken on one OS (e.g. Windows `agent start --kind`).
+3. **No version branches, no platform gates** — the extension targets exactly
+   herdr ≥ 0.9.0 with one command surface (the floor gate in `src/herdr.ts`
+   enforces it); keep new argv shapes in pure builders so they're
+   unit-testable offline.
 4. **Mark ⚠️ destructive** in the `description` if it closes/terminates/kills/deletes,
    and give every blocking path a `timeoutMs` + `AbortSignal` (resolve `TIMEOUT`, not
    hang). Add a `promptSnippet` + `promptGuidelines` that name the tool.

@@ -10,8 +10,8 @@ import { registerWorktrees } from "./tools/worktrees.js";
 import { registerIntrospection } from "./tools/introspection.js";
 import { registerSelfReport } from "./selfreport.js";
 import { registerHerdrCommand } from "./menu.js";
-import { herdr } from "./herdr.js";
-import { formatVersion, probeHerdr, refreshHerdrProbe } from "./version.js";
+import { floorError, formatVersion, MIN_HERDR_VERSION } from "./version.js";
+import { herdr, probeHerdr, refreshHerdrProbe } from "./herdr.js";
 
 export default function (pi: ExtensionAPI): void {
 	// Push this pi's own state to herdr so agent_status is reliable for everyone
@@ -29,16 +29,24 @@ export default function (pi: ExtensionAPI): void {
 	registerHerdrCommand(pi);
 
 	// Re-probe herdr on a fresh run (startup) or after /reload so an
-	// install/upgrade is noticed immediately; toast when it's missing/unparseable.
+	// install/upgrade is noticed immediately. One clean error per problem:
+	// missing binary -> warning toast with the install link; below the 0.9.0
+	// floor (or unverifiable) -> error toast naming the upgrade pointer. Every
+	// herdr() call is gated on the same probe, so no tool half-works below the
+	// floor (see herdr.ts).
 	pi.on("session_start", (e, ctx) => {
 		if (e.reason !== "startup" && e.reason !== "reload") return;
 		refreshHerdrProbe().then((probe) => {
 			if (probe.state === "ok" || !ctx.hasUI) return;
-			const msg =
-				probe.state === "missing"
-					? "herdr not found on PATH — install it from https://herdr.dev (e.g. `brew install herdr`) to use the herdr tools."
-					: "herdr is installed but its version could not be determined; some herdr tools may not work correctly.";
-			ctx.ui.notify(msg, "warning");
+			if (probe.state === "missing") {
+				ctx.ui.notify(
+					"herdr not found on PATH — install it from https://herdr.dev (e.g. `brew install herdr`) to use the herdr tools.",
+					"warning",
+				);
+				return;
+			}
+			const floor = floorError(probe);
+			if (floor) ctx.ui.notify(floor.error.message, "error");
 		});
 	});
 
@@ -53,15 +61,30 @@ export default function (pi: ExtensionAPI): void {
 			probeHerdr(),
 		])
 			.then(([r, probe]) => {
+				// The probe verdict leads: below the floor the fleet call was
+				// refused (HERDR_TOO_OLD), so say that instead of "unavailable".
 				const vtag =
 					probe.state === "ok" ? ` (${formatVersion(probe.version)})` : "";
-				if (!r.ok) {
+				if (probe.state === "missing") {
+					setStatus("pi-herdr", "herdr: not installed — herdr.dev");
+					return;
+				}
+				if (probe.state === "unknown") {
 					setStatus(
 						"pi-herdr",
-						(probe.state === "missing"
-							? "herdr: not installed — herdr.dev"
-							: "herdr: unavailable") + vtag,
+						`herdr: version unknown — needs ≥ ${formatVersion(MIN_HERDR_VERSION)}`,
 					);
+					return;
+				}
+				if (probe.state === "ok" && floorError(probe)) {
+					setStatus(
+						"pi-herdr",
+						`herdr: too old (${formatVersion(probe.version)} < ${formatVersion(MIN_HERDR_VERSION)})`,
+					);
+					return;
+				}
+				if (!r.ok) {
+					setStatus("pi-herdr", `herdr: unavailable${vtag}`);
 					return;
 				}
 				const agents = r.data?.agents ?? [];

@@ -5,17 +5,18 @@ live fleet) and `session …` (herdr's *named persistent sessions*, distinct fro
 agent state). `session attach` is interactive (TUI) and is therefore **excluded** from
 the tool surface.
 
-> Count: **4 tools.** 0.7.5-only. `--json` is always emitted (where supported) so the
+> Count: **4 tools.** `--json` is always emitted (where supported) so the
 > envelope parser returns structured data. See [concepts](../concepts.md).
 
 ---
 
 ### `herdr_api_snapshot`
+
 Read the full live herdr session snapshot — every workspace, tab, pane, and agent with its
 state, plus focused ids and server version/protocol. The whole-fleet view for routing
 decisions.
 
-**Wraps:** 0.7.5-only. `api snapshot` (no flags — JSON is the only output form).
+**Wraps:** `api snapshot` (no flags — JSON is the only output form).
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -26,6 +27,7 @@ decisions.
 mapped code.
 
 **Example**
+
 ```text
 herdr_api_snapshot
 ```
@@ -38,10 +40,11 @@ one level.
 ---
 
 ### `herdr_session_list`
+
 List herdr named persistent sessions. Returns each session's name, running state, default
 flag, and socket path. (Distinct from per-pane agent state — use `herdr_list_agents` for that.)
 
-**Wraps:** 0.7.5-only. `session list --json`.
+**Wraps:** `session list --json`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -51,6 +54,7 @@ flag, and socket path. (Distinct from per-pane agent state — use `herdr_list_a
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_session_list
 ```
@@ -62,10 +66,11 @@ for agent states.
 ---
 
 ### `herdr_session_stop`  ·  [Tier 5]  ·  ⚠️ destructive
+
 ⚠️ Stops a running named herdr session — **terminates its server and every pane/tab in it**.
 Not the same as closing one pane; this ends the whole session.
 
-**Wraps:** 0.7.5-only. `session stop <name> --json`.
+**Wraps:** `session stop <name> --json`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -75,6 +80,7 @@ Not the same as closing one pane; this ends the whole session.
 `VALIDATION_ERROR` (empty `name`) or a herdr server error (e.g. session not running).
 
 **Example**
+
 ```text
 herdr_session_stop  name="throwaway"
 ```
@@ -86,10 +92,11 @@ exists on disk; remove it with `herdr_session_delete`. This is far more destruct
 ---
 
 ### `herdr_session_delete`  ·  [Tier 5]  ·  ⚠️ destructive
+
 ⚠️ Deletes a stopped herdr session and **removes its on-disk directory** (permanent). The
 session must be stopped first — use `herdr_session_stop`.
 
-**Wraps:** 0.7.5-only. `session delete <name> --json`.
+**Wraps:** `session delete <name> --json`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -99,6 +106,7 @@ session must be stopped first — use `herdr_session_stop`.
 `VALIDATION_ERROR` (empty `name`) or a herdr server error (e.g. session still running).
 
 **Example**
+
 ```text
 herdr_session_delete  name="throwaway"
 ```

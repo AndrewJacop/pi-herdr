@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: version floor — herdr ≥ 0.9.0, hard.** herdr below 0.9.0 now
+  refuses to run: init probes `herdr --version` once and surfaces exactly one
+  `HERDR_TOO_OLD` error naming the upgrade pointer (herdr.dev), in the same
+  style as `HERDR_UNAVAILABLE`; the gate lives inside `herdr()` itself, so no
+  tool can half-work below the floor and there are no degraded paths. An
+  unparseable version is refused too (a hard floor doesn't guess); a missing
+  binary keeps its single natural `HERDR_UNAVAILABLE`. Above the floor,
+  everything goes through exactly one launch path on every OS —
+  `agent start --kind <kind> --pane <id> [-- <agentArgs>]` — because 0.9.0 is
+  the release that fixed Windows `agent start --kind` (npm-shim launch + flaky
+  process-tree detection). The legacy forest dies with it: the 0.7.3 legacy
+  `agent start`/`agent send`/`wait agent-status` API branches, the Windows
+  0.7.5–0.8.x `pane run` + auto-detect spawn fallback (with its `agent rename`
+  naming step), and the 0.8.2 `agent_not_ready` workarounds (pane-level prompt
+  submission + screen-stability turn driving) are deleted. The `AGENT_NOT_READY`
+  error code is removed from the normalized code set (spawn prompt-submission
+  failures now surface as `AGENT_START_FAILED`). The version probe itself
+  stays for diagnostics: the detected version still shows in the footer
+  (`herdr: 3 agents (1 working) (0.9.0)`; below the floor it reads
+  `herdr: too old (0.8.2 < 0.9.0)`). Self-report is untouched — orthogonal
+  insurance against herdr's working→idle misses, not a version workaround.
+- **Removed: agent preset/launcher machinery.** `HERDR_PRESET_<NAME>` env
+  overrides, the Windows `cmd /c` preset wrappers, and `src/launcher.ts`
+  (`expandAgentSpec`) are gone — they existed to build raw argv for launch
+  paths that no longer exist. `agent start --kind` resolves the kind to its
+  CLI on herdr's side; `agentArgs` after `--` is the supported way to pass
+  native agent flags.
+
 ### Added
 
 - **`herdr_spawn_agent` — the v0.5 agent surface begins.** One call spawns a

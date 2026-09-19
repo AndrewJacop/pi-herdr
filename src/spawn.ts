@@ -484,7 +484,8 @@ export interface SpawnDeps {
 	kinds?: () => Promise<string[]>;
 	/** Live agents (fleet) — default: `herdr agent list`. */
 	list?: () => Promise<{ name?: string; paneId?: string }[]>;
-	/** Pane creation — default: startHerdrAgent (version-branched). */
+	/** Pane creation — default: startHerdrAgent (the single `agent start
+	 * --kind` launch path). */
 	start?: typeof startHerdrAgent;
 	/** Boot gate — default: waitForStatus(["idle"]) (event + poll). */
 	boot?: (
@@ -671,7 +672,7 @@ export async function startRecordNow(
 		// submission failed outright — surface it with the pane id so the
 		// caller can steer/close by handle
 		return spawnErr(
-			"AGENT_NOT_READY",
+			"AGENT_START_FAILED",
 			`prompt could not be submitted to pane ${record.paneId} (${record.name}); the pane exists — retry via the agent surface`,
 			{ paneId: record.paneId, name: record.name },
 		);

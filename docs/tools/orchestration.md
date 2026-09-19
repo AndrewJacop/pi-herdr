@@ -4,7 +4,7 @@
 (`agent …`). Eleven tools: the atomic spawn/drive/wait/harvest primitives plus the
 composite one-shot `herdr_delegate`.
 
-> Count: **11 tools.** Cross-cutting behavior (envelope, version branching, targeting,
+> Count: **11 tools.** Cross-cutting behavior (envelope, version floor, targeting,
 > ⚠️ markers) lives in [concepts](../concepts.md). Pane create/destroy is in
 > [pane-sync](pane-sync.md).
 
@@ -13,33 +13,29 @@ composite one-shot `herdr_delegate`.
 ### `herdr_start_agent`  ·  [Tier 1]
 
 Launch a new AI agent (`pi`/`claude`/`codex`/…) in a herdr pane and return its pane id
-and state. Platform argv handling (Windows `cmd /c` wrapper) is automatic.
+and state. One launch path on every OS.
 
-**Wraps:** version-branched.
-New (≥0.7.5): `pane split --current --direction <right|down> [--cwd --env…] [--focus]`
-then `agent start <name> --kind <kind> --pane <id> [-- <agentArgs>]`. On Windows
-0.7.5–0.8.x the `agent start --kind` step is broken (and shim-launched agents were
-flakily detected), so it launches the bare command via `pane run <id> <cmdline>`,
-polls `agent get` until detected, then `agent rename <id> <name>`; on Windows ≥0.9.0
-(fixed) it uses `agent start --kind` like macOS/Linux.
-Legacy (<0.7.5): `agent start <name> [--cwd --split --tab --workspace --env…] [--focus|--no-focus] -- <preset-argv> <agentArgs>`.
+**Wraps:** `pane split --current --direction <right|down> [--cwd --env…] [--focus]`
+then `agent start <name> --kind <kind> --pane <id> [-- <agentArgs>]`, retrying
+briefly while the freshly-split shell reaches its prompt (`agent_pane_busy`).
+herdr resolves the kind to its CLI itself — no platform argv handling on our side.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
 | `name` | string | no | Agent pane name (must be unique). Default `agent-<timestamp>`. Lowercase `[a-z0-9-_]`. |
-| `agent` | string | no | Agent kind (default `pi`). Live-validated against `herdr agent` kinds on 0.7.5; unknown → `VALIDATION_ERROR`. |
-| `agentArgs` | string[] | no | Extra flags appended to the agent CLI after launch, e.g. `["-ne","-e","./src/index.ts"]` to load a local extension. |
+| `agent` | string | no | Agent kind (default `pi`). Live-validated against `herdr agent` kinds; unknown → `VALIDATION_ERROR`. |
+| `agentArgs` | string[] | no | Extra flags appended to the agent CLI after launch (after `--` in `agent start`), e.g. `["-ne","-e","./src/index.ts"]` to load a local extension. |
 | `cwd` | string | no | Working directory for the agent process. |
 | `split` | enum `right` \| `down` | no | Split direction relative to the current pane. |
-| `tabId` | string | no | Target tab id, e.g. `w1:t1`. (Legacy only — ignored on the 0.7.5 path.) |
-| `workspaceId` | string | no | Target workspace id, e.g. `w1`. (Legacy only — ignored on the 0.7.5 path.) |
+| `tabId` | string | no | Ignored — `pane split` has no tab targeting; the pane lands in the current tab. |
+| `workspaceId` | string | no | Ignored — `pane split` has no workspace targeting; the pane lands in the current tab. |
 | `env` | record<string,string> | no | Extra env vars (`KEY=VALUE`) for the agent. |
 | `focus` | boolean | no | Focus the new pane (default false). |
 
 **Returns:** `okText("Started <kind> agent \"<name>\" in pane <id>.", {…normalizedAgent})`
 on success; on error likely `VALIDATION_ERROR` (unknown kind), `HERDR_UNAVAILABLE`,
-`PANE_GONE` (split returned no id), or `AGENT_START_FAILED` (Windows pane-run path:
-agent not detected within budget).
+`HERDR_TOO_OLD` (below the version floor), `PANE_GONE` (split returned no id), or
+the `agent start` error.
 
 **Example**
 
@@ -47,11 +43,9 @@ agent not detected within budget).
 herdr_start_agent  name="helper"  agent="claude"  cwd="/repo"  split="down"
 ```
 
-**Notes:** On the 0.7.5 path, `tabId`/`workspaceId` have no `pane split` equivalent,
-so the pane lands in the current tab regardless. `agentArgs` is the supported way to
-load a local extension — the removed `custom`/`argv` surface is gone. On macOS, if
-herdr runs under launchd's minimal PATH, inject `PATH` via `env` so node-based agents
-find `node`.
+**Notes:** `agentArgs` is the supported way to load a local extension — the removed
+`custom`/`argv` surface is gone. On macOS, if herdr runs under launchd's minimal
+PATH, inject `PATH` via `env` so node-based agents find `node`.
 
 ---
 
@@ -60,13 +54,8 @@ find `node`.
 Send a prompt to an agent pane; with `submit=true` (default) the text is also submitted
 (Enter). Use to drive an agent you started with `herdr_start_agent`.
 
-**Wraps:** resolves `target` → pane id via `agent get <target>`, then version-branched.
-New (≥0.7.5): submit → `agent prompt <id> <text>`; text-only → `pane send-text <id> <text>`.
-Legacy (<0.7.5): `agent send <id> <text>`, plus `pane send-keys <id> Enter` when submitting.
-**herdr 0.8.2 fallback *(v0.4.0)*:** on Windows, herdr 0.8.2's readiness validation
-rejects interactive-ready panes (`agent_not_ready`), so `agent prompt` always fails —
-the tool transparently resubmits pane-level: `pane send-text` + 600 ms settle +
-`pane send-keys Enter` (the same bytes `agent prompt` would send).
+**Wraps:** resolves `target` → pane id via `agent get <target>`, then:
+submit → `agent prompt <id> <text>`; text-only → `pane send-text <id> <text>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -133,11 +122,10 @@ the file directly.
 Block until an agent pane reaches a given status (`idle`/`working`/`blocked`/`done`).
 Tolerates the brief `unknown` window right after spawn. Returns `TIMEOUT` on expiry.
 
-**Wraps:** version-branched. `idle`/`done` race two transition waits plus a polling
+**Wraps:** `idle`/`done` race two transition waits plus a polling
 `agent get` fallback (self-report yields `done`, auto-detect yields `idle`).
-`working`/`blocked`/`unknown` use a single transition wait.
-New (≥0.7.5): `agent wait <target> --until <s> [--until <s>…] --timeout <ms>`.
-Legacy (<0.7.5): `wait agent-status <target> --status <s> --timeout <ms>`.
+`working`/`blocked`/`unknown` use a single transition wait:
+`agent wait <target> --until <s> [--until <s>…] --timeout <ms>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -156,12 +144,8 @@ herdr_wait_agent  target="helper"  status="idle"  timeoutMs="300000"
 
 **Notes:** Completion is read from herdr's state events, never inferred from the rendered
 spinner (tool-call output replaces it mid-work). The polling fallback makes this robust
-even when the event command is flaky (e.g. herdr 0.7.3's probe decode error). Waiting for
-`unknown` is rarely useful — it's the brief post-spawn state. **herdr 0.8.2 caveat
-*(v0.4.0)*:** on panes spawned via `agent start --kind`, self-reporting is broken and
-status stays `idle` through a working turn — `herdr_wait_agent(idle)` returns
-immediately. Use `herdr_delegate` (its degraded-mode driver handles this), or drive
-such panes with `herdr_send_prompt` + read polling.
+even when the event command never fires (e.g. a `done`/`idle` state herdr doesn't
+derive). Waiting for `unknown` is rarely useful — it's the brief post-spawn state.
 
 ---
 
@@ -319,17 +303,9 @@ all in one call. The default is to keep the pane alive for follow-ups (set `clos
 to close it).
 
 **Wraps:** composite — `herdr_start_agent` → boot-wait for `idle` → submit+wait → `agent read`.
-Submit+wait is version-branched: new (≥0.7.5) uses one atomic
-`agent prompt <id> <text> --wait --timeout <ms>` (`agent_prompt_stalled` falls back to
-the wait/poll dance; the turn is re-sent up to 3× if it never starts); legacy uses the
-multi-step `send → wait working → wait idle` dance. **herdr 0.8.2 fallback *(v0.4.0)*:**
-when `agent prompt` fails with `agent_not_ready` (Windows 0.8.2 readiness bug), the
-delegate submits pane-level (`send-text` + settled `Enter`) and drives the turn by
-**screen stability** — a working TUI repaints continuously (spinner, status line), so
-3 identical consecutive reads after a 10 s floor mean the turn settled — because
-lifecycle states are unreliable on those panes. The driver samples `agent get`
-throughout, so an ask-user episode that resolves mid-turn still surfaces
-`details.wasBlocked: true`.
+Submit+wait is one atomic `agent prompt <id> <text> --wait --timeout <ms>`
+(`agent_prompt_stalled` falls back to the wait/poll dance; the turn is re-sent up to
+3× if it never starts).
 Final read is `agent read <id> --source recent --lines 50 --format text`.
 After the turn settles the live `agent_status` is re-checked, so an ask-user `blocked`
 state is never mistaken for a finished answer (see `onBlocked`).
@@ -338,7 +314,7 @@ state is never mistaken for a finished answer (see `onBlocked`).
 |-------|------|----------|-------|
 | `prompt` | string | yes | Prompt to send to the spawned agent. |
 | `name` | string | no | Agent pane name (default `delegate-<timestamp>`). |
-| `agent` | string | no | Agent kind (default `pi`); live-validated on 0.7.5. |
+| `agent` | string | no | Agent kind (default `pi`); live-validated against the kinds list. |
 | `agentArgs` | string[] | no | Extra agent-CLI flags, e.g. to load a local extension. |
 | `cwd` | string | no | Working directory for the agent. |
 | `timeoutMs` | integer | no | Overall budget in ms (default 120000). |
@@ -363,7 +339,7 @@ to 90 s for `idle` because a spawned pi that inherits host extensions/skills can
 ~40–60 s in `unknown` first. If the turn times out, the pane is left alive with partial
 output for inspection.
 
-**Blocked (ask-user) handling:** on herdr 0.7.5+, `agent prompt --wait` settles on
+**Blocked (ask-user) handling:** `agent prompt --wait` settles on
 `blocked` too (the spawned agent is waiting on `ask_user`) and returns ok — so a plain
 `done.ok` check can't tell "answered" from "waiting for a human". The delegate re-reads
 `agent get` after the turn settles and branches on `onBlocked` (above). With `"return"`,

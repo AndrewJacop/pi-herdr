@@ -1,15 +1,15 @@
-// Cached herdr version probe + per-session refresh.
-// `agent start` was redesigned in 0.7.5 (needs --kind/--pane, no focus). Windows
-// STABLE ships 0.7.3 (legacy path); the Windows PREVIEW channel ships 0.7.5,
-// whose `agent start --kind` is broken on Windows (Start-Process emits an empty
-// -ArgumentList) — see startAgentNew for the actionable error. Callers branch on
-// the detected version.
+// The herdr version floor — pure classification, no I/O.
 //
-// The probe runs eagerly at session_start (see index.ts) so a missing herdr or
-// a version change is surfaced immediately (toast + footer) rather than only as
-// a tool error on the first agent-start.
+// pi-herdr requires herdr >= 0.9.0 (the release that fixed Windows
+// `agent start --kind`) and refuses to run tools against anything older:
+// one `HERDR_TOO_OLD` error naming the upgrade pointer, no degraded paths.
+// The probe that feeds this lives in herdr.ts (the exec choke point — the
+// floor gate sits inside herdr() itself so no tool can half-work); this
+// module holds the parse/compare/error logic so it stays offline-testable
+// with no herdr binary at all. The detected version also feeds the footer
+// readout (herdr ships fast; knowing the version stays cheap).
 
-import { herdr } from "./herdr.js";
+import type { Err } from "./env.js";
 
 export interface HerdrVersion {
 	major: number;
@@ -22,7 +22,11 @@ export type HerdrProbe =
 	| { state: "missing" } // binary not found / won't run
 	| { state: "unknown" }; // ran, but version string unparseable
 
-let cached: Promise<HerdrProbe> | null = null;
+/** The oldest herdr this extension talks to (hard floor). */
+export const MIN_HERDR_VERSION: HerdrVersion = { major: 0, minor: 9, patch: 0 };
+
+/** Where the upgrade pointer in every HERDR_TOO_OLD error leads. */
+export const HERDR_UPGRADE_POINTER = "https://herdr.dev";
 
 /** Parse the first `MAJOR.MINOR.PATCH` out of a `herdr --version` string. */
 export function parseVersion(s: string): HerdrVersion | null {
@@ -36,51 +40,8 @@ export function formatVersion(v: HerdrVersion): string {
 }
 
 /**
- * Probe `herdr --version` once and cache it. `--version` is client-local (never
- * touches the server), so this is cheap and safe even with no herdr server.
- */
-export function probeHerdr(): Promise<HerdrProbe> {
-	if (cached) return cached;
-	cached = (async () => {
-		const r = await herdr<string>(["--version"], {
-			textOk: true,
-			timeoutMs: 3_000,
-		});
-		if (!r.ok) return { state: "missing" }; // HERDR_UNAVAILABLE / spawn fail
-		const v = parseVersion(r.data);
-		return v ? { state: "ok", version: v } : { state: "unknown" };
-	})();
-	return cached;
-}
-
-/** Drop the cached probe and re-run it (use at session_start to catch updates). */
-export function refreshHerdrProbe(): Promise<HerdrProbe> {
-	cached = null;
-	return probeHerdr();
-}
-
-/**
- * Read the detected version (null if missing or unparseable). Triggers a probe
- * on first use if session_start hasn't already warmed the cache.
- */
-export async function detectHerdrVersion(): Promise<HerdrVersion | null> {
-	const p = await probeHerdr();
-	return p.state === "ok" ? p.version : null;
-}
-
-/**
- * True when herdr uses the redesigned `agent start` (>= 0.7.5).
- * Unknown version -> false (safe default: keeps the legacy <0.7.5 path, which is
- * the only known-good Windows path, rather than guessing the new API).
- */
-export function isNewAgentApi(v: HerdrVersion | null): boolean {
-	if (!v) return false;
-	return v.major > 0 || v.minor > 7 || (v.minor === 7 && v.patch >= 5);
-}
-
-/**
- * True when the detected herdr is at least MAJOR.MINOR (patch ignored — we only
- * gate on feature-level releases like the 0.9.0 Windows `agent start --kind` fix).
+ * True when `v` is at least MAJOR.MINOR (patch ignored — the floor gates on
+ * feature-level releases like the 0.9.0 Windows `agent start --kind` fix).
  */
 export function isAtLeast(
 	v: HerdrVersion | null,
@@ -89,4 +50,38 @@ export function isAtLeast(
 ): boolean {
 	if (!v) return false;
 	return v.major > major || (v.major === major && v.minor >= minor);
+}
+
+function tooOld(message: string, details?: unknown): Err {
+	return { ok: false, error: { code: "HERDR_TOO_OLD", message, details } };
+}
+
+/**
+ * The version-floor verdict for a probe result:
+ * - `ok` + at or above the floor → null (run normally);
+ * - `ok` + below the floor → `HERDR_TOO_OLD` naming the detected version and
+ *   the upgrade pointer;
+ * - `unknown` → `HERDR_TOO_OLD` (an unverifiable herdr can't prove it meets
+ *   the floor — a hard floor refuses rather than guess);
+ * - `missing` → null — the binary won't spawn anyway, so the natural
+ *   `HERDR_UNAVAILABLE` error stays the single failure (one clean error, not two).
+ */
+export function floorError(probe: HerdrProbe): Err | null {
+	if (probe.state === "missing") return null;
+	const need = `pi-herdr requires herdr >= ${formatVersion(MIN_HERDR_VERSION)} — upgrade from ${HERDR_UPGRADE_POINTER}, then restart pi (/reload).`;
+	if (probe.state === "unknown") {
+		return tooOld(
+			`herdr is installed but its version could not be determined, and ${need}`,
+			probe,
+		);
+	}
+	if (
+		!isAtLeast(probe.version, MIN_HERDR_VERSION.major, MIN_HERDR_VERSION.minor)
+	) {
+		return tooOld(
+			`herdr ${formatVersion(probe.version)} is too old: ${need}`,
+			probe,
+		);
+	}
+	return null;
 }

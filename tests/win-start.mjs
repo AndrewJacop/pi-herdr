@@ -1,6 +1,7 @@
-// Live Windows test: exercise the fixed `herdr_start_agent` launch path
-// (startAgentNew → startAgentWindowsPaneRun: pane split + pane run + auto-detect)
-// and every other orchestration tool against the pane it creates.
+// Live Windows test: exercise the single `herdr_start_agent` launch path
+// (pane split + `agent start --kind` — the only path since the v0.6 version
+// floor; the old Windows pane-run fallback is gone) and every other
+// orchestration tool against the pane it creates.
 //
 // Loads the REAL src via jiti (so it runs the edited code, no publish needed),
 // registers tools through a mock pi, and invokes each tool's execute().
@@ -48,9 +49,7 @@ const NAME = `win-start-${Date.now()}`;
 let paneId = null;
 
 try {
-	console.log(
-		"[win-start] 1. herdr_start_agent (the fixed Windows launch path)",
-	);
+	console.log("[win-start] 1. herdr_start_agent (the single launch path)");
 	const start = await tool("herdr_start_agent").execute(
 		"t",
 		{ name: NAME, agent: "pi", cwd: ROOT, split: "right" },
@@ -63,7 +62,10 @@ try {
 		start.content?.[0]?.text ?? "",
 	);
 	paneId = start.details?.paneId;
-	check(!start.isError, `start_agent succeeded (the pane-run fix works)`);
+	check(
+		!start.isError,
+		`start_agent succeeded (the single --kind path works on Windows)`,
+	);
 	check(!!paneId, `returned paneId (${paneId})`);
 	if (!paneId) throw new Error("no pane id");
 
@@ -152,9 +154,7 @@ try {
 		);
 		check(!stop.isError, `stop_agent ok (closed ${paneId})`);
 		// belt-and-suspenders: ensure the pane is really gone
-		await herdr(["pane", "close", paneId], { timeoutMs: 10_000 }).catch(
-			() => {},
-		);
+		await herdr(["pane", "close", paneId], { timeoutMs: 10_000 }).catch(() => {});
 	}
 }
 

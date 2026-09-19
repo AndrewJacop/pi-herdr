@@ -80,11 +80,10 @@ try {
 		`global pi-herdr loaded (footer shows herdr:)\n      footer: ${footer.replace(/\n/g, " | ").slice(-160)}`,
 	);
 
-	console.log("--- send prompt + enter ---");
-	await herdr(["agent", "send", pane, "Reply with exactly one word: pong"], {
+	console.log("--- send prompt ---");
+	await herdr(["agent", "prompt", pane, "Reply with exactly one word: pong"], {
 		timeoutMs: 15_000,
 	});
-	await herdr(["pane", "send-keys", pane, "Enter"], { timeoutMs: 15_000 });
 
 	// (b) self-report: working -> done, reliably (not stuck on working).
 	let sawWorking = false,

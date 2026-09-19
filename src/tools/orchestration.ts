@@ -7,13 +7,6 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { herdr } from "../herdr.js";
 import { getAgentKinds } from "../config.js";
-import { expandAgentSpec } from "../launcher.js";
-import {
-	detectHerdrVersion,
-	isAtLeast,
-	isNewAgentApi,
-	type HerdrVersion,
-} from "../version.js";
 import {
 	extractText,
 	normalizeAgent,
@@ -40,15 +33,15 @@ const agentFields = {
 		Type.String({
 			description:
 				"Agent kind to launch (default 'pi'), e.g. pi/claude/codex/gemini/cursor/omp/copilot. " +
-				"On herdr 0.7.5+ this is passed as `agent start --kind`; an unknown kind returns a " +
+				"Passed as `agent start --kind`; an unknown kind returns a " +
 				"VALIDATION_ERROR listing the kinds this herdr supports. To load a local extension " +
-				'pass agentArgs (e.g. ["-e","./src/index.ts"]) instead of the removed `custom`/`argv`.',
+				'pass agentArgs (e.g. ["-e","./src/index.ts"]) instead of a raw argv.',
 		}),
 	),
 	agentArgs: Type.Optional(
 		Type.Array(Type.String(), {
 			description:
-				'Extra flags appended to the agent CLI after launch, e.g. ["-ne","-e","./src/index.ts"] to load a local extension instead of the installed one. On 0.7.5 these follow `--` in `agent start`; on the Windows pane-run path they join the command line; on legacy they extend the preset argv.',
+				'Extra flags appended to the agent CLI after launch, e.g. ["-ne","-e","./src/index.ts"] to load a local extension instead of the installed one. These follow `--` in `agent start`.',
 		}),
 	),
 	cwd: Type.Optional(
@@ -74,23 +67,17 @@ function okText(text: string, details: unknown): ToolReturn {
 	return { content: [{ type: "text", text }], details };
 }
 
-// ---- agent start: version-branched ----------------------------------------
-// herdr redesigned `agent start` in 0.7.5. Windows STABLE ships 0.7.3 (legacy
-// path); the Windows PREVIEW channel ships 0.7.5, whose `agent start --kind` is
-// broken on Windows (Start-Process can't launch npm-shim agents like pi.cmd —
-// "%1 is not a valid Win32 application"; with no args it's an empty -ArgumentList).
-// We detect the version once and branch:
-//   - legacy (<0.7.5): `agent start <name> [--cwd --split --tab --workspace
-//     --env] [--focus|--no-focus] -- <argv>` — one call creates the pane.
-//   - new (>=0.7.5):  `pane split --current --direction ... [--cwd --env --focus]`
-//     then `agent start <name> --kind <kind> --pane <id>` — pane must exist.
-//     tab/workspace targeting has no 0.7.5 equivalent (pane split has none), so
-//     those are ignored on the new path and the pane lands in the current tab.
-//     On Windows the `agent start --kind` step fails (herdr 0.7.5-preview bug),
-//     so startAgentNew launches via `pane run` + herdr auto-detect instead.
+// ---- agent start: the single launch path ----------------------------------
+// herdr >= 0.9.0 `agent start <name> --kind <kind> --pane <id> [-- <agentArgs>]`:
+// split a pane from the current one, then attach the agent by kind — on every
+// OS (0.9.0 fixed the Windows shim launch + flaky process-tree detection;
+// validated e2e on Windows by tests/win-start.mjs). herdr resolves the kind
+// to its CLI itself, so there is no local argv/preset machinery. tab/workspace
+// targeting has no `agent start` equivalent (pane split has none), so those
+// inputs are ignored and the pane lands in the current tab.
 
 // Valid agent kinds live in src/config.ts (getAgentKinds: live `herdr agent`
-// list, cached per session, with AGENT_KINDS_FALLBACK for offline/old herdr).
+// list, cached per session, with AGENT_KINDS_FALLBACK for offline herdr).
 
 interface StartInput {
 	name: string;
@@ -142,46 +129,27 @@ function extractPaneId(d: unknown): string | undefined {
 	return undefined;
 }
 
-/** Legacy (<0.7.5) launch: one `agent start` that creates and configures the pane. */
-async function startAgentLegacy(
+/**
+ * The one launch path: validate the kind, split a pane from the current one,
+ * then attach the agent with `agent start --kind` (retrying briefly while the
+ * freshly-split shell reaches its prompt — `agent_pane_busy`).
+ */
+export async function startHerdrAgent(
 	input: StartInput,
 ): Promise<Result<{ agent: Record<string, unknown> }>> {
-	const spec = expandAgentSpec({ agent: input.agent });
-	if (!spec.ok) return spec;
-	const args = ["agent", "start", input.name];
-	if (input.cwd) args.push("--cwd", input.cwd);
-	if (input.split) args.push("--split", input.split);
-	if (input.tabId) args.push("--tab", input.tabId);
-	if (input.workspaceId) args.push("--workspace", input.workspaceId);
-	if (input.env)
-		for (const [k, v] of Object.entries(input.env))
-			args.push("--env", `${k}=${v}`);
-	args.push(input.focus ? "--focus" : "--no-focus"); // legacy `agent start -- <argv>`: preset argv, then any extra agent flags.
-	args.push("--", ...spec.data, ...(input.agentArgs ?? []));
-	const r = await herdr<{ agent?: Record<string, unknown> }>(args, {
-		timeoutMs: 20_000,
-		signal: input.signal,
-	});
-	if (!r.ok) return r;
-	return {
-		ok: true,
-		data: { agent: (r.data?.agent ?? r.data) as Record<string, unknown> },
-	};
-}
+	// Without --cwd, herdr spawns the pane in the DAEMON's cwd (home folder for a
+	// restored headless session), not the caller's project. Default to this pi
+	// process's cwd so spawned agents land in the session root.
+	input.cwd ??= process.cwd();
 
-/** New (>=0.7.5) launch: split a pane, then attach an agent to it by --kind. */
-async function startAgentNew(
-	input: StartInput,
-	version: HerdrVersion | null,
-): Promise<Result<{ agent: Record<string, unknown> }>> {
-	// 0.7.5 `agent start` takes --kind, not a raw command. Validate the kind
-	// against the live `herdr agent` kind list (cached, hardcoded fallback) so an
+	// `agent start` takes --kind, not a raw command. Validate the kind against
+	// the live `herdr agent` kind list (cached, hardcoded fallback) so an
 	// unknown kind fails fast with a clear error instead of a server-side 400.
 	const kind = (input.agent ?? "pi").toLowerCase();
 	const bad = kindError(kind, await getAgentKinds());
 	if (bad) return bad;
 
-	// 1. create the pane (0.7.5 `agent start` needs an existing pane at a shell prompt).
+	// 1. create the pane (`agent start` needs an existing pane at a shell prompt).
 	const splitArgs = [
 		"pane",
 		"split",
@@ -204,18 +172,9 @@ async function startAgentNew(
 		return err("PANE_GONE", "herdr pane split returned no pane id", splitR.data);
 	}
 
-	// 2. attach the agent to the pane. `agent start --kind` was broken on Windows
-	//    from 0.7.5 through 0.8.x (Start-Process couldn't launch npm-shim agents
-	//    like pi.cmd) and process-tree detection of shim-launched agents was flaky
-	//    (panes dropped out of the agents list while still running — herdrdev/herdr
-	//    #3032/#3205). Both fixed in 0.9.0; validated e2e on Windows 0.9.0 with
-	//    `--kind pi -- --plan`. Keep the pane-run auto-detect fallback only for
-	//    older Windows herdr. On macOS/Linux `agent start --kind` works but fails
+	// 2. attach the agent to the pane by kind. `agent start --kind` can fail
 	//    fast with `agent_pane_busy` while the freshly-split shell reaches its
 	//    prompt, so retry briefly.
-	if (process.platform === "win32" && !isAtLeast(version, 0, 9)) {
-		return startAgentWindowsPaneRun(input, paneId);
-	}
 	const startArgs = [
 		"agent",
 		"start",
@@ -225,7 +184,7 @@ async function startAgentNew(
 		"--pane",
 		paneId,
 	];
-	// 0.7.5 `agent start ... -- <agent-args>`: pass native agent flags (e.g. pi's
+	// `agent start ... -- <agent-args>`: pass native agent flags (e.g. pi's
 	// `-e ./src/index.ts`) so a spawned agent can load a local extension.
 	if (input.agentArgs?.length) startArgs.push("--", ...input.agentArgs);
 	const deadline = Date.now() + 6_000;
@@ -253,160 +212,26 @@ async function startAgentNew(
 }
 
 /**
- * Windows fallback for herdr 0.7.5–0.8.x, whose `agent start --kind` is broken
- * on Windows (Start-Process can't launch npm-shim agents like pi.cmd — "%1 is
- * not a valid Win32 application") and whose process-tree detection of
- * shim-launched agents is flaky. Launch the BARE agent command via `pane run` —
- * the pane's shell resolves the .cmd shim (PATHEXT) — wait for herdr to
- * auto-detect it, then name the pane.
- *
- * Use the bare command (e.g. "pi"), NOT the `cmd /c` wrapper: the wrapper nests
- * a shell and herdr's auto-detection then sees `cmd`, not the agent.
- *
- * Superseded on herdr >= 0.9.0 (fixed `agent start --kind` + shim detection);
- * kept only for older Windows herdr.
- */
-async function startAgentWindowsPaneRun(
-	input: StartInput,
-	paneId: string,
-): Promise<Result<{ agent: Record<string, unknown> }>> {
-	const spec = expandAgentSpec({ agent: input.agent });
-	if (!spec.ok) return spec;
-	const bareCmd = spec.data[spec.data.length - 1];
-	// `pane run <pane> <command>` takes one command string (text + Enter); join
-	// the bare agent command with any extra flags into a single command line.
-	const cmdLine = input.agentArgs?.length
-		? [bareCmd, ...input.agentArgs].join(" ")
-		: bareCmd;
-	const runR = await herdr(["pane", "run", paneId, cmdLine], {
-		timeoutMs: 15_000,
-		signal: input.signal,
-	});
-	if (!runR.ok) return runR;
-	// Wait for herdr to detect the agent (agent get stops returning agent_not_found).
-	const detected = await waitForAgentDetected(paneId, 20_000, input.signal);
-	if (!detected.ok) return detected;
-	// Name the pane (best-effort; `agent start` would have taken <name>).
-	await herdr(["agent", "rename", paneId, input.name], {
-		timeoutMs: 10_000,
-		signal: input.signal,
-	});
-	return {
-		ok: true,
-		data: { agent: { pane_id: paneId } },
-	};
-}
-
-/** Poll `agent get` until herdr tracks the pane as an agent (or budget expires). */
-async function waitForAgentDetected(
-	paneId: string,
-	budgetMs: number,
-	signal?: AbortSignal,
-): Promise<Result<true>> {
-	const deadline = Date.now() + budgetMs;
-	while (Date.now() < deadline) {
-		const r = await herdr(["agent", "get", paneId], {
-			timeoutMs: 8_000,
-			signal,
-		});
-		if (r.ok) return { ok: true, data: true };
-		await sleep(500);
-	}
-	return err(
-		"AGENT_START_FAILED",
-		`agent in pane ${paneId} was not detected by herdr within ${budgetMs}ms`,
-	);
-}
-
-/** Detect herdr version once and dispatch to the matching launch path. */
-export async function startHerdrAgent(
-	input: StartInput,
-): Promise<Result<{ agent: Record<string, unknown> }>> {
-	// Without --cwd, herdr spawns the pane in the DAEMON's cwd (home folder for a
-	// restored headless session), not the caller's project. Default to this pi
-	// process's cwd so spawned agents land in the session root.
-	input.cwd ??= process.cwd();
-	const version = await detectHerdrVersion();
-	return isNewAgentApi(version)
-		? startAgentNew(input, version)
-		: startAgentLegacy(input);
-}
-
-/**
- * Type (and optionally submit) a prompt into an agent pane. herdr 0.7.5 replaced
- * `agent send` with `agent prompt` (type + submit in one call) and pane-level
- * `send-text` (type only); legacy keeps `agent send` + `pane send-keys Enter`.
+ * Type (and optionally submit) a prompt into an agent pane: `agent prompt`
+ * (type + submit in one call), or pane-level `send-text` (type only).
  */
 async function sendAgentPrompt(
 	paneId: string,
 	text: string,
 	opts: { submit?: boolean; signal?: AbortSignal } = {},
 ): Promise<Result<true>> {
-	const submit = opts.submit !== false;
-	const version = await detectHerdrVersion();
-	if (isNewAgentApi(version)) {
-		if (!submit) {
-			const r = await herdr(["pane", "send-text", paneId, text], {
-				timeoutMs: 15_000,
-				signal: opts.signal,
-			});
-			return r.ok ? { ok: true, data: true } : r;
-		}
-		const r = await herdr(["agent", "prompt", paneId, text], {
+	if (opts.submit === false) {
+		const r = await herdr(["pane", "send-text", paneId, text], {
 			timeoutMs: 15_000,
 			signal: opts.signal,
 		});
-		if (r.ok) return { ok: true, data: true };
-		// herdr 0.8.2 (Windows + pi): `agent prompt` rejects an interactive-ready
-		// pane with `agent_not_ready`. Submit pane-level instead — same bytes, no
-		// agent-surface validation.
-		if (r.error.code === "AGENT_NOT_READY") {
-			return paneLevelSubmit(paneId, text, opts);
-		}
-		return r;
+		return r.ok ? { ok: true, data: true } : r;
 	}
-	const sendR = await herdr(["agent", "send", paneId, text], {
+	const r = await herdr(["agent", "prompt", paneId, text], {
 		timeoutMs: 15_000,
 		signal: opts.signal,
 	});
-	if (!sendR.ok) return sendR;
-	if (submit) {
-		const enterR = await herdr(["pane", "send-keys", paneId, "Enter"], {
-			timeoutMs: 15_000,
-			signal: opts.signal,
-		});
-		if (!enterR.ok) return enterR;
-	}
-	return { ok: true, data: true };
-}
-
-/**
- * Pane-level prompt submission for panes the agent surface refuses to prompt
- * (`AGENT_NOT_READY` — herdr 0.8.2 Windows/pi rejects `agent prompt` /
- * `agent send-keys` on interactive-ready panes). `pane send-text` + settled
- * Enter needs no agent validation and delivers the same bytes `agent prompt`
- * would (herdr's own text-then-Enter semantics, one layer down). The settle
- * delay is load-bearing: Enter racing the paste loses the turn (herdr #1878).
- */
-async function paneLevelSubmit(
-	paneId: string,
-	text: string,
-	opts: { signal?: AbortSignal } = {},
-): Promise<Result<true>> {
-	const tx = await herdr(["pane", "send-text", paneId, text], {
-		timeoutMs: 15_000,
-		signal: opts.signal,
-	});
-	if (!tx.ok) return tx;
-	await sleep(600);
-	if (opts.signal?.aborted) {
-		return err("TIMEOUT", `prompt to pane ${paneId} aborted`);
-	}
-	const enter = await herdr(["pane", "send-keys", paneId, "Enter"], {
-		timeoutMs: 15_000,
-		signal: opts.signal,
-	});
-	return enter.ok ? { ok: true, data: true } : enter;
+	return r.ok ? { ok: true, data: true } : r;
 }
 
 /** Resolve a flexible target (name/label/paneId) to a concrete pane id. */
@@ -455,53 +280,32 @@ const sleep = (ms: number): Promise<void> =>
  * reads whatever partial output exists.
  */
 /**
- * Build a one-shot status-transition wait argv, version-branched.
- *
- * - new (>=0.7.5): `agent wait <target> --until <s> [--until <s>...] --timeout <ms>`.
- *   `--until` is repeatable, so a single call can race several states (e.g.
- *   idle+done) at once. The legacy `wait agent-status` group was removed in 0.7.5,
- *   so without this branch every wait for `working`/`blocked`/`unknown` failed
- *   outright on the new API (only `idle`/`done` survived via the poll fallback).
- * - legacy (<0.7.5): `wait agent-status <target> --status <s> --timeout <ms>`.
- *   One status per call — callers fan out one invocation per state.
+ * Build a one-shot status-transition wait argv:
+ * `agent wait <target> --until <s> [--until <s>...] --timeout <ms>`.
+ * `--until` is repeatable, so a single call can race several states (e.g.
+ * idle+done) at once.
  */
 export function transitionWaitArgs(
 	target: string,
 	statuses: string[],
 	timeoutMs: number,
-	newApi: boolean,
 ): string[] {
-	if (newApi) {
-		const args = ["agent", "wait", target];
-		for (const s of statuses) args.push("--until", s);
-		args.push("--timeout", String(timeoutMs));
-		return args;
-	}
-	return [
-		"wait",
-		"agent-status",
-		target,
-		"--status",
-		statuses[0],
-		"--timeout",
-		String(timeoutMs),
-	];
+	const args = ["agent", "wait", target];
+	for (const s of statuses) args.push("--until", s);
+	args.push("--timeout", String(timeoutMs));
+	return args;
 }
 
 /**
  * Wait for `paneId` to reach one of `statuses`.
  *
- * Prefers herdr's event-based status wait (prompt, no polling), but races it
- * against a polling fallback (`agent get`) because the event command is
- * unreliable on some herdr builds (e.g. 0.7.3 returns `failed to decode pane
- * get error` on its probe step). The event promise resolves ONLY on success —
- * on error it stays pending so the poll decides. Whichever path sees a target
- * status first wins; the other is cancelled. The poll is what makes completion
- * detection robust instead of depending on a flaky event command.
- *
- * Version branch: herdr 0.7.5 replaced `wait agent-status` with
- * `agent wait --until` (repeatable), so on the new API one call races every
- * requested state; legacy fans out one `wait agent-status` per state.
+ * Prefers herdr's event-based status wait (prompt, no polling) — `agent wait`
+ * with every requested state via the repeatable `--until` — but races it
+ * against a polling fallback (`agent get`) because the event command can
+ * miss a transition herdr never rendered (e.g. a `done`/`idle` state herdr
+ * no longer derives for a pane without self-report). The event promise
+ * resolves ONLY on success — on error it stays pending so the poll decides.
+ * Whichever path sees a target status first wins; the other is cancelled.
  */
 export async function waitForStatus(
 	paneId: string,
@@ -511,7 +315,6 @@ export async function waitForStatus(
 ): Promise<Result<true>> {
 	const budget = Math.max(1_000, deadline - Date.now());
 	const want = new Set(statuses);
-	const newApi = isNewAgentApi(await detectHerdrVersion());
 	const ctrl = new AbortController();
 	const onParentAbort = () => ctrl.abort();
 	if (signal) {
@@ -521,21 +324,17 @@ export async function waitForStatus(
 		signal.addEventListener("abort", onParentAbort, { once: true });
 	}
 	type Resolved = { via: "event" | "poll"; r: Result<true> };
-	// Event path: resolves only on a successful transition (errors swallowed so
-	// the polling fallback gets to run). New API: one `agent wait` with every
-	// state via repeatable `--until`; legacy: one `wait agent-status` per state.
+	// Event path: one `agent wait` racing every requested state via repeatable
+	// `--until` (errors swallowed so the polling fallback gets to run).
 	const events = new Promise<Resolved>((resolve) => {
-		const groups: string[][] = newApi ? [statuses] : statuses.map((s) => [s]);
-		for (const group of groups) {
-			herdr(transitionWaitArgs(paneId, group, budget, newApi), {
-				timeoutMs: budget + 5_000,
-				signal: ctrl.signal,
-			}).then((r) => {
-				if (r.ok) resolve({ via: "event", r: { ok: true, data: true } });
-			});
-		}
+		herdr(transitionWaitArgs(paneId, statuses, budget), {
+			timeoutMs: budget + 5_000,
+			signal: ctrl.signal,
+		}).then((r) => {
+			if (r.ok) resolve({ via: "event", r: { ok: true, data: true } });
+		});
 	});
-	// Polling fallback: `agent get` is reliable when `wait agent-status` misbehaves.
+	// Polling fallback: `agent get` catches a settled state the event wait missed.
 	const poll: Promise<Resolved> = (async () => {
 		while (Date.now() < deadline) {
 			if (ctrl.signal.aborted) {
@@ -640,7 +439,7 @@ async function waitForBlockedResolved(
 /**
  * Drive a spawned agent through one turn.
  *
- * Phase 1 (start): `wait agent-status working` — herdr's idle->working
+ * Phase 1 (start): `agent wait --until working` — herdr's idle->working
  * transition is reliable (both auto-detect and self-report).
  *
  * Phase 2 (finish): race `idle`/`done` (see raceIdleDone). Completion relies on
@@ -671,78 +470,9 @@ async function driveOneTurn(
 	return raceIdleDone(paneId, opts.deadline, signal);
 }
 
-/** Stability polls / minimum elapsed before a degraded-mode turn reads as done. */
-const READ_STABLE_POLLS = 3;
-const READ_STABLE_FLOOR_MS = 10_000;
-
 /**
- * Degraded-mode turn driver for panes where herdr's lifecycle tracking is
- * unusable (0.8.2 Windows/pi `agent_not_ready` panes report `idle` through an
- * entire working turn, so `agent wait` returns instantly). Completion = screen
- * stability: a working pi TUI repaints continuously (spinner, status line,
- * token counts), so STABLE_POLLS consecutive identical reads after the floor
- * mean the turn settled. ponytail: heuristic — swap back to `agent wait`
- * once herdr's process tracking is fixed upstream.
- */
-async function driveOneTurnReadStable(
-	paneId: string,
-	opts: {
-		deadline: number;
-		signal?: AbortSignal;
-		/** Set `sawBlocked = true` if the pane ever reports `blocked` — a short
-		 * ask-user episode can resolve before the caller samples status. */
-		observed?: { sawBlocked?: boolean };
-	},
-): Promise<Result<true>> {
-	const t0 = Date.now();
-	let last: string | null = null;
-	let stable = 0;
-	while (Date.now() < opts.deadline) {
-		const r = await herdr<unknown>(
-			[
-				"agent",
-				"read",
-				paneId,
-				"--source",
-				"recent-unwrapped",
-				"--lines",
-				"80",
-				"--format",
-				"text",
-			],
-			{ textOk: true, timeoutMs: 15_000, signal: opts.signal },
-		);
-		const txt = r.ok
-			? String(extractText(r.data) ?? "")
-			: `__read_err_${r.error?.code}`;
-		if (txt === last) stable++;
-		else {
-			stable = 0;
-			last = txt;
-		}
-		if (opts.observed && !opts.observed.sawBlocked) {
-			const s = await getAgentStatus(paneId, opts.signal);
-			if (s.ok && s.data === "blocked") opts.observed.sawBlocked = true;
-		}
-		if (stable >= READ_STABLE_POLLS && Date.now() - t0 >= READ_STABLE_FLOOR_MS) {
-			return { ok: true, data: true };
-		}
-		await sleep(2_000);
-	}
-	return err(
-		"TIMEOUT",
-		`turn in pane ${paneId} did not settle (screen still changing) before deadline`,
-	);
-}
-
-/**
- * Build the atomic submit+wait argv for herdr 0.7.5+:
+ * Build the atomic submit+wait argv:
  * `agent prompt <target> <text> --wait --timeout <ms>`.
- *
- * 0.7.5 `agent prompt --wait` submits (bracketed-paste) AND blocks until the
- * first settled `idle`/`done`/`blocked` observed after submission, replacing
- * the brittle `send → wait working → wait idle` dance. Legacy (<0.7.5) has no
- * single-command equivalent and keeps the multi-step send + driveOneTurn path.
  */
 export function promptWaitArgs(
 	target: string,
@@ -761,16 +491,16 @@ export function promptWaitArgs(
 }
 
 /**
- * Submit a prompt and wait for the turn to settle — one call on herdr 0.7.5+.
+ * Submit a prompt and wait for the turn to settle — one call:
+ * `agent prompt <target> <text> --wait --timeout <ms>`.
  *
- * New API (>=0.7.5): one `agent prompt <target> <text> --wait --timeout <ms>`.
- * When the prompt is submitted from a non-working state but no working
- * transition is observed within herdr's 5s grace window, herdr returns
- * `agent_prompt_stalled` (the prompt was likely lost — e.g. sent before the TUI
- * input was ready). Rather than hang, fall back to the wait/poll dance so the
- * caller's retry loop can re-send. Any other error propagates unchanged.
- *
- * Legacy (<0.7.5): the multi-step `send → wait working → wait idle` dance.
+ * `agent prompt --wait` submits (bracketed-paste) AND blocks until the first
+ * settled `idle`/`done`/`blocked` observed after submission. When the prompt
+ * is submitted from a non-working state but no working transition is observed
+ * within herdr's 5s grace window, herdr returns `agent_prompt_stalled` (the
+ * prompt was likely lost — e.g. sent before the TUI input was ready). Rather
+ * than hang, fall back to the wait/poll dance so the caller's retry loop can
+ * re-send. Any other error propagates unchanged.
  *
  * Returns `NOT_STARTED` (in `error.message`) when the turn never entered
  * working, so the caller (herdr_delegate) can re-send.
@@ -778,43 +508,20 @@ export function promptWaitArgs(
 export async function submitAndWait(
 	paneId: string,
 	text: string,
-	opts: {
-		deadline: number;
-		signal?: AbortSignal;
-		observed?: { sawBlocked?: boolean };
-	},
+	opts: { deadline: number; signal?: AbortSignal },
 ): Promise<Result<true>> {
 	const { signal } = opts;
 	const budget = Math.max(2_000, opts.deadline - Date.now());
-	if (isNewAgentApi(await detectHerdrVersion())) {
-		const waitR = await herdr(promptWaitArgs(paneId, text, budget), {
-			timeoutMs: budget + 8_000,
-			signal,
-		});
-		if (waitR.ok) return { ok: true, data: true };
-		// herdr 0.8.2 (Windows + pi): every agent-surface readiness check fails
-		// on an interactive-ready pane and lifecycle states are stuck `idle`, so
-		// `agent prompt --wait` can neither submit nor observe. Submit
-		// pane-level, then drive the turn by screen stability.
-		if (waitR.error.code === "AGENT_NOT_READY") {
-			const sent = await paneLevelSubmit(paneId, text, opts);
-			if (!sent.ok) return sent;
-			return driveOneTurnReadStable(paneId, {
-				deadline: opts.deadline,
-				signal,
-				observed: opts.observed,
-			});
-		}
-		const code = (waitR.error.details as { code?: string } | undefined)?.code;
-		// agent_prompt_stalled: prompt submitted but no working transition within
-		// herdr's grace window — don't hang. Drive the already-submitted turn via
-		// wait/poll; NOT_STARTED lets the caller's retry re-send.
-		if (code !== "agent_prompt_stalled") return waitR;
-		return driveOneTurn(paneId, { deadline: opts.deadline, signal });
-	}
-	// Legacy (<0.7.5): send + submit, then drive the turn (working -> idle/done).
-	const sendR = await sendAgentPrompt(paneId, text, { submit: true, signal });
-	if (!sendR.ok) return sendR;
+	const waitR = await herdr(promptWaitArgs(paneId, text, budget), {
+		timeoutMs: budget + 8_000,
+		signal,
+	});
+	if (waitR.ok) return { ok: true, data: true };
+	const code = (waitR.error.details as { code?: string } | undefined)?.code;
+	// agent_prompt_stalled: prompt submitted but no working transition within
+	// herdr's grace window — don't hang. Drive the already-submitted turn via
+	// wait/poll; NOT_STARTED lets the caller's retry re-send.
+	if (code !== "agent_prompt_stalled") return waitR;
 	return driveOneTurn(paneId, { deadline: opts.deadline, signal });
 }
 
@@ -1009,11 +716,9 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 					p.status,
 				);
 			}
-			// working/blocked/unknown: version-branched transition wait. The legacy
-			// `wait agent-status` group is gone on herdr 0.7.5, so use `agent wait --until`.
-			const newApi = isNewAgentApi(await detectHerdrVersion());
+			// working/blocked/unknown: one `agent wait --until` call.
 			const r = await herdr<unknown>(
-				transitionWaitArgs(p.target, [p.status], timeoutMs, newApi),
+				transitionWaitArgs(p.target, [p.status], timeoutMs),
 				{ timeoutMs: timeoutMs + 8_000, signal },
 			);
 			if (!r.ok) return fail(r);
@@ -1262,7 +967,7 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				isError,
 			});
 
-			// 1. start (version-branched: legacy 0.7.3 vs redesigned 0.7.5 agent start)
+			// 1. start (the single `agent start --kind` launch path)
 			const name = p.name ?? `delegate-${Date.now()}`;
 			const startR = await startHerdrAgent({
 				name,
@@ -1300,13 +1005,12 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 			}
 			await sleep(1500); // brief settle so the TUI input is ready (PRD §2.2)
 
-			// 3-5. submit + wait for the turn to settle. On herdr 0.7.5+ this is ONE
+			// 3-5. submit + wait for the turn to settle: ONE
 			//      `agent prompt <text> --wait` call (atomic submit + settled wait);
 			//      `agent_prompt_stalled` falls back to the wait/poll dance instead of
-			//      hanging. Legacy keeps the multi-step send → wait dance. Re-send when
-			//      the turn never starts (the prompt can be lost if sent too early).
+			//      hanging. Re-send when the turn never starts (the prompt can be
+			//      lost if sent too early).
 			const turnDeadline = Date.now() + left();
-			const turnObs: { sawBlocked?: boolean } = {};
 			let done: Result<true> = {
 				ok: false,
 				error: { code: "TIMEOUT", message: "no send attempt was made" },
@@ -1316,7 +1020,6 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				done = await submitAndWait(paneId, p.prompt, {
 					deadline: turnDeadline,
 					signal,
-					observed: turnObs,
 				});
 				if (done.ok) break;
 				if (done.error.message !== "NOT_STARTED") break; // only retry when the turn never started
@@ -1417,9 +1120,6 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 				name,
 				response,
 				closed: Boolean(p.closeOnSuccess),
-				// ask-user episode that resolved DURING the fallback-driven turn
-				// (the status was already done when sampled) — keep the metadata.
-				...(turnObs.sawBlocked ? { wasBlocked: true } : {}),
 			});
 		},
 	});

@@ -1,10 +1,8 @@
 // Live integration test — requires a running herdr server.
 // Exercises the REAL extension start path (herdr_start_agent via the
-// registered tool, loaded through jiti) plus the agent list envelope parse.
-// The original AC4 (literal `cmd /c pi` argv through legacy `agent start`)
-// died with that surface in herdr 0.7.5+; on Windows the extension now types
-// the bare command via `pane run` (no argv array to mangle), and on POSIX it
-// uses `agent start --kind` whose argv echo is covered by `agent get`.
+// registered tool, loaded through jiti) plus the agent list envelope parse:
+// the single `agent start --kind` launch path, same on every platform
+// (whose argv echo is covered by `agent get`).
 //
 // Run: node tests/live.mjs   (after starting a `herdr` session)
 

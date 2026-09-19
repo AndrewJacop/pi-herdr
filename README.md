@@ -21,11 +21,11 @@ coordinates them.
 
 ## Platform support
 
-**Tested on Windows and macOS.** The code is platform-aware (separate Windows/POSIX
-launch presets; `herdr` spawned directly as a native binary) and is *expected* to work
-on Linux too, though that has not been verified. herdr's own availability on each
-platform follows [herdr.dev](https://herdr.dev). If you try Linux, please open an
-issue with the result.
+**Tested on Windows and macOS.** The code is platform-aware (`herdr` is spawned
+directly as a native binary, argv passed literally with `shell: false`) and is
+*expected* to work on Linux too, though that has not been verified. herdr's own
+availability on each platform follows [herdr.dev](https://herdr.dev). If you try
+Linux, please open an issue with the result.
 
 > **macOS — launch herdr from your terminal, not `brew services`.** A launchd-managed
 > herdr server inherits macOS's minimal PATH (no `node`), and spawned `pi` agents die
@@ -65,7 +65,7 @@ Install herdr from **<https://herdr.dev>** (follow the instructions there for yo
 platform). Then verify it's on your `PATH` and start a session:
 
 ```bash
-herdr --version       # verify, e.g. "herdr 0.7.5"
+herdr --version       # verify, e.g. "herdr 0.9.0" — pi-herdr requires ≥ 0.9.0
 herdr status          # shows server + socket; "server: not running" until you launch it
 herdr                 # launch the herdr workspace (starts its local server)
 ```
@@ -74,34 +74,14 @@ The `herdr` server must be running for `pi-herdr`'s tools to work — they talk 
 server. If herdr is missing or not running, every tool returns a clean
 `HERDR_UNAVAILABLE` error instead of hanging.
 
-> ℹ️ **Version compatibility.** `pi-herdr` probes `herdr --version` at session
-> start and branches to match your herdr: it supports both the redesigned **0.7.5**
-> API (`agent start` / `agent prompt`) and the older **0.7.3** API. If the `herdr`
-> binary is missing you get a warning toast with the install link; the detected
-> version shows in the footer, e.g. `herdr: 3 agents (1 working) (0.7.5)`.
->
-> ⚠️ **Windows + herdr 0.7.5–0.8.x.** herdr's `agent start --kind` was broken on
-> Windows through 0.8.x: it launches the agent via PowerShell `Start-Process -FilePath <kind>`,
-> which can't run npm `.cmd` shims (`pi`, `claude`, …) — "%1 is not a valid Win32
-> application" — and its process-tree detection of shim-launched agents was flaky
-> (panes intermittently dropped out of the agents sidebar while still running —
-> herdrdev/herdr #3032/#3205). Both are **fixed in herdr 0.9.0**: on Windows
-> ≥ 0.9.0, `pi-herdr` uses `agent start --kind` (named registration, lifecycle
-> self-report, `-- <agentArgs>` passthrough) exactly like macOS/Linux. On older
-> Windows herdr it keeps the workaround: run the **bare** agent command via
-> `pane run` (the pane's shell resolves the `.cmd` shim) and let herdr
-> **auto-detect** it; `agent prompt` / `get` / `read` / `rename` / `close` then
-> work normally. See [Platform notes](#platform-notes).
->
-> ⚠️ **herdr 0.8.2 (Windows).** herdr 0.8.2's agent-surface readiness validation
-> is broken for pi panes: `agent prompt` and `agent send-keys` fail with
-> `agent_not_ready` ("no longer the pane foreground process") even on
-> interactive-ready panes, and `agent start --kind`-launched panes additionally
-> lose state self-reporting. `pi-herdr` **v0.4.0+** works around both transparently:
-> prompting falls back to pane-level submission (`pane send-text` + settled `Enter`),
-> fallback-driven turns are driven by screen stability, and the Windows spawn path
-> (bare `pane run`, which keeps self-report working) is unchanged. Verified by the
-> full `/herdr-qa all` sweep: 43/43 tools PASS on 0.8.2 stable.
+> ℹ️ **Version floor: herdr ≥ 0.9.0 (hard).** `pi-herdr` probes `herdr --version`
+> once at session start. Below the floor it refuses to run — one clean
+> `HERDR_TOO_OLD` error naming the upgrade pointer (<https://herdr.dev>), the
+> same style as `HERDR_UNAVAILABLE`; no tool half-works, no degraded paths.
+> 0.9.0 is the release that fixed Windows `agent start --kind` (shim launch +
+> flaky process-tree detection), which is what lets every platform share ONE
+> launch path. Above the floor the probe keeps reporting for diagnostics: the
+> detected version shows in the footer, e.g. `herdr: 3 agents (1 working) (0.9.0)`.
 
 > ⚠️ **macOS — do not manage herdr with `brew services`.** `brew services` runs the
 > herdr server under launchd, which gives it macOS's *minimal* PATH
@@ -172,7 +152,7 @@ Use herdr_delegate to spawn a fresh pi agent and ask it to summarize README.md i
 ```
 
 You'll see a new pane appear in herdr, the spawned agent work, and pi return its
-answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents (1 working) (0.7.5)`.
+answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents (1 working) (0.9.0)`.
 
 ---
 
@@ -261,8 +241,8 @@ accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| `agent` | `"pi"` | Agent kind, passed as `agent start --kind` on 0.7.5. herdr 0.7.5 ships ~20 kinds (`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `maki`); an unknown kind returns a `VALIDATION_ERROR` listing the kinds your herdr supports (the list is fetched live and cached per session, with this hardcoded fallback offline). The old `custom`/`argv` launch surface is gone — use `agentArgs` to load a local extension instead. |
-| `agentArgs` | — | Extra flags appended to the agent CLI after launch, e.g. `["-ne","-e","./src/index.ts"]` to load a **local extension** instead of the installed copy (the dev / self-host loop). 0.7.5+: after `--` in `agent start` (Windows too on ≥0.9.0); Windows pane-run (<0.9.0): joined into the command line; legacy: extends the preset argv. *(v0.2.4)* |
+| `agent` | `"pi"` | Agent kind, passed as `agent start --kind`. herdr ships ~20 kinds (`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `maki`); an unknown kind returns a `VALIDATION_ERROR` listing the kinds your herdr supports (the list is fetched live and cached per session, with this hardcoded fallback offline). The old `custom`/`argv` launch surface is gone — use `agentArgs` to load a local extension instead. |
+| `agentArgs` | — | Extra flags appended to the agent CLI after launch, e.g. `["-ne","-e","./src/index.ts"]` to load a **local extension** instead of the installed copy (the dev / self-host loop). These follow `--` in `agent start`. *(v0.2.4)* |
 | `cwd` | — | Working directory for the spawned agent. |
 | `name` | `agent-<timestamp>` | Unique pane name. |
 
@@ -297,14 +277,12 @@ including spawned ones — so all pi agents report reliably.
 
 Completion is read from herdr's state events — never inferred from the
 rendered `Working…` spinner (tool-call output replaces that spinner mid-work, which
-would otherwise cause false "idle" reports). On herdr **0.7.5**, `herdr_delegate`
-submits and waits in one atomic call (`agent prompt <target> <text> --wait`) and
-`herdr_wait_agent` blocks on the repeatable `agent wait <target> --until <status>`
-(`idle` / `done` / `blocked` can be raced in a single call); on **<0.7.5** these use
-the legacy `agent send` + `wait agent-status` group. Both also **race a polling
-`agent get` fallback** alongside the event wait: if the event is flaky or never
-fires (e.g. herdr 0.7.3's `failed to decode pane get error`, or a `done`/`idle`
-state herdr no longer derives), the poll still detects the settled state promptly —
+would otherwise cause false "idle" reports). `herdr_delegate` submits and waits in
+one atomic call (`agent prompt <target> <text> --wait`) and `herdr_wait_agent`
+blocks on the repeatable `agent wait <target> --until <status>` (`idle` / `done` /
+`blocked` can be raced in a single call). Both also **race a polling `agent get`
+fallback** alongside the event wait: if the event never fires (e.g. a `done`/`idle`
+state herdr doesn't derive), the poll still detects the settled state promptly —
 instead of hanging on the event or timing out the budget. For an agent that can't
 self-report (e.g. `claude`/`codex`), the poll catches the settled state too.
 
@@ -316,11 +294,7 @@ self-report (e.g. `claude`/`codex`), the poll catches the settled state too.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HERDR_BIN` | `herdr` (resolved via `PATH`/`PATHEXT`) | Override the herdr binary path. |
-| `HERDR_PRESET_<NAME>` | built-in map | Add/override a preset as a JSON argv array, e.g. `HERDR_PRESET_GEMINI='["cmd","/c","gemini"]'`. |
 | `PI_HERDR_NO_SELF_REPORT` | unset | Set to `1` to disable self-report in this pi. |
-
-Built-in presets: `pi`, `claude`, `codex`, `omp` (opencode). On Windows they're
-launched as `cmd /c <cli>`; elsewhere as the bare command.
 
 ## Settings (`/herdr`)
 
@@ -358,26 +332,17 @@ other file's values; the menu never overwrites a file it can't parse.
 
 ## Platform notes
 
-- **Windows:** the agent CLIs (`pi`, `claude`, …) are npm `.cmd` shims. `herdr` is
-  a native executable spawned directly (no shell), so argv is passed literally.
-  - On herdr **0.7.3** (legacy), agents launch via the `agent start … -- cmd /c <cmd>`
-    form (the `cmd /c` wrapper is the launcher's job).
-  - On herdr **0.7.5–0.8.x**, `agent start --kind` can't launch them (PowerShell
-    `Start-Process` rejects npm shims), so `pi-herdr` launches the **bare** command
-    via `pane run <cmd>` (the pane's shell resolves the `.cmd` shim) and relies on
-    herdr's auto-detection. The `cmd /c` wrapper is **not** used here — it nests a
-    shell and breaks auto-detection.
-  - On herdr **≥ 0.9.0** (which fixed both the shim launch and the flaky
-    process-tree detection), Windows uses `agent start --kind <kind> --pane <id>`
-    with native `-- <agentArgs>` passthrough, same as macOS/Linux.
-- **macOS:** agents are spawned the same way (`shell:false`, literal argv). The only
-  macOS gotcha is environmental: a herdr server started by `brew services` / launchd
-  (or a GUI launch) inherits macOS's minimal PATH, so node-based agents like `pi`
-  can't find `node`. Launch herdr from your terminal instead (see Requirements). If
-  you can't, pass an absolute agent path and inject `PATH` via the tool's `env`.
-- A known Git-Bash quirk mangles a literal `cmd /c` argument into `cmd C:/`. This
-  only affects *typing* the command in a POSIX shell; `pi-herdr` spawns via Node with
-  `shell: false`, so it is unaffected. (Don't drive herdr from bash in scripts.)
+- **Requires herdr ≥ 0.9.0** (hard floor — see Requirements). Everything above the
+  floor goes through exactly one launch path on every OS: split a pane, then
+  `agent start <name> --kind <kind> --pane <id> [-- <agentArgs>]`. herdr resolves
+  the kind to its CLI itself, so npm `.cmd` shims on Windows need no special
+  handling here — 0.9.0 is the release that fixed that (and the flaky
+  process-tree detection) on herdr's side.
+- **macOS:** the only macOS gotcha is environmental: a herdr server started by
+  `brew services` / launchd (or a GUI launch) inherits macOS's minimal PATH, so
+  node-based agents like `pi` can't find `node`. Launch herdr from your terminal
+  instead (see Requirements). If you can't, pass an absolute agent path and
+  inject `PATH` via the tool's `env`.
 
 ## Development
 
@@ -398,11 +363,15 @@ The extension is TypeScript loaded via jiti — **no build step**. Edit `src/` a
 ```
 src/
   index.ts               # entry; registers tools + footer status + self-report
-  herdr.ts               # the one spawn module (envelope parse, timeouts, errors)
-  launcher.ts            # AgentPreset -> platform argv
-  config.ts              # binary + preset resolution (env + PATH)
+  herdr.ts               # the one spawn module (envelope parse, timeouts, errors, version probe + floor gate)
+  version.ts             # pure version-floor logic (parse/compare/HERDR_TOO_OLD)
+  config.ts              # binary resolution + live agent-kind list (env + PATH)
   env.ts                 # shared types + unwrap/normalize/extractText helpers
   selfreport.ts          # push this pi's state to herdr (reliable completion)
+  spawn.ts               # the herdr_spawn_agent engine (gates, spec merge, queue, wait)
+  agentdefs.ts           # agent-definition registry (built-in + session-ephemeral)
+  settings.ts            # effective-settings resolution (global + project JSON)
+  menu.ts                # the /herdr settings menu + Kill-all-agents action
   tools/orchestration.ts # Tier 1 tools + herdr_delegate (spawn/wait/send/read/…)
   tools/sync.ts          # Tier 3 pane-sync (split/run/read/wait_output/send_keys/close)
   tools/layout.ts        # Tier 2 layout (panes/tabs/workspaces)

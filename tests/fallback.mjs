@@ -1,6 +1,6 @@
 // TEMP validation of the polling fallback in the EDITED src (loaded via jiti).
 // 1) herdr_wait_agent(idle) on an ALREADY-idle pane -> must SUCCEED via poll fallback
-//    (event `wait idle` fails on 0.7.3 when there's no transition to wait for).
+//    (the event wait needs a transition; an already-settled pane has none to fire).
 // 2) herdr_delegate -> must still return the reply (no happy-path regression).
 import { createJiti } from "jiti";
 import { join } from "node:path";

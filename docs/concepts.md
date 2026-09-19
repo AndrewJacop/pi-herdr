@@ -40,50 +40,49 @@ Each tool then maps that `Result<T>` to a pi tool return value (`ToolReturn`):
 | `NOT_FOUND` | Target pane/agent/tab/workspace/session doesn't exist (herdr `not_found` / `no_such_agent` / `no_such_pane`). |
 | `VALIDATION_ERROR` | Bad input — unknown agent kind, empty required field, mutually-exclusive params, or any unmapped herdr server error. |
 | `AGENT_START_FAILED` | A spawned agent was not detected by herdr within budget (`agent_start_failed`). |
-| `AGENT_NOT_READY` | herdr's agent-surface readiness validation rejected the pane (`agent_not_ready`) — on herdr 0.8.2 Windows this fires on interactive-ready panes and triggers the pane-level prompt fallback *(v0.4.0)*. |
 | `HERDR_UNAVAILABLE` | The `herdr` binary could not be resolved/spawned (ENOENT), or is missing from PATH. |
+| `HERDR_TOO_OLD` | The detected herdr is below the ≥ 0.9.0 floor (or its version couldn't be determined) — the call is refused before it runs. |
 | `PANE_GONE` | A split/create returned no pane/tab id, or a pane vanished mid-operation. |
 
 The mapping is in [`mapCode()` in `herdr.ts`](../src/herdr.ts): `agent_start_failed →
-AGENT_START_FAILED`; `agent_not_ready → AGENT_NOT_READY`; `*not_found*`/`no_such_agent`/`no_such_pane → NOT_FOUND`;
+AGENT_START_FAILED`; `*not_found*`/`no_such_agent`/`no_such_pane → NOT_FOUND`;
 `*gone* → PANE_GONE`; `*timeout*`/`*timed_out* → TIMEOUT`; everything else →
-`VALIDATION_ERROR`. herdr 0.7.5+ emits error envelopes on **stderr** (stdout empty,
+`VALIDATION_ERROR`. herdr emits error envelopes on **stderr** (stdout empty,
 non-zero exit); `herdr()` parses both stdout and stderr so codes map correctly rather
 than surfacing raw JSON.
 
-## Version detection & branching
+## Version floor: herdr ≥ 0.9.0
 
-`pi-herdr` probes `herdr --version` once per session (cached; see
-[`src/version.ts`](../src/version.ts)) and branches on
-[`isNewAgentApi(version)`](../src/version.ts): **true when `>= 0.7.5`**. An unknown
-or missing version defaults to **legacy** (`false`) — the safe, known-good path.
+`pi-herdr` requires herdr **≥ 0.9.0** and probes `herdr --version` once per
+session (cached; see [`src/herdr.ts`](../src/herdr.ts) — the probe and its
+classification live next to the exec module, the pure compare logic in
+[`src/version.ts`](../src/version.ts)). 0.9.0 is the release that fixed Windows
+`agent start --kind`, which is what lets every platform share **one** launch
+path — no version branches anywhere.
 
-herdr 0.7.5 redesigned several commands, so these tools carry version branches:
+Below the floor there is no partial function: the gate inside `herdr()` itself
+refuses every call with one clean `HERDR_TOO_OLD` error naming the upgrade
+pointer (herdr.dev), the same style as `HERDR_UNAVAILABLE`. An unparseable
+version is refused the same way (a hard floor doesn't guess); a missing binary
+keeps its single natural `HERDR_UNAVAILABLE` instead of stacking two errors.
+At/above the floor the probe keeps reporting for diagnostics: the footer shows
+the detected version, e.g. `herdr: 3 agents (1 working) (0.9.0)`, and
+`herdr: too old (0.8.2 < 0.9.0)` below it.
 
-- **`herdr_start_agent`** —
-  legacy: one `agent start <name> […flags] -- <argv>` creates the pane;
-  new: `pane split --current --direction …` **then** `agent start <name> --kind
-  <kind> --pane <id>` (the pane must already exist). On Windows 0.7.5-preview,
-  `agent start --kind` is broken (PowerShell `Start-Process` can't launch npm `.cmd`
-  shims), so the new path launches the bare command via `pane run <id> <cmd>` and
-  relies on herdr auto-detect, then names the pane with `agent rename`.
-- **`herdr_send_prompt`** —
-  new: `agent prompt <target> <text>` (submit) or `pane send-text <target> <text>`
-  (text only); legacy: `agent send <target> <text>` plus `pane send-keys Enter` to submit.
-- **`herdr_wait_agent`** —
-  new: `agent wait <target> --until <s> [--until <s>…] --timeout <ms>` (`--until` is
-  repeatable, so one call can race `idle`+`done`); legacy: `wait agent-status <target>
-  --status <s> --timeout <ms>` (one status per call). `idle`/`done` always race a
-  polling `agent get` fallback too.
-- **`herdr_delegate`** —
-  new: one atomic `agent prompt <target> <text> --wait --timeout <ms>` submits and
-  waits for the turn to settle (`agent_prompt_stalled` falls back to the wait/poll
-  dance); legacy: the multi-step `send → wait working → wait idle` dance.
+The commands the tools use (all current-surface, no legacy fallbacks):
 
-**Pane-surface tools are 0.7.5-only.** Tier 2 (panes/tabs/workspaces), Tier 3
-(pane-sync), Tier 4 (worktrees), and Tier 5 (introspection) call commands
-(`pane …`, `tab …`, `workspace …`, `worktree …`, `api snapshot`, `session …`) that
-did not exist on `<0.7.5`; a legacy herdr surfaces the server-side error.
+- **`herdr_start_agent`** — `pane split --current --direction …` **then**
+  `agent start <name> --kind <kind> --pane <id> [-- <agentArgs>]` (the pane must
+  already exist). `agent_pane_busy` races the freshly-split shell's prompt, so
+  the start retries briefly.
+- **`herdr_send_prompt`** — `agent prompt <target> <text>` (submit) or
+  `pane send-text <target> <text>` (text only).
+- **`herdr_wait_agent`** — `agent wait <target> --until <s> [--until <s>…] --timeout <ms>`
+  (`--until` is repeatable, so one call can race `idle`+`done`); `idle`/`done`
+  always race a polling `agent get` fallback too.
+- **`herdr_delegate`** — one atomic `agent prompt <target> <text> --wait --timeout <ms>`
+  submits and waits for the turn to settle (`agent_prompt_stalled` falls back to
+  the wait/poll dance).
 
 ## Pane surface vs agent surface
 
@@ -148,18 +147,16 @@ Several tools also expose their own `timeoutMs` parameter (`herdr_wait_agent`,
 ## Agent kinds
 
 `agent` (on `herdr_start_agent` / `herdr_delegate`) is a **free string**, default
-`"pi"`. On the new API it is validated at execute time against the **live** kind list
+`"pi"`. It is validated at execute time against the **live** kind list
 emitted by `herdr agent` (the trailing `kinds: a|b|c` line), which is
 [cached per session](../src/config.ts) with a hardcoded
 [`AGENT_KINDS_FALLBACK`](../src/config.ts) (~21 kinds: `pi`, `claude`, `codex`,
 `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`,
 `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`,
-`maki`) when herdr is unavailable or pre-0.7.5. An unknown kind returns a
+`maki`) when herdr is unavailable. An unknown kind returns a
 `VALIDATION_ERROR` **listing the kinds your herdr supports**.
 
 The old `agent:"custom"` + raw `argv` launch surface is gone. To load a **local
 extension** instead of the installed one, pass `agentArgs` (e.g.
-`["-ne","-e","./src/index.ts"]`): on 0.7.5 these follow `--` in `agent start`; on
-the Windows pane-run path they join the command line; on legacy they extend the
-preset argv. The platform `cmd /c` wrapper (Windows) is added automatically by the
-launcher — never type it yourself.
+`["-ne","-e","./src/index.ts"]`) — they follow `--` in `agent start`, and herdr
+resolves the kind to its CLI on its own side.

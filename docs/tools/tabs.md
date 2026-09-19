@@ -3,15 +3,16 @@
 **Tier 2 — tab operations** (list/create/get/focus/rename/close). herdr organizes the UI
 as **workspaces → tabs → panes**; these manage the tab level.
 
-> Count: **6 tools.** 0.7.5-only. Panes are in [panes](panes.md) (+ [pane-sync](pane-sync.md)
+> Count: **6 tools.** Panes are in [panes](panes.md) (+ [pane-sync](pane-sync.md)
 > for create/destroy); workspaces in [workspaces](workspaces.md). See [concepts](../concepts.md).
 
 ---
 
 ### `herdr_list_tabs`
+
 List tabs in a workspace. Returns each tab's id, label, number, pane count, and focus.
 
-**Wraps:** 0.7.5-only. `tab list [--workspace <id>]`.
+**Wraps:** `tab list [--workspace <id>]`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -21,6 +22,7 @@ List tabs in a workspace. Returns each tab's id, label, number, pane count, and 
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_list_tabs  workspaceId="w1"
 ```
@@ -30,10 +32,11 @@ herdr_list_tabs  workspaceId="w1"
 ---
 
 ### `herdr_create_tab`
+
 Create a new tab (optionally in a specific workspace, with a cwd/label/env, focused or
 not). Returns the new tab id.
 
-**Wraps:** 0.7.5-only. `tab create [--workspace <id>] [--cwd <dir>] [--label <s>] [--env KEY=VALUE…] [--focus|--no-focus]`.
+**Wraps:** `tab create [--workspace <id>] [--cwd <dir>] [--label <s>] [--env KEY=VALUE…] [--focus|--no-focus]`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -47,6 +50,7 @@ not). Returns the new tab id.
 returned no tab id) or the mapped code.
 
 **Example**
+
 ```text
 herdr_create_tab  workspaceId="w1"  label="build"  cwd="/repo"
 ```
@@ -58,9 +62,10 @@ command into it afterward.
 ---
 
 ### `herdr_get_tab`
+
 Show details of a single tab by id.
 
-**Wraps:** 0.7.5-only. `tab get <tabId>`.
+**Wraps:** `tab get <tabId>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -70,6 +75,7 @@ Show details of a single tab by id.
 on error likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_get_tab  tabId="w1:t1"
 ```
@@ -79,9 +85,10 @@ herdr_get_tab  tabId="w1:t1"
 ---
 
 ### `herdr_focus_tab`
+
 Focus a tab in the herdr UI.
 
-**Wraps:** 0.7.5-only. `tab focus <tabId>`.
+**Wraps:** `tab focus <tabId>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -90,6 +97,7 @@ Focus a tab in the herdr UI.
 **Returns:** `okText("Focused tab <id>.", {tabId, focused:true})`; on error likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_focus_tab  tabId="w1:t2"
 ```
@@ -99,9 +107,10 @@ herdr_focus_tab  tabId="w1:t2"
 ---
 
 ### `herdr_rename_tab`
+
 Rename a tab.
 
-**Wraps:** 0.7.5-only. `tab rename <tabId> <label>`.
+**Wraps:** `tab rename <tabId> <label>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -112,6 +121,7 @@ Rename a tab.
 `VALIDATION_ERROR` (empty `label`) or the mapped code.
 
 **Example**
+
 ```text
 herdr_rename_tab  tabId="w1:t1"  label="tests"
 ```
@@ -122,9 +132,10 @@ herdr_rename_tab  tabId="w1:t1"  label="tests"
 ---
 
 ### `herdr_close_tab`  ·  [Tier 2]  ·  ⚠️ destructive
+
 ⚠️ Closes a tab by id and **terminates every pane in it**.
 
-**Wraps:** 0.7.5-only. `tab close <tabId>`.
+**Wraps:** `tab close <tabId>`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -133,6 +144,7 @@ herdr_rename_tab  tabId="w1:t1"  label="tests"
 **Returns:** `okText("Closed tab <id>.", {tabId, closed:true})`; on error likely `NOT_FOUND`.
 
 **Example**
+
 ```text
 herdr_close_tab  tabId="w1:t2"
 ```

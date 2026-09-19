@@ -2,10 +2,16 @@
 // Spawns the native herdr binary directly (shell:false), enforces a timeout,
 // honors an AbortSignal, parses the JSON envelope into a uniform Result<T>,
 // and maps herdr errors to our HerdrErrorCode set.
+//
+// It also owns the herdr version probe and the version floor: pi-herdr
+// requires herdr >= 0.9.0, and the gate inside herdr() itself refuses every
+// call against an older (or unverifiable) herdr with one clean
+// HERDR_TOO_OLD error — no tool can half-work below the floor.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveHerdrBin } from "./config.js";
 import type { HerdrErrorCode, Result } from "./env.js";
+import { floorError, parseVersion, type HerdrProbe } from "./version.js";
 
 export interface HerdrOpts {
 	/** Hard timeout for the child process (ms). Default 60s. */
@@ -17,13 +23,15 @@ export interface HerdrOpts {
 	 * raw text data (used by `agent read` / `pane read` which may emit plain text).
 	 */
 	textOk?: boolean;
+	/** Internal: skip the version-floor gate (used by the `--version` probe
+	 * itself — the probe must run below the floor to detect it). */
+	skipFloorGate?: boolean;
 }
 
 /** Map a raw herdr error code string to our normalized code set. */
 function mapCode(rawCode: string): HerdrErrorCode {
 	const c = rawCode.toLowerCase();
 	if (c === "agent_start_failed") return "AGENT_START_FAILED";
-	if (c === "agent_not_ready") return "AGENT_NOT_READY";
 	if (c.includes("not_found") || c === "no_such_agent" || c === "no_such_pane")
 		return "NOT_FOUND";
 	if (c.includes("gone")) return "PANE_GONE";
@@ -31,11 +39,70 @@ function mapCode(rawCode: string): HerdrErrorCode {
 	return "VALIDATION_ERROR";
 }
 
+// ---- version probe + floor ---------------------------------------------------
+
+let cachedProbe: Promise<HerdrProbe> | null = null;
+
 /**
- * Run `herdr <args>`, parse the JSON envelope, and return a Result<T>.
- * Never throws — every failure path resolves to `{ ok:false, error }`.
+ * Probe `herdr --version` once and cache it. `--version` is client-local
+ * (never touches the server) and bypasses the floor gate, so this is cheap
+ * and safe even with no herdr server — and against an old herdr (that's how
+ * the floor is detected at all).
+ */
+export function probeHerdr(): Promise<HerdrProbe> {
+	if (cachedProbe) return cachedProbe;
+	cachedProbe = runHerdr<string>(["--version"], {
+		textOk: true,
+		timeoutMs: 3_000,
+		skipFloorGate: true,
+	}).then((r) => {
+		if (!r.ok) return { state: "missing" }; // HERDR_UNAVAILABLE / spawn fail
+		const v = parseVersion(typeof r.data === "string" ? r.data : "");
+		return v ? { state: "ok", version: v } : { state: "unknown" };
+	});
+	return cachedProbe;
+}
+
+/** Drop the cached probe and re-run it (use at session_start to catch updates). */
+export function refreshHerdrProbe(): Promise<HerdrProbe> {
+	cachedProbe = null;
+	return probeHerdr();
+}
+
+/** Seed/drop the cached probe (tests only — offline floor-gate coverage). */
+export function setProbeForTests(probe: HerdrProbe | null): void {
+	cachedProbe = probe ? Promise.resolve(probe) : null;
+}
+
+/**
+ * The version-floor gate: null when the call may proceed, or the single
+ * `HERDR_TOO_OLD` / natural-flow decision. `missing` returns null so the
+ * spawn itself produces the one clean HERDR_UNAVAILABLE error.
+ */
+async function floorGate(): Promise<Result<never> | null> {
+	const e = floorError(await probeHerdr());
+	return e ? { ok: false, error: e.error } : null;
+}
+
+/**
+ * Run `herdr <args>`, gated on the version floor, parse the JSON envelope,
+ * and return a Result<T>. Never throws — every failure path resolves to
+ * `{ ok:false, error }`.
  */
 export function herdr<T = unknown>(
+	args: string[],
+	opts: HerdrOpts = {},
+): Promise<Result<T>> {
+	if (opts.skipFloorGate) return runHerdr<T>(args, opts);
+	return (async () => {
+		const gate = await floorGate();
+		if (gate) return gate;
+		return runHerdr<T>(args, opts);
+	})();
+}
+
+/** The ungated exec path (also the probe's own transport). */
+function runHerdr<T = unknown>(
 	args: string[],
 	opts: HerdrOpts = {},
 ): Promise<Result<T>> {
@@ -118,7 +185,7 @@ export function herdr<T = unknown>(
 		child.on("close", (exitCode) => {
 			// herdr may emit trailing non-JSON lines; parse the last JSON object.
 			let parsed = parseLastJson(out);
-			// herdr 0.7.5+ emits error envelopes on stderr (stdout empty, non-zero
+			// herdr emits error envelopes on stderr (stdout empty, non-zero
 			// exit). Parse that so the error code/message map correctly instead of
 			// surfacing raw JSON as a generic VALIDATION_ERROR.
 			if (parsed === null && exitCode !== 0) {

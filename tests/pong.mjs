@@ -1,6 +1,6 @@
 // Live end-to-end: ping -> pong through the extension's real send path
-// (herdr_send_prompt tool, which carries the AGENT_NOT_READY pane-level
-// fallback) against a live herdr server + a spawned `pi` agent (AC2).
+// (herdr_send_prompt tool: `agent prompt` submit) against a live herdr
+// server + a spawned `pi` agent (AC2).
 // Requires a running herdr session and a working model/API key.
 //
 // Run: node tests/pong.mjs
@@ -48,13 +48,13 @@ try {
 	check(!!paneId, `1. spawned pi agent (pane: ${paneId})`);
 	if (!paneId) throw new Error(spawned.error?.message ?? "spawn failed");
 
-	// Wait for the pane to reach an interactive state. herdr 0.8.2 Windows
-	// panes settle at `idle` via screen detection; `done` is equally fine.
+	// Wait for the pane to reach an interactive state. Panes settle at `idle`
+	// via detection or self-report; `done` is equally fine.
 	const boot = await waitStatus(paneId, ["idle", "done"], 60_000);
 	check(!!boot, `2. booted to idle/done (got ${boot})`);
 	await sleep(1_500); // brief settle so the TUI input is ready
 
-	console.log("\n[pong] 3. send via herdr_send_prompt (fallback path)");
+	console.log("\n[pong] 3. send via herdr_send_prompt");
 	const send = await sendTool.execute(
 		"t",
 		{ target: paneId, text: "Reply with exactly one word: pong" },

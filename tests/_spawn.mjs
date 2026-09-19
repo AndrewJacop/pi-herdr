@@ -1,10 +1,9 @@
 // Shared live-test spawn: create a shell pane and start `pi` in it the way the
-// extension itself does on herdr 0.7.5+ (see startAgentNew in
-// src/tools/orchestration.ts). Windows types the bare command into the pane
-// shell (`pane run`) because `agent start --kind` launching breaks both
-// `agent prompt` readiness AND self-report env flow there; POSIX uses the
-// native `agent start --kind`. Legacy `agent start <name> -- <argv>` was
-// removed in herdr 0.7.5+, so tests must not call it.
+// extension itself does — the single `agent start --kind` launch path (see
+// startHerdrAgent in src/tools/orchestration.ts), identical on every OS now
+// that herdr >= 0.9.0 fixed the Windows shim launch. Legacy `agent start
+// <name> -- <argv>` was removed in herdr 0.7.5+, and the old Windows `pane
+// run` fallback died with the version floor (v0.6 issue 01).
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -38,16 +37,9 @@ export async function spawnPiAgent(name, { agentArgs = [], cwd = ROOT } = {}) {
 		};
 	}
 
-	let started = false;
-	if (process.platform === "win32") {
-		const cmd = ["pi", ...agentArgs].join(" ");
-		started = (await herdr(["pane", "run", paneId, cmd], { timeoutMs: 15_000 }))
-			.ok;
-	} else {
-		const args = ["agent", "start", name, "--kind", "pi", "--pane", paneId];
-		if (agentArgs.length) args.push("--", ...agentArgs);
-		started = (await herdr(args, { timeoutMs: 60_000 })).ok;
-	}
+	const args = ["agent", "start", name, "--kind", "pi", "--pane", paneId];
+	if (agentArgs.length) args.push("--", ...agentArgs);
+	const started = (await herdr(args, { timeoutMs: 60_000 })).ok;
 	if (!started) {
 		await close(paneId);
 		return {
@@ -73,7 +65,8 @@ export async function spawnPiAgent(name, { agentArgs = [], cwd = ROOT } = {}) {
 			},
 		};
 	}
-	// Name it (pane-run launches are unnamed; `agent start` already took <name>).
+	// Belt-and-suspenders: `agent start` names the pane itself; the rename below
+	// (kept for parity with older flows) is a no-op when the name already matches.
 	await herdr(["agent", "rename", paneId, name], { timeoutMs: 10_000 });
 	return { paneId, close: () => close(paneId) };
 }
@@ -91,10 +84,10 @@ export async function waitStatus(paneId, statuses, timeoutMs) {
 }
 
 /**
- * Submit a prompt pane-level: `send-text` + settled Enter. This is the
- * extension's AGENT_NOT_READY fallback (paneLevelSubmit) — tests use it
- * directly when they need to drive a spawned pane without exercising the
- * orchestration tools (`agent prompt` is broken on herdr 0.8.2 Windows).
+ * Submit a prompt pane-level: `send-text` + settled Enter — the same bytes
+ * `agent prompt` delivers, one layer down. A test utility for driving a
+ * spawned pane WITHOUT exercising the orchestration tools (e.g. testing
+ * herdr_send_prompt against a known-good submission path).
  */
 export async function panePrompt(paneId, text) {
 	const tx = await herdr(["pane", "send-text", paneId, text], {

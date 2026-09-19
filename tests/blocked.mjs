@@ -176,8 +176,8 @@ async function testReturnMode() {
 	console.log("    grandchild status after return:", st);
 	check(st === "blocked", `return mode: grandchild is blocked (got "${st}")`);
 
-	// Relay: select option 2 (Blue) on the ask overlay, wait, read the final line.
-	// (`agent prompt` is broken on herdr 0.8.2 Windows — key-nav at pane level.)
+	// Relay: select option 2 (Blue) on the ask overlay, wait, read the final line
+	// (key-nav at pane level — the same surface a human uses).
 	const inj = await answerOverlay(det.paneId, { down: 1 });
 	check(inj.ok, "return mode: relay selected answer (Blue) via overlay keys");
 	const settled = await waitStatus(det.paneId, ["idle", "done"], 120_000);

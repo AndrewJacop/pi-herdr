@@ -4,18 +4,18 @@
 (optionally on a new branch based off a ref) and open it as its own workspace, list the
 linked checkouts, or tear one down.
 
-> Count: **4 tools.** 0.7.5-only. `--json` is always emitted so the envelope parser
+> Count: **4 tools.** `--json` is always emitted so the envelope parser
 > returns structured data. See [concepts](../concepts.md). Workspaces are managed in
 > [workspaces](workspaces.md).
 
 ---
 
 ### `herdr_worktree_create`
+
 Create a Git worktree (parallel checkout, optionally on a new branch based off a ref) and
 open it as a workspace. Returns the worktree path, branch, and opened workspace id.
 
-**Wraps:** 0.7.5-only.
-`worktree create [--workspace <id>] [--cwd <repo>] [--branch <name>] [--base <ref>] [--path <dir>] [--label <s>] [--focus|--no-focus] --json`.
+**Wraps:** `worktree create [--workspace <id>] [--cwd <repo>] [--branch <name>] [--base <ref>] [--path <dir>] [--label <s>] [--focus|--no-focus] --json`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -31,6 +31,7 @@ open it as a workspace. Returns the worktree path, branch, and opened workspace 
 on error the mapped code (e.g. git failures surface as `VALIDATION_ERROR`).
 
 **Example**
+
 ```text
 herdr_worktree_create  branch="feat-auth"  base="main"
 ```
@@ -42,11 +43,11 @@ with `herdr_worktree_list` to see linked checkouts before removing any.
 ---
 
 ### `herdr_worktree_open`
+
 Open an existing Git worktree as a workspace (by path or branch). Returns the worktree
 path and opened workspace id.
 
-**Wraps:** 0.7.5-only.
-`worktree open [--workspace <id>] [--cwd <repo>] [--path <dir>] [--branch <name>] [--label <s>] [--focus|--no-focus] --json`.
+**Wraps:** `worktree open [--workspace <id>] [--cwd <repo>] [--path <dir>] [--branch <name>] [--label <s>] [--focus|--no-focus] --json`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -61,6 +62,7 @@ path and opened workspace id.
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_worktree_open  path="../pi-herdr-feat-auth"
 ```
@@ -71,10 +73,11 @@ herdr_worktree_open  path="../pi-herdr-feat-auth"
 ---
 
 ### `herdr_worktree_list`
+
 List Git worktree checkouts for a repo (the main checkout plus linked worktrees). Returns
 each worktree's path, branch, label, and opened workspace id (if any).
 
-**Wraps:** 0.7.5-only. `worktree list [--workspace <id>] [--cwd <repo>] --json`.
+**Wraps:** `worktree list [--workspace <id>] [--cwd <repo>] --json`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -85,6 +88,7 @@ each worktree's path, branch, label, and opened workspace id (if any).
 on error the mapped code.
 
 **Example**
+
 ```text
 herdr_worktree_list
 ```
@@ -95,10 +99,11 @@ which are currently opened as workspaces.
 ---
 
 ### `herdr_worktree_remove`  ·  [Tier 4]  ·  ⚠️ destructive
+
 ⚠️ Removes a Git worktree checkout and **deletes its checkout directory** on disk. Set
 `force` to remove a worktree with uncommitted changes.
 
-**Wraps:** 0.7.5-only. `worktree remove [--workspace <id>] [--force] --json`.
+**Wraps:** `worktree remove [--workspace <id>] [--force] --json`.
 
 | Param | Type | Required | Notes |
 |-------|------|----------|-------|
@@ -109,6 +114,7 @@ which are currently opened as workspaces.
 on error the mapped code (e.g. uncommitted changes without `force`).
 
 **Example**
+
 ```text
 herdr_worktree_remove  workspaceId="w3"  force=false
 ```

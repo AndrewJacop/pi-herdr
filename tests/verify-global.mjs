@@ -87,10 +87,9 @@ try {
 	);
 
 	// 3. Send a short task and confirm working -> done (not stuck).
-	await herdr(["agent", "send", pane, "Reply with one word: ready"], {
+	await herdr(["agent", "prompt", pane, "Reply with one word: ready"], {
 		timeoutMs: 15_000,
 	});
-	await herdr(["pane", "send-keys", pane, "Enter"], { timeoutMs: 15_000 });
 	console.log("watching status through the turn...");
 	let sawWorking = false;
 	let settled = false;

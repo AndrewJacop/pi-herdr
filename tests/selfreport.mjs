@@ -1,9 +1,8 @@
 // Verify self-report: spawn a pi WITH pi-herdr loaded (via -e), send it a prompt
 // (pane-level), and confirm herdr's agent_status transitions working -> idle/done
 // RELIABLY (instead of sticking on "working" after the turn finishes).
-// Requires a running herdr. NOTE: this only holds for shell-typed launches
-// (`pane run`, like the extension's Windows path) — `agent start --kind`
-// launches lose the pane env and their self-report on herdr 0.8.2.
+// Requires a running herdr. The grandchild is launched via the extension's
+// own `agent start --kind` path — self-report rides the pane env it carries.
 //
 // Run: node tests/selfreport.mjs
 

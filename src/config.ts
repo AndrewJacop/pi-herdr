@@ -1,4 +1,4 @@
-// Configuration: resolve the herdr binary and the agent preset -> argv map.
+// Configuration: resolve the herdr binary.
 // No pi settings.json API exists for extensions, so config is via env + PATH.
 
 import { existsSync } from "node:fs";
@@ -6,47 +6,6 @@ import { delimiter, join } from "node:path";
 import { herdr } from "./herdr.js";
 
 const IS_WIN = process.platform === "win32";
-
-const DEFAULT_PRESETS_WIN: Record<string, string[]> = {
-	pi: ["cmd", "/c", "pi"],
-	claude: ["cmd", "/c", "claude"],
-	codex: ["cmd", "/c", "codex"],
-	omp: ["cmd", "/c", "opencode"],
-};
-
-const DEFAULT_PRESETS_POSIX: Record<string, string[]> = {
-	pi: ["pi"],
-	claude: ["claude"],
-	codex: ["codex"],
-	omp: ["opencode"],
-};
-
-const ENV_PREFIX = "HERDR_PRESET_";
-
-/**
- * Built-in presets merged with HERDR_PRESET_<NAME> overrides.
- * Each override value is a JSON argv array, e.g.
- *   HERDR_PRESET_GEMINI='["cmd","/c","gemini"]'
- * Allows adding new agents with no code change.
- */
-export function getPresets(): Record<string, string[]> {
-	const base = IS_WIN ? DEFAULT_PRESETS_WIN : DEFAULT_PRESETS_POSIX;
-	const merged: Record<string, string[]> = { ...base };
-	for (const [key, value] of Object.entries(process.env)) {
-		if (!key.startsWith(ENV_PREFIX) || !value) continue;
-		const name = key.slice(ENV_PREFIX.length).toLowerCase();
-		if (!name) continue;
-		try {
-			const parsed: unknown = JSON.parse(value);
-			if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
-				merged[name] = parsed as string[];
-			}
-		} catch {
-			/* ignore malformed overrides */
-		}
-	}
-	return merged;
-}
 
 /**
  * Resolve the herdr binary path.
@@ -76,18 +35,16 @@ export function resolveHerdrBin(): string {
 	return name;
 }
 
-// ---- agent-kind validation (herdr 0.7.5+ `agent start --kind`) ------------
-// `agent: "custom"` + a raw `argv` is rejected on herdr 0.7.5 (no --kind for
-// "custom"), and the old hardcoded 4-preset enum couldn't list the ~20 kinds
-// 0.7.5 actually supports. We now validate `agent` against the LIVE kind list
+// ---- agent-kind validation (`agent start --kind`) ----------------------------
+// The `agent` param is a free string validated against the LIVE kind list
 // emitted by `herdr agent` (trailing `kinds: a|b|c` line), cached per session
-// with a hardcoded fallback when herdr is unavailable / pre-0.7.5.
+// with a hardcoded fallback when herdr is unavailable.
 
 /**
- * Hardcoded fallback: the agent kinds herdr 0.7.5 knows. Used when the live
- * `herdr agent` kind list can't be fetched (no server, missing binary, or a
- * pre-0.7.5 build whose `agent start` has no --kind). Keep roughly in sync with
- * the live `herdr agent` output; the live list is authoritative when available.
+ * Hardcoded fallback: agent kinds herdr commonly ships. Used when the live
+ * `herdr agent` kind list can't be fetched (no server, missing binary). Keep
+ * roughly in sync with the live `herdr agent` output; the live list is
+ * authoritative when available.
  */
 export const AGENT_KINDS_FALLBACK: readonly string[] = [
 	"pi",
