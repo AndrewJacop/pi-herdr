@@ -55,66 +55,79 @@ await ext.default(mockPi);
 
 const names = tools.map((t) => t.name);
 const expected = [
-	"herdr_start_agent",
+	// the v0.6 surface cut (issue 02): ONE surface — the keepers that exist
+	// today. Later tickets register theirs (04 → get_agent_result,
+	// 05 → message_agent, 10 → interrupt/resume, 12 → run_workflow) and the
+	// count converges to 12.
 	"herdr_spawn_agent",
+	// the legacy result trio (retired by get_agent_result in ticket 04)
 	"herdr_send_prompt",
-	"herdr_read_agent",
 	"herdr_wait_agent",
+	"herdr_read_agent",
+	// the fleet's single introspection tool
 	"herdr_list_agents",
-	"herdr_get_agent",
-	"herdr_stop_agent",
-	"herdr_rename_agent",
-	"herdr_focus_agent",
-	"herdr_explain_agent",
-	"herdr_delegate",
-	// Tier 3 — pane-sync (T4)
-	"herdr_split_pane",
+	// the pane-sync quartet
 	"herdr_run_command",
 	"herdr_read_pane",
 	"herdr_wait_output",
 	"herdr_send_keys",
-	"herdr_close_pane",
-	// Tier 2 — layout (T5): panes (list/get/resize/zoom/move/swap; split+close reused from T4)
-	"herdr_list_panes",
-	"herdr_get_pane",
-	"herdr_resize_pane",
-	"herdr_zoom_pane",
-	"herdr_move_pane",
-	"herdr_swap_panes",
-	// Tier 2 — layout (T5): tabs
-	"herdr_list_tabs",
-	"herdr_create_tab",
-	"herdr_get_tab",
-	"herdr_focus_tab",
-	"herdr_rename_tab",
-	"herdr_close_tab",
-	// Tier 2 — layout (T5): workspaces
-	"herdr_list_workspaces",
-	"herdr_create_workspace",
-	"herdr_get_workspace",
-	"herdr_focus_workspace",
-	"herdr_rename_workspace",
-	"herdr_close_workspace",
-	// Tier 4 — worktrees (T6)
-	"herdr_worktree_create",
-	"herdr_worktree_open",
-	"herdr_worktree_list",
-	"herdr_worktree_remove",
-	// Tier 5 — introspection (T6): api snapshot + sessions
-	"herdr_api_snapshot",
-	"herdr_session_list",
-	"herdr_session_stop",
-	"herdr_session_delete",
 ];
 for (const n of expected) assert(names.includes(n), `registered ${n}`);
 assert(
 	names.length === expected.length,
 	`exactly ${expected.length} tools (got ${names.length})`,
 );
+// Every cut tool is GONE from the model surface (v0.6 issue 02): layout,
+// tab/workspace CRUD, worktree CRUD, introspection beyond list_agents, and
+// herdr_delegate. Their machinery still runs internally (isolated worktrees,
+// the poll loop) — but the LLM must stop seeing these names.
+const cut = [
+	"herdr_start_agent",
+	"herdr_delegate",
+	"herdr_get_agent",
+	"herdr_stop_agent",
+	"herdr_rename_agent",
+	"herdr_focus_agent",
+	"herdr_explain_agent",
+	"herdr_split_pane",
+	"herdr_close_pane",
+	"herdr_list_panes",
+	"herdr_get_pane",
+	"herdr_resize_pane",
+	"herdr_zoom_pane",
+	"herdr_move_pane",
+	"herdr_swap_panes",
+	"herdr_list_tabs",
+	"herdr_create_tab",
+	"herdr_get_tab",
+	"herdr_focus_tab",
+	"herdr_rename_tab",
+	"herdr_close_tab",
+	"herdr_list_workspaces",
+	"herdr_create_workspace",
+	"herdr_get_workspace",
+	"herdr_focus_workspace",
+	"herdr_rename_workspace",
+	"herdr_close_workspace",
+	"herdr_worktree_create",
+	"herdr_worktree_open",
+	"herdr_worktree_list",
+	"herdr_worktree_remove",
+	"herdr_api_snapshot",
+	"herdr_session_list",
+	"herdr_session_stop",
+	"herdr_session_delete",
+];
+for (const n of cut)
+	assert(!names.includes(n), `${n} absent (cut from the surface)`);
 assert(events.agent_start?.length >= 1, "wired agent_start footer hook");
 assert(
-	commands.some((c) => c.name === "herdr"),
-	"registered the /herdr settings command",
+	commands.some((c) => c.name === "subagents"),
+	"registered the /subagents config command",
+);
+assert(
+	!commands.some((c) => c.name === "herdr"),
+	"the /herdr command is gone (renamed /subagents)",
 );
 assert(events.turn_end?.length === 1, "wired turn_end footer hook");
 // Self-report (src/selfreport.ts) activates only inside a herdr pane; when it
@@ -176,10 +189,10 @@ assert(
 );
 
 // AC7: destructive tools labeled
-const stop = tools.find((t) => t.name === "herdr_stop_agent");
+const sendKeysTool = tools.find((t) => t.name === "herdr_send_keys");
 assert(
-	/⚠️/.test(stop.description),
-	"herdr_stop_agent description carries ⚠️ (AC7)",
+	/⚠️/.test(sendKeysTool.description),
+	"herdr_send_keys description carries ⚠️ (AC7: ctrl+c interrupts a process)",
 );
 for (const t of tools) {
 	assert(typeof t.parameters === "object", `${t.name} has parameters schema`);
@@ -458,18 +471,18 @@ assert(
 // restore a cold probe cache for later sections
 herdrMod.setProbeForTests(null);
 // ---------------------------------------------------------------------------
-console.log("\n[8] agentArgs param exposed on start/delegate tools (v0.2.4)");
-const startTool = tools.find((t) => t.name === "herdr_start_agent");
-const delegateTool = tools.find((t) => t.name === "herdr_delegate");
-assert(!!startTool, "herdr_start_agent registered");
-assert(!!delegateTool, "herdr_delegate registered");
+console.log(
+	"\n[8] herdr_spawn_agent exposes agent_args (the local-ext loader)",
+);
+const spawnAgentTool = tools.find((t) => t.name === "herdr_spawn_agent");
+assert(!!spawnAgentTool, "herdr_spawn_agent registered");
 assert(
-	!!startTool?.parameters?.properties?.agentArgs,
-	"herdr_start_agent exposes agentArgs param",
+	!!spawnAgentTool?.parameters?.properties?.agent?.properties?.agent_args,
+	"herdr_spawn_agent's inline agent exposes agent_args",
 );
 assert(
-	!!delegateTool?.parameters?.properties?.agentArgs,
-	"herdr_delegate exposes agentArgs param",
+	!spawnAgentTool?.parameters?.properties?.argv,
+	"herdr_spawn_agent exposes no raw argv (dropped custom-argv surface)",
 );
 
 // ---------------------------------------------------------------------------
@@ -618,33 +631,16 @@ assert(
 	"kindError: unknown kind -> VALIDATION_ERROR listing valid kinds",
 );
 
-// argv dropped from the LLM schema; `agent` is now a free string validated
-// against the live list (the stale 4/5-kind enum is gone).
+// The spawn surface's `agent.kind` is a free string validated against the
+// live list at execute time (kindError above); no stale enum in the schema.
 assert(
-	!startTool?.parameters?.properties?.argv,
-	"herdr_start_agent no longer exposes argv (dropped dead custom-argv surface)",
-);
-assert(
-	!delegateTool?.parameters?.properties?.argv,
-	"herdr_delegate no longer exposes argv",
-);
-assert(
-	startTool?.parameters?.properties?.agent?.type === "string",
-	"herdr_start_agent `agent` is a free string (live-validated, not a stale enum)",
-);
-assert(
-	delegateTool?.parameters?.properties?.agent?.type === "string",
-	"herdr_delegate `agent` is a free string",
-);
-assert(
-	!!startTool?.parameters?.properties?.agentArgs,
-	"herdr_start_agent still exposes agentArgs (the supported local-ext loader)",
+	spawnAgentTool?.parameters?.properties?.agent?.properties?.kind?.type ===
+		"string",
+	"herdr_spawn_agent's inline agent.kind is a free string (live-validated)",
 );
 
 // ---------------------------------------------------------------------------
-console.log(
-	"\n[12] T4: Tier 3 pane-sync tools (split/run/read/wait_output/send_keys/close)",
-);
+console.log("\n[12] pane-sync quartet (run/read/wait_output/send_keys)");
 const syncMod = await jiti.import(join(ROOT, "src/tools/sync.ts"), {
 	parent: ROOT,
 });
@@ -653,15 +649,13 @@ assert(
 	"waitOutputArgs exported from sync (pure argv builder, offline-testable)",
 );
 const paneTools = [
-	"herdr_split_pane",
 	"herdr_run_command",
 	"herdr_read_pane",
 	"herdr_wait_output",
 	"herdr_send_keys",
-	"herdr_close_pane",
 ];
-for (const n of paneTools) assert(names.includes(n), `registered ${n} (T4)`);
-// Each T4 tool has the documented LLM hints (CONTRIBUTING: promptSnippet + guidelines).
+for (const n of paneTools) assert(names.includes(n), `registered ${n}`);
+// Each kept tool has the documented LLM hints (CONTRIBUTING: promptSnippet + guidelines).
 for (const n of paneTools) {
 	const t = tools.find((x) => x.name === n);
 	assert(!!t?.promptSnippet, `${n} has promptSnippet`);
@@ -670,7 +664,7 @@ for (const n of paneTools) {
 		`${n} has promptGuidelines`,
 	);
 	assert(
-		/split_pane|run_command|read_pane|wait_output|send_keys|close_pane/.test(
+		/run_command|read_pane|wait_output|send_keys/.test(
 			t.promptGuidelines.join(" "),
 		),
 		`${n} promptGuidelines name the tool`,
@@ -726,16 +720,11 @@ assert(
 		?.command,
 	"herdr_run_command exposes a 'command' string param",
 );
-// AC7: destructive pane tools labeled ⚠️ (send_keys interrupts, close_pane kills).
+// AC7: the one destructive pane tool left on the surface is labeled ⚠️.
 const sendKeys = tools.find((t) => t.name === "herdr_send_keys");
-const closePane = tools.find((t) => t.name === "herdr_close_pane");
 assert(
 	/⚠️/.test(sendKeys.description),
 	"herdr_send_keys description carries ⚠️ (AC7: ctrl+c interrupts a process)",
-);
-assert(
-	/⚠️/.test(closePane.description),
-	"herdr_close_pane description carries ⚠️ (AC7: terminates the pane)",
 );
 // send_keys exposes agentScope (switches pane vs agent send-keys surface).
 assert(
@@ -744,317 +733,15 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
-console.log("\n[13] T5: Tier 2 layout tools (panes/tabs/workspaces CRUD)");
-const layoutMod = await jiti.import(join(ROOT, "src/tools/layout.ts"), {
-	parent: ROOT,
-});
-const layoutTools = [
-	// panes (split + close are reused from T4, not re-registered here)
-	"herdr_list_panes",
-	"herdr_get_pane",
-	"herdr_resize_pane",
-	"herdr_zoom_pane",
-	"herdr_move_pane",
-	"herdr_swap_panes",
-	// tabs
-	"herdr_list_tabs",
-	"herdr_create_tab",
-	"herdr_get_tab",
-	"herdr_focus_tab",
-	"herdr_rename_tab",
-	"herdr_close_tab",
-	// workspaces
-	"herdr_list_workspaces",
-	"herdr_create_workspace",
-	"herdr_get_workspace",
-	"herdr_focus_workspace",
-	"herdr_rename_workspace",
-	"herdr_close_workspace",
-];
-for (const n of layoutTools) assert(names.includes(n), `registered ${n} (T5)`);
-// Each T5 tool has the documented LLM hints (CONTRIBUTING: promptSnippet + guidelines).
-for (const n of layoutTools) {
-	const t = tools.find((x) => x.name === n);
-	assert(!!t?.promptSnippet, `${n} has promptSnippet`);
-	assert(
-		Array.isArray(t?.promptGuidelines) && t.promptGuidelines.length > 0,
-		`${n} has promptGuidelines`,
-	);
-	assert(
-		/list_panes|get_pane|resize_pane|zoom_pane|move_pane|swap_panes|list_tabs|create_tab|get_tab|focus_tab|rename_tab|close_tab|list_workspaces|create_workspace|get_workspace|focus_workspace|rename_workspace|close_workspace/.test(
-			t.promptGuidelines.join(" "),
-		),
-		`${n} promptGuidelines name the tool`,
-	);
-}
-// AC7: destructive layout tools labeled ⚠️ (close terminates everything beneath).
-for (const n of ["herdr_close_tab", "herdr_close_workspace"]) {
-	const t = tools.find((x) => x.name === n);
-	assert(
-		/⚠️/.test(t.description),
-		`${n} description carries ⚠️ (AC7: closes panes/tabs beneath)`,
-	);
-}
-
-// Pure argv builders — representative subset covering the interesting branching.
-assert(
-	typeof layoutMod.listPanesArgs === "function",
-	"listPanesArgs exported from layout (pure argv builder, offline-testable)",
-);
-// list: --workspace filter optional.
-assert(
-	eq(layoutMod.listPanesArgs(), ["pane", "list"]),
-	"listPanesArgs: bare 'pane list' when no workspace",
-);
-assert(
-	eq(layoutMod.listPanesArgs({ workspaceId: "w2" }), [
-		"pane",
-		"list",
-		"--workspace",
-		"w2",
-	]),
-	"listPanesArgs: filters by --workspace when given",
-);
-// resize: direction required; amount optional; pane-id vs --current targeting.
-assert(
-	eq(layoutMod.resizePaneArgs({ direction: "up" }), [
-		"pane",
-		"resize",
-		"--direction",
-		"up",
-		"--current",
-	]),
-	"resizePaneArgs: defaults to --current (focused pane), no amount",
-);
-assert(
-	eq(
-		layoutMod.resizePaneArgs({
-			direction: "left",
-			amount: 0.5,
-			paneId: "w1:p3",
-		}),
-		[
-			"pane",
-			"resize",
-			"--direction",
-			"left",
-			"--amount",
-			"0.5",
-			"--pane",
-			"w1:p3",
-		],
-	),
-	"resizePaneArgs: --amount + explicit --pane targeting",
-);
-// zoom: mode toggle/on/off (default toggle) + targeting.
-assert(
-	eq(layoutMod.zoomPaneArgs(), ["pane", "zoom", "--toggle", "--current"]),
-	"zoomPaneArgs: default mode toggle on focused pane",
-);
-assert(
-	eq(layoutMod.zoomPaneArgs({ mode: "off", paneId: "w1:p3" }), [
-		"pane",
-		"zoom",
-		"--off",
-		"--pane",
-		"w1:p3",
-	]),
-	"zoomPaneArgs: mode 'off' + explicit pane",
-);
-// move: positional pane id + the full option set (tab/split/target-pane/ratio/new-tab/workspace/new-workspace).
-assert(
-	eq(
-		layoutMod.movePaneArgs({
-			paneId: "w1:p3",
-			tabId: "w1:t2",
-			split: "down",
-			targetPane: "w1:p1",
-			ratio: 0.25,
-			newTab: true,
-			workspaceId: "w2",
-			newWorkspace: true,
-		}),
-		[
-			"pane",
-			"move",
-			"w1:p3",
-			"--tab",
-			"w1:t2",
-			"--split",
-			"down",
-			"--target-pane",
-			"w1:p1",
-			"--ratio",
-			"0.25",
-			"--new-tab",
-			"--workspace",
-			"w2",
-			"--new-workspace",
-		],
-	),
-	"movePaneArgs: full option set serializes in documented flag order",
-);
-// swap: direction + source/target, defaults to --current.
-assert(
-	eq(layoutMod.swapPanesArgs({ sourcePane: "w1:p1", targetPane: "w1:p2" }), [
-		"pane",
-		"swap",
-		"--current",
-		"--source-pane",
-		"w1:p1",
-		"--target-pane",
-		"w1:p2",
-	]),
-	"swapPanesArgs: explicit source/target, focused pane by default",
-);
-// tabs: create serializes workspace/cwd/label/env/focus.
-assert(
-	eq(
-		layoutMod.createTabArgs({
-			workspaceId: "w2",
-			cwd: "/repo",
-			label: "build",
-			env: { FOO: "1" },
-			focus: true,
-		}),
-		[
-			"tab",
-			"create",
-			"--workspace",
-			"w2",
-			"--cwd",
-			"/repo",
-			"--label",
-			"build",
-			"--env",
-			"FOO=1",
-			"--focus",
-		],
-	),
-	"createTabArgs: workspace/cwd/label/env/focus in order",
-);
-assert(
-	eq(layoutMod.createTabArgs({ focus: false }), ["tab", "create", "--no-focus"]),
-	"createTabArgs: focus:false -> --no-focus; undefined options omitted",
-);
-// workspaces: create serializes cwd/label/env/focus (no --workspace).
-assert(
-	eq(layoutMod.createWorkspaceArgs({ cwd: "/repo", env: { BAR: "2" } }), [
-		"workspace",
-		"create",
-		"--cwd",
-		"/repo",
-		"--env",
-		"BAR=2",
-	]),
-	"createWorkspaceArgs: cwd/env, focus omitted when undefined",
-);
-// numeric options are stringified (spawn argv must be strings).
-assert(
-	typeof layoutMod.resizePaneArgs({ direction: "up", amount: 1 })[4] ===
-		"string",
-	"resizePaneArgs: --amount is stringified (spawn argv must be strings)",
-);
-// create tools expose an env map (KEY=VALUE), consistent with start_agent.
-assert(
-	!!tools.find((t) => t.name === "herdr_create_tab")?.parameters?.properties
-		?.env,
-	"herdr_create_tab exposes an env param",
-);
-assert(
-	!!tools.find((t) => t.name === "herdr_create_workspace")?.parameters
-		?.properties?.env,
-	"herdr_create_workspace exposes an env param",
-);
-// normalizers tolerate snake_case + missing fields.
-assert(
-	eq(layoutMod.normalizeTab({ tab_id: "w1:t1", label: "x", pane_count: 3 }), {
-		tabId: "w1:t1",
-		label: "x",
-		number: undefined,
-		paneCount: 3,
-		workspaceId: undefined,
-		focused: undefined,
-		agentStatus: undefined,
-	}),
-	"normalizeTab maps snake_case -> camelCase",
-);
-assert(
-	eq(
-		layoutMod.normalizeWorkspace({
-			workspace_id: "w1",
-			tab_count: 2,
-			active_tab_id: "w1:t1",
-			focused: true,
-		}),
-		{
-			workspaceId: "w1",
-			label: undefined,
-			activeTabId: "w1:t1",
-			agentStatus: undefined,
-			number: undefined,
-			paneCount: undefined,
-			tabCount: 2,
-			focused: true,
-		},
-	),
-	"normalizeWorkspace maps snake_case -> camelCase",
-);
-
-// ---------------------------------------------------------------------------
-console.log("\n[14] T6: Tier 4 worktrees + Tier 5 snapshot/sessions");
+console.log("\n[13] Worktree machinery survives the cut (powers `isolated`)");
 const worktreesMod = await jiti.import(join(ROOT, "src/tools/worktrees.ts"), {
 	parent: ROOT,
 });
-const introspectionMod = await jiti.import(
-	join(ROOT, "src/tools/introspection.ts"),
-	{ parent: ROOT },
-);
-const t6Tools = [
-	// worktrees (remove is destructive)
-	"herdr_worktree_create",
-	"herdr_worktree_open",
-	"herdr_worktree_list",
-	"herdr_worktree_remove",
-	// introspection: api snapshot + sessions (stop/delete destructive)
-	"herdr_api_snapshot",
-	"herdr_session_list",
-	"herdr_session_stop",
-	"herdr_session_delete",
-];
-for (const n of t6Tools) assert(names.includes(n), `registered ${n} (T6)`);
-// Each T6 tool has the documented LLM hints (CONTRIBUTING: promptSnippet + guidelines).
-for (const n of t6Tools) {
-	const t = tools.find((x) => x.name === n);
-	assert(!!t?.promptSnippet, `${n} has promptSnippet`);
-	assert(
-		Array.isArray(t?.promptGuidelines) && t.promptGuidelines.length > 0,
-		`${n} has promptGuidelines`,
-	);
-	assert(
-		/worktree_create|worktree_open|worktree_list|worktree_remove|api_snapshot|session_list|session_stop|session_delete/.test(
-			t.promptGuidelines.join(" "),
-		),
-		`${n} promptGuidelines name the tool`,
-	);
-}
-// AC7: destructive T6 tools labeled ⚠️ (remove deletes the checkout dir;
-// stop tears down a session server; delete removes the session dir).
-for (const n of [
-	"herdr_worktree_remove",
-	"herdr_session_stop",
-	"herdr_session_delete",
-]) {
-	const t = tools.find((x) => x.name === n);
-	assert(/⚠️/.test(t.description), `${n} description carries ⚠️ (AC7)`);
-}
-// `session attach` is interactive (TUI) -> excluded: it must NOT be registered.
+// The CRUD tools are gone (asserted in [1]); the machinery is not.
 assert(
-	!names.includes("herdr_session_attach"),
-	"interactive 'session attach' is excluded from the tool surface (T6)",
+	typeof worktreesMod.registerWorktrees === "undefined",
+	"worktrees registers no tools (registerWorktrees deleted with the surface cut)",
 );
-
-// Pure argv builders — worktrees.
 assert(
 	typeof worktreesMod.createWorktreeArgs === "function",
 	"createWorktreeArgs exported from worktrees (pure argv builder)",
@@ -1101,45 +788,7 @@ assert(
 	]),
 	"createWorktreeArgs: focus:false -> --no-focus; undefined options omitted; --json always present",
 );
-// open: subset of create flags (no --base).
-assert(
-	eq(
-		worktreesMod.openWorktreeArgs({
-			path: "/wt/feat",
-			branch: "feat",
-			focus: true,
-		}),
-		[
-			"worktree",
-			"open",
-			"--path",
-			"/wt/feat",
-			"--branch",
-			"feat",
-			"--focus",
-			"--json",
-		],
-	),
-	"openWorktreeArgs: path/branch/focus + --json (no --base on open)",
-);
-// list: optional workspace/cwd + --json.
-assert(
-	eq(worktreesMod.listWorktreesArgs(), ["worktree", "list", "--json"]),
-	"listWorktreesArgs: bare 'worktree list --json'",
-);
-assert(
-	eq(worktreesMod.listWorktreesArgs({ workspaceId: "w2", cwd: "/repo" }), [
-		"worktree",
-		"list",
-		"--workspace",
-		"w2",
-		"--cwd",
-		"/repo",
-		"--json",
-	]),
-	"listWorktreesArgs: filters by --workspace/--cwd",
-);
-// remove: workspace optional, force optional, --json always.
+// remove: workspace/force optional, --json always (the teardown path).
 assert(
 	eq(worktreesMod.removeWorktreeArgs({}), ["worktree", "remove", "--json"]),
 	"removeWorktreeArgs: bare 'worktree remove --json'",
@@ -1192,115 +841,16 @@ assert(
 	worktreesMod.extractWorktree({ path: "/c", branch: "y" }).path === "/c",
 	"extractWorktree: returns a bare worktree object as-is",
 );
-
-// Pure argv builders — introspection.
+// The deleted tool modules are gone from src entirely (no internal consumer
+// kept them alive — unlike worktrees, whose machinery `isolated` still uses).
+import { existsSync } from "node:fs";
 assert(
-	eq(introspectionMod.apiSnapshotArgs(), ["api", "snapshot"]),
-	"apiSnapshotArgs: 'api snapshot' (no flags)",
+	!existsSync(join(ROOT, "src/tools/layout.ts")),
+	"src/tools/layout.ts deleted (no internal consumer)",
 );
 assert(
-	eq(introspectionMod.sessionListArgs(), ["session", "list", "--json"]),
-	"sessionListArgs: 'session list --json'",
-);
-assert(
-	eq(introspectionMod.sessionStopArgs("pi-herdr"), [
-		"session",
-		"stop",
-		"pi-herdr",
-		"--json",
-	]),
-	"sessionStopArgs: positional NAME + --json",
-);
-assert(
-	eq(introspectionMod.sessionDeleteArgs("stale"), [
-		"session",
-		"delete",
-		"stale",
-		"--json",
-	]),
-	"sessionDeleteArgs: positional NAME + --json",
-);
-// session normalizer tolerates snake_case + missing fields.
-assert(
-	eq(
-		introspectionMod.normalizeSession({
-			name: "default",
-			running: true,
-			default: true,
-			session_dir: "/s",
-			socket_path: "/sock",
-		}),
-		{
-			name: "default",
-			running: true,
-			default: true,
-			sessionDir: "/s",
-			socketPath: "/sock",
-		},
-	),
-	"normalizeSession maps snake_case -> camelCase",
-);
-// summarizeSnapshot reads counts + focused ids from a nested `snapshot` and
-// counts working agents; also tolerates a bare snapshot object.
-assert(
-	eq(
-		introspectionMod.summarizeSnapshot({
-			snapshot: {
-				version: "0.7.5",
-				protocol: 18,
-				focused_pane_id: "w1:pB",
-				focused_tab_id: "w1:t1",
-				focused_workspace_id: "w1",
-				workspaces: [{}],
-				tabs: [{}],
-				panes: [{}, {}],
-				agents: [{ agent_status: "working" }, { agent_status: "idle" }],
-			},
-		}),
-		{
-			version: "0.7.5",
-			protocol: 18,
-			focusedPaneId: "w1:pB",
-			focusedTabId: "w1:t1",
-			focusedWorkspaceId: "w1",
-			workspaceCount: 1,
-			tabCount: 1,
-			paneCount: 2,
-			agentCount: 2,
-			workingCount: 1,
-		},
-	),
-	"summarizeSnapshot: unwraps `snapshot`, counts lists, counts working agents",
-);
-assert(
-	introspectionMod.summarizeSnapshot({ workspaces: [] }).workspaceCount === 0,
-	"summarizeSnapshot: tolerates a bare snapshot object",
-);
-assert(
-	eq(introspectionMod.summarizeSnapshot({}), {
-		version: undefined,
-		protocol: undefined,
-		focusedPaneId: undefined,
-		focusedTabId: undefined,
-		focusedWorkspaceId: undefined,
-		workspaceCount: undefined,
-		tabCount: undefined,
-		paneCount: undefined,
-		agentCount: 0,
-		workingCount: 0,
-	}),
-	"summarizeSnapshot: missing lists -> undefined counts, agent counts default to 0",
-);
-// stop/delete take a single `name`; exposed on the schema.
-const sessionStopTool = tools.find((t) => t.name === "herdr_session_stop");
-const sessionDeleteTool = tools.find((t) => t.name === "herdr_session_delete");
-assert(
-	!!sessionStopTool?.parameters?.properties?.name,
-	"herdr_session_stop exposes a 'name' param",
-);
-assert(
-	!!sessionDeleteTool?.parameters?.properties?.name,
-	"herdr_session_delete exposes a 'name' param",
+	!existsSync(join(ROOT, "src/tools/introspection.ts")),
+	"src/tools/introspection.ts deleted (no internal consumer)",
 );
 
 // ---------------------------------------------------------------------------

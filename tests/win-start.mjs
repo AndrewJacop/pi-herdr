@@ -1,7 +1,8 @@
-// Live Windows test: exercise the single `herdr_start_agent` launch path
-// (pane split + `agent start --kind` — the only path since the v0.6 version
-// floor; the old Windows pane-run fallback is gone) and every other
-// orchestration tool against the pane it creates.
+// Live Windows test: exercise the single launch path (pane split + `agent
+// start --kind` — the only path since the v0.6 version floor) through the
+// KEPT surface (herdr_spawn_agent; herdr_start_agent died with the v0.6
+// surface cut — the spawn engine calls the same startHerdrAgent machinery), and
+// every kept agent tool against the pane it creates.
 //
 // Loads the REAL src via jiti (so it runs the edited code, no publish needed),
 // registers tools through a mock pi, and invokes each tool's execute().
@@ -20,6 +21,9 @@ if (process.platform !== "win32") {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
+const agentsTool = await jiti.import(join(ROOT, "src/tools/agents.ts"), {
+	parent: ROOT,
+});
 const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
 	parent: ROOT,
 });
@@ -29,6 +33,7 @@ const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
 
 const tools = [];
 const mockPi = { registerTool: (d) => tools.push(d), on: () => {} };
+agentsTool.registerAgents(mockPi);
 orch.registerOrchestration(mockPi);
 const tool = (name) => {
 	const t = tools.find((t) => t.name === name);
@@ -49,75 +54,57 @@ const NAME = `win-start-${Date.now()}`;
 let paneId = null;
 
 try {
-	console.log("[win-start] 1. herdr_start_agent (the single launch path)");
-	const start = await tool("herdr_start_agent").execute(
+	console.log("[win-start] 1. herdr_spawn_agent (the single launch path)");
+	const spawn = await tool("herdr_spawn_agent").execute(
 		"t",
-		{ name: NAME, agent: "pi", cwd: ROOT, split: "right" },
+		{
+			name: NAME,
+			prompt: "Reply with exactly one word: pong",
+			cwd: ROOT,
+			wait: 300_000,
+		},
 		NO_SIGNAL,
 	);
 	console.log(
 		"    isError:",
-		start.isError ?? false,
+		spawn.isError ?? false,
 		"text:",
-		start.content?.[0]?.text ?? "",
+		spawn.content?.[0]?.text ?? "",
 	);
-	paneId = start.details?.paneId;
+	paneId = spawn.details?.paneId;
 	check(
-		!start.isError,
-		`start_agent succeeded (the single --kind path works on Windows)`,
+		!spawn.isError,
+		`spawn_agent succeeded (the single --kind path works on Windows)`,
 	);
 	check(!!paneId, `returned paneId (${paneId})`);
+	check(
+		spawn.details?.status === "done" || spawn.details?.status === "blocked",
+		`wait settled terminal (status: ${spawn.details?.status})`,
+	);
 	if (!paneId) throw new Error("no pane id");
 
-	console.log("\n[win-start] 2. herdr_get_agent");
-	const get = await tool("herdr_get_agent").execute(
-		"t",
-		{ target: paneId },
-		NO_SIGNAL,
-	);
-	check(!get.isError, `get_agent ok: ${get.content?.[0]?.text ?? ""}`);
+	console.log("\n[win-start] 2. agent get (machinery — the poll path)");
+	const g = await herdr(["agent", "get", paneId], { timeoutMs: 10_000 });
+	const a = g.ok ? (g.data?.agent ?? g.data) : null;
+	check(g.ok && !!a?.pane_id, `agent get tracks the pane (${a?.agent_status})`);
 
 	console.log("\n[win-start] 3. herdr_list_agents (pane should appear)");
 	const list = await tool("herdr_list_agents").execute("t", {}, NO_SIGNAL);
 	check(!list.isError, "list_agents ok");
 	check(
-		(list.details?.agents ?? []).some((a) => a.paneId === paneId),
+		(list.details?.agents ?? []).some((x) => x.paneId === paneId),
 		`list includes our pane (${paneId})`,
 	);
 
-	console.log("\n[win-start] 4. herdr_rename_agent");
-	const ren = await tool("herdr_rename_agent").execute(
-		"t",
-		{ target: paneId, name: NAME + "-renamed" },
-		NO_SIGNAL,
-	);
-	check(!ren.isError, `rename_agent ok`);
-
-	console.log("\n[win-start] 5. herdr_focus_agent");
-	const focus = await tool("herdr_focus_agent").execute(
-		"t",
-		{ target: paneId },
-		NO_SIGNAL,
-	);
-	check(!focus.isError, `focus_agent ok`);
-
-	console.log("\n[win-start] 6. herdr_wait_agent (boot -> idle)");
-	const boot = await tool("herdr_wait_agent").execute(
-		"t",
-		{ target: paneId, status: "idle", timeoutMs: 90_000 },
-		NO_SIGNAL,
-	);
-	check(!boot.isError, `boot -> idle`);
-
-	console.log("\n[win-start] 7. herdr_send_prompt");
+	console.log("\n[win-start] 4. herdr_send_prompt");
 	const send = await tool("herdr_send_prompt").execute(
 		"t",
-		{ target: paneId, text: "Reply with exactly one word: pong" },
+		{ target: paneId, text: "Reply with exactly one word: ping" },
 		NO_SIGNAL,
 	);
 	check(!send.isError, `send_prompt ok`);
 
-	console.log("\n[win-start] 8. herdr_wait_agent (turn -> idle)");
+	console.log("\n[win-start] 5. herdr_wait_agent (turn -> idle)");
 	const turn = await tool("herdr_wait_agent").execute(
 		"t",
 		{ target: paneId, status: "idle", timeoutMs: 120_000 },
@@ -125,7 +112,7 @@ try {
 	);
 	check(!turn.isError, `turn -> idle`);
 
-	console.log("\n[win-start] 9. herdr_read_agent (expect 'pong')");
+	console.log("\n[win-start] 6. herdr_read_agent (expect 'ping')");
 	await new Promise((r) => setTimeout(r, 1500)); // let the response render before reading
 	const read = await tool("herdr_read_agent").execute(
 		"t",
@@ -143,18 +130,12 @@ try {
 				.join("\n"),
 	);
 	check(!read.isError, `read_agent ok`);
-	check(/pong/i.test(text), `response contains 'pong'`);
+	check(/ping/i.test(text), `response contains 'ping'`);
 } finally {
 	if (paneId) {
-		console.log("\n[win-start] 10. herdr_stop_agent (cleanup)");
-		const stop = await tool("herdr_stop_agent").execute(
-			"t",
-			{ target: paneId },
-			NO_SIGNAL,
-		);
-		check(!stop.isError, `stop_agent ok (closed ${paneId})`);
-		// belt-and-suspenders: ensure the pane is really gone
-		await herdr(["pane", "close", paneId], { timeoutMs: 10_000 }).catch(() => {});
+		console.log("\n[win-start] 7. cleanup (pane close — the kill-all primitive)");
+		const c = await herdr(["pane", "close", paneId], { timeoutMs: 10_000 });
+		check(c.ok, `pane closed (${paneId})`);
 	}
 }
 

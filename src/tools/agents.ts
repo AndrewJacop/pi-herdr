@@ -46,9 +46,9 @@ const DESCRIPTION =
 	"done-or-blocked, `wait: <ms>` returns the current state on expiry. At max_parallel_agents the " +
 	"spawn is accepted queued (no pane until a slot frees; wait waits through the queue). " +
 	"`isolated: true` runs the agent in a fresh auto-created herdr-side git worktree " +
-	"(worktree stays after the agent — remove via herdr_worktree_remove). " +
+	"(worktree stays after the agent — remove it yourself with `herdr worktree remove` or git). " +
 	"Gates, checked in order before any side effect: kill-switch, spawn depth, parallel cap. " +
-	"No layout parameters — panes split right in the current tab (surface: full keeps herdr_start_agent).";
+	"No layout parameters — panes split right in the current tab.";
 
 export function registerAgents(pi: ExtensionAPI): void {
 	pi.registerTool({

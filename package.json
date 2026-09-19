@@ -42,7 +42,7 @@
   ],
   "scripts": {
     "test": "node tests/smoke.mjs && node tests/settings.mjs && node tests/spawn.mjs",
-    "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/pong.mjs && node tests/delegate.mjs && node tests/fallback.mjs && node tests/blocked.mjs && node tests/spawn-live.mjs && node tests/dev-load.mjs",
+    "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/pong.mjs && node tests/fallback.mjs && node tests/blocked.mjs && node tests/spawn-live.mjs && node tests/dev-load.mjs",
   "test:win": "node tests/win-start.mjs",
     "test:multi": "node tests/multi.mjs",
     "test:stress": "node tests/stress.mjs",

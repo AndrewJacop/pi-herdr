@@ -22,18 +22,22 @@ import { execSync } from "node:child_process";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 
-const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
+const agentsTool = await jiti.import(join(ROOT, "src/tools/agents.ts"), {
 	parent: ROOT,
 });
 const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT }))
 	.herdr;
 
+// The spawn tool the way pi would build it (the delegate composite died with
+// the v0.6 surface cut — spawn + wait is its composition).
 const tools = [];
-orch.registerOrchestration({
-	registerTool: (d) => tools.push(d),
-	on: () => {},
-});
-const delegate = tools.find((t) => t.name === "herdr_delegate");
+const mockPi = { registerTool: (d) => tools.push(d), on: () => {} };
+agentsTool.registerAgents(mockPi);
+const spawn = tools.find((t) => t.name === "herdr_spawn_agent");
+if (!spawn) {
+	console.error("herdr_spawn_agent not registered");
+	process.exit(1);
+}
 
 const EXT = join(ROOT, "src", "index.ts");
 const AGENT_ARGS = ["-e", EXT]; // load this extension so spawned pis self-report
@@ -90,8 +94,7 @@ const TASKS = [
 			"Run `node calc.test.js` twice (once to test, once to confirm stable) and report the final stdout.",
 		verify: (cwd) => {
 			const files =
-				existsSync(join(cwd, "calc.js")) &&
-				existsSync(join(cwd, "calc.test.js"));
+				existsSync(join(cwd, "calc.js")) && existsSync(join(cwd, "calc.test.js"));
 			const out = run("node calc.test.js", cwd);
 			return { files, pass: /^PASS\b/m.test(out), out: out.trim() };
 		},
@@ -156,25 +159,24 @@ const t0 = Date.now();
 const settledOrder = [];
 const results = await Promise.all(
 	TASKS.map((t) =>
-		delegate
+		spawn
 			.execute(
 				"stress",
 				{
 					name: `stress-${t.name}`,
-					agent: "pi",
-					agentArgs: AGENT_ARGS,
+					agent: { kind: "pi", agent_args: AGENT_ARGS },
 					cwd: t.cwd,
 					prompt: t.prompt,
-					timeoutMs: TIMEOUT,
-					closeOnSuccess: false,
+					wait: TIMEOUT,
 				},
 				undefined,
 			)
 			.then((r) => {
 				const dur = ((Date.now() - t0) / 1000).toFixed(0);
 				settledOrder.push(t.name);
+				const status = r.details?.status ?? "?";
 				console.log(
-					`  [${t.name}] delegate settled in ${dur}s (isError=${r.isError ?? false})`,
+					`  [${t.name}] spawn settled in ${dur}s (isError=${r.isError ?? false}, status=${status})`,
 				);
 				return { ...t, r };
 			}),
@@ -187,7 +189,7 @@ for (const { name, cwd, r, verify } of results) {
 	console.log(
 		`\n[${name}] (pane ${r.details?.paneId ?? "?"}, isError=${r.isError === true})`,
 	);
-	check(r.isError !== true, `delegate completed cleanly`);
+	check(r.isError !== true, `spawn completed cleanly`);
 	const v = verify(cwd);
 	check(v.files, `produced expected file(s)`);
 	check(v.pass, `artifact output correct (got: ${v.out || "<empty>"})`);

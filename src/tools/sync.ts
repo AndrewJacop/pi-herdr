@@ -1,17 +1,16 @@
-// Tier 3 — Pane-sync tools (the "run a command in a pane" unlock).
-// herdr 0.7.5 separates the pane surface (raw process) from the agent surface.
-// Non-agent commands — `heroku logs --tail`, a test suite, a build — belong on
-// the pane surface: `pane split` / `pane run` / `pane read` / `pane wait-output`
-// / `pane send-keys` / `pane close`. Use case U3 (run server logs, read on
-// demand), which today is only doable via raw `bash → herdr`.
+// Pane-sync quartet — the "run a command in a pane" unlock (kept whole by
+// the v0.6 surface cut, wayfinder ticket 09): `herdr_run_command`,
+// `herdr_read_pane`, `herdr_wait_output`, `herdr_send_keys`. Raw pane control,
+// option-list answers, fallback reads — the surface herdr splits from the
+// agent surface: non-agent panes (`heroku logs --tail`, a test suite, a
+// build) are driven here, addressing an EXISTING pane by id (panes come from
+// the herdr UI, not from the model — pane/tab/workspace CRUD is off the
+// surface).
 //
 // Each tool is a thin wrapper: build argv -> herdr() -> uniform ToolReturn,
-// mirroring orchestration.ts. These target the herdr 0.7.5 pane surface
-// directly (the commands don't exist on <0.7.5); a legacy build surfaces the
-// server-side error. `pane close` is the same primitive `herdr_stop_agent`
-// uses; `pane send-keys` / `agent send-keys` send LOGICAL key names
-// (ctrl+c, esc, Enter) — use `herdr_run_command` / `herdr_send_prompt` to type
-// text.
+// mirroring orchestration.ts. `pane send-keys` / `agent send-keys` send
+// LOGICAL key names (ctrl+c, esc, Enter) — use `herdr_run_command` /
+// `herdr_send_prompt` to type text.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -47,20 +46,6 @@ function okText(text: string, details: unknown): ToolReturn {
 	return { content: [{ type: "text", text }], details };
 }
 
-/** Tolerantly pull a pane id out of a `pane split` / `pane get` result. */
-function extractPaneId(d: unknown): string | undefined {
-	if (!d || typeof d !== "object") return undefined;
-	const o = d as Record<string, unknown>;
-	const pane =
-		o.pane && typeof o.pane === "object"
-			? (o.pane as Record<string, unknown>)
-			: o;
-	for (const k of ["pane_id", "paneId", "id"]) {
-		if (typeof pane[k] === "string") return pane[k] as string;
-	}
-	return undefined;
-}
-
 /**
  * Build the `pane wait-output` argv. Pure (no I/O) so the match/regex/flag
  * branching is unit-testable offline.
@@ -92,62 +77,7 @@ export function waitOutputArgs(
 // ---- registration ----------------------------------------------------------
 
 export function registerPaneSync(pi: ExtensionAPI): void {
-	// 1. split_pane -----------------------------------------------------------
-	pi.registerTool({
-		name: "herdr_split_pane",
-		label: "Split herdr pane",
-		description:
-			"Split the current herdr pane (raw terminal, no agent) and return the new pane id. " +
-			"Pair with herdr_run_command to run a shell command, build, or log stream in it.",
-		promptSnippet: "Split the current herdr pane and get the new pane id",
-		promptGuidelines: [
-			"Use herdr_split_pane to open a raw terminal pane (no agent); drive it with herdr_run_command and read it with herdr_read_pane.",
-		],
-		parameters: Type.Object({
-			direction: Type.Optional(
-				StringEnum(["right", "down"] as const, {
-					description:
-						"Split direction relative to the current pane (default 'right').",
-				}),
-			),
-			cwd: Type.Optional(
-				Type.String({
-					description: "Working directory for the new pane's shell.",
-				}),
-			),
-			env: Type.Optional(
-				Type.Record(Type.String(), Type.String(), {
-					description: "Extra env vars (KEY=VALUE) for the new pane.",
-				}),
-			),
-			focus: Type.Optional(
-				Type.Boolean({ description: "Focus the new pane (default false)." }),
-			),
-		}),
-		async execute(_id, p, signal) {
-			const dir = p.direction ?? "right";
-			const args = ["pane", "split", "--current", "--direction", dir];
-			// Same daemon-cwd trap as agent start: default to this process's cwd.
-			p.cwd ??= process.cwd();
-			if (p.cwd) args.push("--cwd", p.cwd);
-			if (p.env)
-				for (const [k, v] of Object.entries(p.env)) args.push("--env", `${k}=${v}`);
-			if (p.focus) args.push("--focus");
-			const r = await herdr<unknown>(args, { timeoutMs: 20_000, signal });
-			if (!r.ok) return fail(r);
-			const paneId = extractPaneId(r.data);
-			if (!paneId)
-				return fail(
-					err("PANE_GONE", "herdr pane split returned no pane id", r.data),
-				);
-			return okText(`Split pane ${paneId} (${dir}) from the current pane.`, {
-				paneId,
-				direction: dir,
-			});
-		},
-	});
-
-	// 2. run_command ----------------------------------------------------------
+	// 1. run_command ----------------------------------------------------------
 	pi.registerTool({
 		name: "herdr_run_command",
 		label: "Run command in herdr pane",
@@ -156,7 +86,7 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 			"Use for logs, test suites, builds, one-off shell commands.",
 		promptSnippet: "Run a shell command in a herdr pane (text + Enter)",
 		promptGuidelines: [
-			"Use herdr_run_command to run shell commands (logs, tests, builds) in a pane you opened with herdr_split_pane; read the result with herdr_read_pane.",
+			"Use herdr_run_command to run shell commands (logs, tests, builds) in an existing raw pane (by pane id); read the result with herdr_read_pane.",
 		],
 		parameters: Type.Object({
 			paneId: Type.String({ description: "Target pane id (e.g. 'w1:p3')." }),
@@ -179,7 +109,7 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 		},
 	});
 
-	// 3. read_pane ------------------------------------------------------------
+	// 2. read_pane ------------------------------------------------------------
 	pi.registerTool({
 		name: "herdr_read_pane",
 		label: "Read herdr pane output",
@@ -235,7 +165,7 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 		},
 	});
 
-	// 4. wait_output ----------------------------------------------------------
+	// 3. wait_output ----------------------------------------------------------
 	pi.registerTool({
 		name: "herdr_wait_output",
 		label: "Wait for herdr pane output",
@@ -313,7 +243,7 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 		},
 	});
 
-	// 5. send_keys (destructive) ---------------------------------------------
+	// 4. send_keys (destructive) ---------------------------------------------
 	// `pane send-keys` / `agent send-keys` send LOGICAL key names only
 	// (ctrl+c, esc, Enter). To type text use herdr_run_command (raw pane) or
 	// herdr_send_prompt (agent). Labeled ⚠️ because ctrl+c interrupts a process.
@@ -363,35 +293,6 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 					agentScope: Boolean(p.agentScope),
 				},
 			);
-		},
-	});
-
-	// 6. close_pane (destructive) --------------------------------------------
-	// Same `pane close` primitive as herdr_stop_agent, but takes a raw pane id
-	// (this is the pane surface). herdr_stop_agent resolves a name/label first.
-	pi.registerTool({
-		name: "herdr_close_pane",
-		label: "Close herdr pane",
-		description:
-			"⚠️ Destructive. Close a herdr pane by id (terminates whatever runs in it). " +
-			"Same primitive as herdr_stop_agent but takes a raw pane id.",
-		promptSnippet: "Close a herdr pane by id (destructive)",
-		promptGuidelines: [
-			"Use herdr_close_pane to close a raw pane you opened with herdr_split_pane; it terminates the process in it.",
-		],
-		parameters: Type.Object({
-			paneId: Type.String({ description: "Pane id to close." }),
-		}),
-		async execute(_id, p, signal) {
-			const r = await herdr(["pane", "close", p.paneId], {
-				timeoutMs: 10_000,
-				signal,
-			});
-			if (!r.ok) return fail(r);
-			return okText(`Closed pane ${p.paneId}.`, {
-				paneId: p.paneId,
-				closed: true,
-			});
 		},
 	});
 }

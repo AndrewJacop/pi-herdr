@@ -1,8 +1,10 @@
-// Live test: herdr_start_agent / pane-split cwd default.
+// Live test: the launch path's cwd default (startHerdrAgent machinery).
 // Regression: without --cwd, herdr spawns panes in the DAEMON's cwd (home for a
-// restored headless session), not the caller's project. The extension now
-// defaults cwd to process.cwd(). Run this from a cwd DIFFERENT from the herdr
-// daemon's cwd, else the two are indistinguishable:
+// restored headless session), not the caller's project. The machinery now
+// defaults cwd to process.cwd(). (herdr_start_agent died with the v0.6 surface
+// cut; startHerdrAgent is the same code every spawn goes through.)
+// Run this from a cwd DIFFERENT from the herdr daemon's cwd, else the two are
+// indistinguishable:
 //   cd some-temp-dir && node tests/cwd-default.mjs
 // Requires a running herdr session. Closes the pane it creates.
 
@@ -19,17 +21,15 @@ const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
 	parent: ROOT,
 });
 
-const tools = [];
-const mockPi = { registerTool: (d) => tools.push(d), on: () => {} };
-orch.registerOrchestration(mockPi);
-const start = tools.find((t) => t.name === "herdr_start_agent");
-if (!start) throw new Error("herdr_start_agent not registered");
-
 const NAME = `cwd-fix-${Date.now()}`;
-const r = await start.execute("t", { name: NAME, agent: "pi" }, undefined);
-const paneId = r.details?.paneId;
-if (r.isError || !paneId) {
-	console.log("✗ herdr_start_agent failed:", JSON.stringify(r.details));
+const r = await orch.startHerdrAgent({ name: NAME, agent: "pi" });
+const agentObj = r.ok && r.data?.agent ? r.data.agent : {};
+const paneId = agentObj.pane_id ?? agentObj.paneId ?? null;
+if (!r.ok || !paneId) {
+	console.log(
+		"✗ startHerdrAgent failed:",
+		JSON.stringify(r.ok ? r.data : r.error),
+	);
 	process.exit(1);
 }
 

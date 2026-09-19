@@ -1,15 +1,21 @@
 // pi-herdr extension entry point.
 // Registers the herdr tool surface and surfaces fleet status in the pi footer.
+//
+// The v0.6 surface cut (wayfinder ticket 09): ONE surface, nine tools today —
+// herdr_spawn_agent, the legacy result trio (send_prompt / wait_agent /
+// read_agent, retired by get_agent_result in a later ticket), list_agents,
+// and the pane-sync quartet — converging to twelve as later tickets register
+// theirs. Layout, tab/workspace, worktree, and introspection tools are OFF
+// the model surface; their machinery survives internally (spawn's isolated
+// worktrees, the poll loop, kill-all's pane closes). The /subagents command
+// is the only command.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerOrchestration } from "./tools/orchestration.js";
 import { registerAgents } from "./tools/agents.js";
 import { registerPaneSync } from "./tools/sync.js";
-import { registerLayout } from "./tools/layout.js";
-import { registerWorktrees } from "./tools/worktrees.js";
-import { registerIntrospection } from "./tools/introspection.js";
 import { registerSelfReport } from "./selfreport.js";
-import { registerHerdrCommand } from "./menu.js";
+import { registerSubagentsCommand } from "./menu.js";
 import { floorError, formatVersion, MIN_HERDR_VERSION } from "./version.js";
 import { herdr, probeHerdr, refreshHerdrProbe } from "./herdr.js";
 
@@ -21,12 +27,9 @@ export default function (pi: ExtensionAPI): void {
 	registerOrchestration(pi);
 	registerAgents(pi);
 	registerPaneSync(pi);
-	registerLayout(pi);
-	registerWorktrees(pi);
-	registerIntrospection(pi);
 
-	// The /herdr command: settings menu + confirmed Kill-all-agents action.
-	registerHerdrCommand(pi);
+	// The /subagents command: settings menu + confirmed Kill-all-agents action.
+	registerSubagentsCommand(pi);
 
 	// Re-probe herdr on a fresh run (startup) or after /reload so an
 	// install/upgrade is noticed immediately. One clean error per problem:

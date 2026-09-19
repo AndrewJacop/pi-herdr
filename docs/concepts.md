@@ -1,9 +1,7 @@
 # Concepts
 
 Cross-cutting concepts that apply to **every** pi-herdr tool. The per-surface pages
-([orchestration](tools/orchestration.md), [pane-sync](tools/pane-sync.md),
-[panes](tools/panes.md), [tabs](tools/tabs.md), [workspaces](tools/workspaces.md),
-[worktrees](tools/worktrees.md), [introspection](tools/introspection.md)) assume
+([agent tools](tools/orchestration.md) and [pane-sync](tools/pane-sync.md)) assume
 these.
 
 ## The `Result<T>` envelope
@@ -25,9 +23,9 @@ Each tool then maps that `Result<T>` to a pi tool return value (`ToolReturn`):
   herdr payload) goes in `details`.
 - **Failure → `fail(r)`** — `{ content:["Error (CODE): message"], details:{error}, isError:true }`.
   Setting `isError:true` flags the call for pi.
-- **Partial (delegate only) → `partial(message, extra, isError=true)`** — when
-  `herdr_delegate`'s agent times out or never starts, it still returns whatever
-  partial output it could read, with the error in `details`.
+- **Partial (spawn) → an error ToolReturn carrying whatever partial state
+  exists** — when a spawn's turn times out or never starts, the result still
+  names the pane (which exists) so the caller can wait/read it later.
 
 ### The `code` vocabulary
 
@@ -71,68 +69,64 @@ the detected version, e.g. `herdr: 3 agents (1 working) (0.9.0)`, and
 
 The commands the tools use (all current-surface, no legacy fallbacks):
 
-- **`herdr_start_agent`** — `pane split --current --direction …` **then**
-  `agent start <name> --kind <kind> --pane <id> [-- <agentArgs>]` (the pane must
-  already exist). `agent_pane_busy` races the freshly-split shell's prompt, so
-  the start retries briefly.
+- **`herdr_spawn_agent`** (the launch machinery) — `pane split --current
+  --direction right` **then** `agent start <name> --kind <kind> --pane <id>
+  [-- <argv>]` (the pane must already exist). `agent_pane_busy` races the
+  freshly-split shell's prompt, so the start retries briefly; the turn itself
+  is submitted with one atomic `agent prompt <pane> <text> --wait --timeout
+  <ms>` (`agent_prompt_stalled` falls back to the wait/poll dance).
 - **`herdr_send_prompt`** — `agent prompt <target> <text>` (submit) or
-  `pane send-text <target> <text>` (text only).
+  `pane send-text <pane> <text>` (text only).
 - **`herdr_wait_agent`** — `agent wait <target> --until <s> [--until <s>…] --timeout <ms>`
   (`--until` is repeatable, so one call can race `idle`+`done`); `idle`/`done`
   always race a polling `agent get` fallback too.
-- **`herdr_delegate`** — one atomic `agent prompt <target> <text> --wait --timeout <ms>`
-  submits and waits for the turn to settle (`agent_prompt_stalled` falls back to
-  the wait/poll dance).
 
 ## Pane surface vs agent surface
 
-herdr 0.7.5 separates two surfaces:
+herdr separates two surfaces:
 
-- **Agent surface** — AI agent panes. Commands: `agent start` / `prompt` / `get` /
-  `read` / `list` / `rename` / `focus` / `explain` / `wait` / `send-keys`. Used by
-  the [orchestration](tools/orchestration.md) tools (Tier 1).
+- **Agent surface** — AI agent panes. Commands the kept tools use: `agent
+  start` / `prompt` / `get` / `read` / `list` / `wait` / `send-keys`. Used by
+  the [agent tools](tools/orchestration.md) and the spawn engine.
 - **Pane surface** — raw terminal processes (logs, builds, test suites, shells).
-  Commands: `pane split` / `run` / `read` / `wait-output` / `send-keys` / `close` /
-  `list` / `get` / `resize` / `zoom` / `move` / `swap`, plus `tab …`, `workspace …`,
-  `worktree …`, `api snapshot`, `session …`. Used by the [pane-sync](tools/pane-sync.md),
-  [panes](tools/panes.md), [tabs](tools/tabs.md), [workspaces](tools/workspaces.md),
-  [worktrees](tools/worktrees.md), and [introspection](tools/introspection.md) tools.
+  Commands the kept tools use: `pane run` / `read` / `wait-output` /
+  `send-keys`. The rest of the pane/tab/workspace/worktree/session surface
+  exists in herdr but is **off the model surface** (the v0.6 cut) — it stays
+  the human's surface in the herdr UI, and a thin slice of it survives
+  internally as machinery (worktree create/remove for `isolated`, pane close
+  for kill-all).
 
 `herdr_send_keys` is the one tool that spans both: `agentScope:false` (default) →
 `pane send-keys`; `agentScope:true` → `agent send-keys`.
 
 ## Targets: pane id vs name
 
-A tool's `target` (or `paneId` / `tabId` / `workspaceId`) identifies a pane. For
-agent-surface tools, `target` is flexible:
+A tool's `target` (or `paneId`) identifies a pane. For agent-surface tools,
+`target` is flexible:
 
 - a **pane id**, e.g. `w1:p3`;
-- an **agent name** you set via `herdr_start_agent` / `herdr_rename_agent` / a
-  delegate's `name`;
+- an **agent name** — the handle `herdr_spawn_agent` returned (`name`);
 - a **label**.
 
-Orchestration tools resolve a flexible `target` to a concrete pane id with `agent get`
-before acting (e.g. `herdr_send_prompt`, `herdr_stop_agent`). Read-only tools
-(`herdr_read_agent`, `herdr_get_agent`) pass `target` straight to herdr, which resolves
-it itself.
+`herdr_send_prompt` resolves a flexible `target` to a concrete pane id with
+`agent get` before acting. Read-only tools (`herdr_read_agent`,
+`herdr_wait_agent`) pass `target` straight to herdr, which resolves it itself.
 
 **Names are lowercase `[a-z0-9-_]`.** herdr rejects uppercase characters in pane
-names, so always name agents in lowercase. A name set via `herdr_start_agent` **is**
-usable as a `target` by later calls.
+names, so always name agents in lowercase. A name `herdr_spawn_agent` returns
+**is** usable as a `target` by later calls.
 
 ## Destructive tools ⚠️
 
 Tools that close/terminate/kill/delete carry a ⚠️ marker in their description (the
-CONTRIBUTING convention) and in this wiki. There are **eight**:
+CONTRIBUTING convention) and in this wiki. On the v0.6 surface there is **one**:
 
-- `herdr_stop_agent` — closes an agent pane (terminates the agent).
-- `herdr_close_pane` — closes a raw pane by id (terminates whatever runs in it).
-- `herdr_close_tab` — closes a tab (terminates every pane in it).
-- `herdr_close_workspace` — closes a workspace (terminates every tab and pane in it).
-- `herdr_send_keys` — sends logical key presses; `ctrl+c` interrupts a running process.
-- `herdr_worktree_remove` — deletes the worktree's checkout directory on disk.
-- `herdr_session_stop` — tears down a running named session's server + all its panes/tabs.
-- `herdr_session_delete` — removes a stopped session's on-disk directory (permanent).
+- `herdr_send_keys` — sends logical key presses; `ctrl+c` interrupts a running
+  process.
+
+Terminating agents is deliberately a **human** action: the confirmed **Kill all
+agents** item in `/subagents config` (which wraps `pane close` for every running
+agent), or closing the pane yourself in the herdr UI.
 
 ## Timeouts & abort
 
@@ -142,12 +136,12 @@ honors an `AbortSignal` (the pi tool `signal`). On timeout or abort the child pr
 is killed and the call resolves `{ ok:false, error:{ code:"TIMEOUT", … } }` rather
 than hanging — "Timeouts everywhere" per [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 Several tools also expose their own `timeoutMs` parameter (`herdr_wait_agent`,
-`herdr_wait_output`, `herdr_delegate`).
+`herdr_wait_output`).
 
 ## Agent kinds
 
-`agent` (on `herdr_start_agent` / `herdr_delegate`) is a **free string**, default
-`"pi"`. It is validated at execute time against the **live** kind list
+`kind` (in a spawn definition) is a **free string**, default `"pi"` (the
+`default_kind` setting). It is validated at execute time against the **live** kind list
 emitted by `herdr agent` (the trailing `kinds: a|b|c` line), which is
 [cached per session](../src/config.ts) with a hardcoded
 [`AGENT_KINDS_FALLBACK`](../src/config.ts) (~21 kinds: `pi`, `claude`, `codex`,
@@ -157,6 +151,6 @@ emitted by `herdr agent` (the trailing `kinds: a|b|c` line), which is
 `VALIDATION_ERROR` **listing the kinds your herdr supports**.
 
 The old `agent:"custom"` + raw `argv` launch surface is gone. To load a **local
-extension** instead of the installed one, pass `agentArgs` (e.g.
-`["-ne","-e","./src/index.ts"]`) — they follow `--` in `agent start`, and herdr
-resolves the kind to its CLI on its own side.
+extension** instead of the installed one, pass `agent_args` on the spawn
+definition (e.g. `["-ne","-e","./src/index.ts"]`) — they follow `--` in
+`agent start`, and herdr resolves the kind to its CLI on its own side.

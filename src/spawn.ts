@@ -17,8 +17,9 @@
 //   - children carry PI_HERDR_SPAWN_DEPTH (incremented) and
 //     PI_HERDR_ORCHESTRATOR_PANE (ticket 11: the spawning pane's
 //     HERDR_PANE_ID — set only when this session itself runs in a pane).
-//   - no layout params (charter item 2): split/tab/workspace stay behind
-//     `surface: "full"` (herdr_start_agent).
+//   - no layout params (charter item 2): panes split right in the current tab;
+//     layout/tab/worktree tools are off the model surface entirely (v0.6
+//     surface cut) — the worktree MACHINERY stays for `isolated`.
 //
 // Ticket 11's pi-only scope ruling: `kind` is an unopinionated passthrough
 // onto herdr's native `agent start --kind` axis. A non-pi child is text in a
@@ -828,7 +829,7 @@ export async function spawnAgent(
 	if (params.isolated && params.cwd) {
 		return spawnErr(
 			"VALIDATION_ERROR",
-			"`isolated` and `cwd` are mutually exclusive: isolated spawns into a fresh auto-created herdr worktree. For full control compose herdr_worktree_create + cwd.",
+			"`isolated` and `cwd` are mutually exclusive: isolated spawns into a fresh auto-created herdr worktree.",
 		);
 	}
 	const merged = mergeSpawnSpec(
@@ -958,7 +959,7 @@ export async function spawnAgent(
 	// 9. wait vocabulary. The DEFAULT (no wait) blocks through pane start +
 	// boot gate + prompt submission, then returns — "returns immediately" in
 	// wayfinder ticket 01 decision 6 contrasts with waiting for the TURN, not
-	// with the submission handoff (same profile as herdr_delegate; returning
+	// with the submission handoff (returning
 	// before the prompt is in would leave the caller unable to trust the task
 	// ever started). true = done-or-blocked; ms = current state on expiry
 	// (queued records wait through the queue — handled in 8a).

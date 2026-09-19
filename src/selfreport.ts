@@ -4,7 +4,7 @@
 // idle -> working but sometimes MISSES working -> idle, leaving the pane stuck
 // on "working" after the agent finishes. By having pi push its own state via
 // `pane report-agent`, herdr's status becomes reliable for every observer
-// (including herdr_wait_agent / herdr_delegate on the orchestrator side).
+// (including herdr_wait_agent on the orchestrator side).
 //
 // Active only when running inside a herdr pane (HERDR_PANE_ID + HERDR_ENV set),
 // so it's a safe no-op elsewhere. Disable with PI_HERDR_NO_SELF_REPORT=1.
@@ -15,9 +15,9 @@ import { herdr } from "./herdr.js";
 const PANE_ID = process.env.HERDR_PANE_ID;
 const AGENT_LABEL = process.env.PI_HERDR_AGENT_LABEL ?? "pi";
 const ENABLED =
-	!!PANE_ID &&
-	process.env.HERDR_ENV === "1" &&
-	!process.env.PI_HERDR_NO_SELF_REPORT;
+ !!PANE_ID &&
+ process.env.HERDR_ENV === "1" &&
+ !process.env.PI_HERDR_NO_SELF_REPORT;
 
 const SOURCE = "pi-herdr";
 
@@ -35,7 +35,7 @@ export const ASK_USER_BLOCKED_EVENT = "rpiv:ask-user:blocked" as const;
  * resumes (`{ active: boolean, label: string }`), and — same payload shape —
  * by `pi-subagents` for attention/blocked states. pi-herdr is the bridge that
  * turns this in-process signal into a herdr `pane report-agent --state blocked`
- * so every observer (herdr_wait_agent / herdr_delegate) sees it: nothing else in
+ * so every observer (herdr_wait_agent) sees it: nothing else in
  * JS consumes it, and herdr's native TUI detection can miss it on some builds.
  */
 export const HERDR_BLOCKED_EVENT = "herdr:blocked" as const;
@@ -46,29 +46,29 @@ export const HERDR_BLOCKED_EVENT = "herdr:blocked" as const;
  * pi-cursor-oauth or standalone cursor-agent. Keep in sync with the producer.
  */
 export const CURSOR_ASK_QUESTION_BLOCKED_EVENT =
-	"pi-cursor-sdk:ask-question:blocked" as const;
+ "pi-cursor-sdk:ask-question:blocked" as const;
 
 // Start from the clock so the seq is monotonically increasing across pi
 // restarts within the same pane (a fresh low seq could be ignored as stale).
 let seq = Date.now();
 
 function report(state: "idle" | "working" | "blocked" | "unknown"): void {
-	if (!ENABLED || !PANE_ID) return;
-	const args = [
-		"pane",
-		"report-agent",
-		PANE_ID,
-		"--source",
-		SOURCE,
-		"--agent",
-		AGENT_LABEL,
-		"--state",
-		state,
-		"--seq",
-		String(++seq),
-	];
-	// Best-effort, fire-and-forget. Must never block or break the agent lifecycle.
-	herdr(args, { timeoutMs: 5_000 }).catch(() => {});
+ if (!ENABLED || !PANE_ID) return;
+ const args = [
+  "pane",
+  "report-agent",
+  PANE_ID,
+  "--source",
+  SOURCE,
+  "--agent",
+  AGENT_LABEL,
+  "--state",
+  state,
+  "--seq",
+  String(++seq),
+ ];
+ // Best-effort, fire-and-forget. Must never block or break the agent lifecycle.
+ herdr(args, { timeoutMs: 5_000 }).catch(() => {});
 }
 
 /**
@@ -79,11 +79,11 @@ function report(state: "idle" | "working" | "blocked" | "unknown"): void {
  * Unknown payloads return `null` (ignore).
  */
 export function mapAskUserBlockedToState(
-	data: unknown,
+ data: unknown,
 ): "blocked" | "working" | null {
-	if (typeof data !== "object" || data === null) return null;
-	if (typeof (data as { active?: unknown }).active !== "boolean") return null;
-	return (data as { active: boolean }).active ? "blocked" : "working";
+ if (typeof data !== "object" || data === null) return null;
+ if (typeof (data as { active?: unknown }).active !== "boolean") return null;
+ return (data as { active: boolean }).active ? "blocked" : "working";
 }
 
 /**
@@ -107,23 +107,23 @@ export function mapAskUserBlockedToState(
  * flicker. `agent_settled` is the definitive idle signal.
  */
 export function registerSelfReport(pi: ExtensionAPI): void {
-	if (!ENABLED) return;
-	pi.on("session_start", () => report("idle"));
-	pi.on("agent_start", () => report("working"));
-	pi.on("agent_settled", () => report("idle"));
-	pi.on("session_shutdown", () => report("idle"));
+ if (!ENABLED) return;
+ pi.on("session_start", () => report("idle"));
+ pi.on("agent_start", () => report("working"));
+ pi.on("agent_settled", () => report("idle"));
+ pi.on("session_shutdown", () => report("idle"));
 
-	const onAskBlocked = (data: unknown): void => {
-		const state = mapAskUserBlockedToState(data);
-		if (state) report(state);
-	};
-	// Current pi-ask-user (v0.14+) ask_user wait + pi-subagents attention. This is
-	// the channel producers actually emit today; nothing else bridges it to herdr.
-	pi.events.on(HERDR_BLOCKED_EVENT, onAskBlocked);
-	// Legacy ask-user wait (TUI + RPC) — older rpiv-ask-user-question builds.
-	pi.events.on(ASK_USER_BLOCKED_EVENT, onAskBlocked);
-	// cursor_ask_question wait — emitted by pi-cursor-sdk.
-	pi.events.on(CURSOR_ASK_QUESTION_BLOCKED_EVENT, onAskBlocked);
+ const onAskBlocked = (data: unknown): void => {
+  const state = mapAskUserBlockedToState(data);
+  if (state) report(state);
+ };
+ // Current pi-ask-user (v0.14+) ask_user wait + pi-subagents attention. This is
+ // the channel producers actually emit today; nothing else bridges it to herdr.
+ pi.events.on(HERDR_BLOCKED_EVENT, onAskBlocked);
+ // Legacy ask-user wait (TUI + RPC) — older rpiv-ask-user-question builds.
+ pi.events.on(ASK_USER_BLOCKED_EVENT, onAskBlocked);
+ // cursor_ask_question wait — emitted by pi-cursor-sdk.
+ pi.events.on(CURSOR_ASK_QUESTION_BLOCKED_EVENT, onAskBlocked);
 }
 
 /** Whether self-report is active in this process (for status/diagnostics). */

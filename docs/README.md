@@ -2,11 +2,11 @@
 
 A [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding-agent
 extension that turns pi into an **orchestrator over a fleet of visible AI agent
-panes** running in [herdr](https://herdr.dev). It exposes pi's model a set of tools
-that spawn, drive, wait for, and harvest other AI agents (`pi`, `claude`, `codex`,
-`gemini`, …) each running in its own terminal pane — and also manage the full herdr
-layout (panes, tabs, workspaces, git worktrees, named sessions). This is the
-user-facing reference for **all 43 tools** the extension registers.
+panes** running in [herdr](https://herdr.dev). It exposes pi's model a small,
+deliberate tool surface that spawns background agents (`pi`, `claude`, `codex`,
+`gemini`, …) each running in its own terminal pane — plus a quartet of raw-pane
+tools for logs, builds, and test suites. This is the user-facing reference for
+the **9 tools** the extension registers (12 once the v0.6 tickets land).
 
 > **Not bundled here:** herdr itself. Install and run it from <https://herdr.dev>.
 
@@ -33,81 +33,78 @@ running. For local dev: `pi install ./` from a clone, or `pi -ne -e ./src/index.
 
 ## Quickstart
 
-The core pattern is **spawn → list → drive → wait → harvest**. The simplest form is a
-single one-shot call:
+The core pattern is **spawn → wait → read** (and **steer** any time):
 
-> Ask pi: *"Use `herdr_delegate` to spawn a fresh pi and ask it to summarize
-> README.md in 3 bullets, then return its answer."*
+> Ask pi: *"Spawn a background agent to summarize README.md in 3 bullets and
+> give me the result."*
 
 ```text
-herdr_delegate
-  prompt    = "Summarize README.md in 3 bullets."
-  agent     = "pi"        # default
-  timeoutMs = 120000      # default
+herdr_spawn_agent
+  prompt = "Summarize README.md in 3 bullets."
+  wait   = 180000       # optional: block until done (ms) — omit for background
 ```
 
-`herdr_delegate` spawns a new pane, sends the prompt, waits for the agent to finish,
-reads its reply, and returns it (leaving the pane alive unless `closeOnSuccess: true`).
+`herdr_spawn_agent` splits a pane, launches the agent, submits the task prompt,
+and returns `{name, paneId, status}` — address the agent by `name` afterwards.
+With `wait` omitted you keep working; when you want the result:
+`herdr_wait_agent(name, idle)` then `herdr_read_agent(name)`.
 
-For step-by-step control instead of one-shot delegation:
+Step by step:
 
-1. `herdr_start_agent` — launch a named agent pane.
-2. `herdr_list_agents` / `herdr_get_agent` — see what's running.
-3. `herdr_send_prompt` — drive it (submits with Enter by default).
-4. `herdr_wait_agent` — block until `idle` / `done`.
+1. `herdr_spawn_agent` — launch a named agent pane with its task (background by default).
+2. `herdr_list_agents` — see what's running and each agent's status.
+3. `herdr_send_prompt` — steer an agent (follow-ups, corrections, answers).
+4. `herdr_wait_agent` — block until `idle` / `blocked`.
 5. `herdr_read_agent` — harvest the output.
 
+Raw panes (a dev server, `heroku logs --tail`, a test suite): `herdr_run_command`
+into an existing pane by id, `herdr_read_pane` / `herdr_wait_output` to watch it,
+`herdr_send_keys` for key presses (incl. answering option-list questions).
+
 See the [examples in the project README](../README.md#examples) for fan-out,
-heterogeneous review, and long-running tasks.
+heterogeneous review, and the settings menu (`/subagents config`).
 
-## Tool catalog
+## The tool surface
 
-Every tool that targets an existing pane accepts `target` as a **pane id**
-(`w1:p3`), **agent name**, or **label**. 43 tools across five tiers:
+| Tool | What it does |
+|------|--------------|
+| `herdr_spawn_agent` | The spawn entry point: pane + agent + task prompt in one call. Registry `type` or inline definition; gates (kill-switch, depth, parallel cap); `isolated` worktrees; queue over the cap. |
+| `herdr_send_prompt` | Send/submit a prompt to an agent pane — steer it. |
+| `herdr_wait_agent` | Block until a status (`idle`/`working`/`blocked`/`done`). |
+| `herdr_read_agent` | Read an agent pane's output text. |
+| `herdr_list_agents` | List running agents + statuses — the fleet's single introspection tool. |
+| `herdr_run_command` | Run a shell command in a raw pane (text + Enter). |
+| `herdr_read_pane` | Read a raw pane's terminal output. |
+| `herdr_wait_output` | Block until a pane emits matching output (marker wait). |
+| `herdr_send_keys` ⚠️ | Send logical key presses (`ctrl+c`, `esc`, `Enter`) — option-list answers, interrupts. |
 
-| Tier | Surface | Tools | Count | Reference |
-|------|---------|-------|------:|-----------|
-| Tier 1 | Orchestration (spawn & drive agents) | start/prompt/read/wait/list/get/stop/rename/focus/explain agents + `delegate` | 11 | [tools/orchestration.md](tools/orchestration.md) |
-| Tier 3 | Pane sync (raw terminal panes) | split / run / read / wait-output / send-keys / close | 6 | [tools/pane-sync.md](tools/pane-sync.md) |
-| Tier 2 | Panes | list / get / resize / zoom / move / swap | 6 | [tools/panes.md](tools/panes.md) |
-| Tier 2 | Tabs | list / create / get / focus / rename / close | 6 | [tools/tabs.md](tools/tabs.md) |
-| Tier 2 | Workspaces | list / create / get / focus / rename / close | 6 | [tools/workspaces.md](tools/workspaces.md) |
-| Tier 4 | Git worktrees | create / open / list / remove | 4 | [tools/worktrees.md](tools/worktrees.md) |
-| Tier 5 | Introspection | api snapshot + session list/stop/delete | 4 | [tools/introspection.md](tools/introspection.md) |
-| | | **Total** | **43** | |
+Per-surface pages: [agent tools](tools/orchestration.md) ·
+[pane-sync](tools/pane-sync.md) · [concepts](concepts.md).
 
-> Pane create/destroy lives in Tier 3 ([pane-sync](tools/pane-sync.md)):
-> `herdr_split_pane` and `herdr_close_pane`. The Tier 2 panes page covers the
-> remaining pane operations.
+> **Where did the other 34 tools go?** The v0.6 surface cut (wayfinder ticket
+> 09): one surface, twelve tools eventually — layout, tab/workspace CRUD,
+> worktree CRUD, introspection beyond `list_agents`, and the `herdr_delegate`
+> composite are off the model surface. The machinery survives internally
+> (`isolated` worktrees, the poll loop, kill-all's pane closes); the herdr UI
+> remains the human's surface for layout. See
+> [Upgrading in the project README](../README.md#upgrading-v05--v06).
 
-## Conventions in 30 seconds
+## Settings — `/subagents config`
 
-- **Uniform `Result<T>` envelope.** Every tool normalizes herdr output into
-  `{ok:true,data}` or `{ok:false,error:{code,message,details?}}`, then maps it to a
-  pi tool return. See [concepts › The `Result<T>` envelope](concepts.md#the-resultt-envelope).
-- **Version floor: herdr ≥ 0.9.0 (hard).** One launch path on every OS
-  (`agent start --kind`); below the floor every call refuses with one clean
-  `HERDR_TOO_OLD`. See
-  [concepts › Version floor](concepts.md#version-floor-herdr--090).
-- **Pane surface vs agent surface.** herdr 0.7.5 splits raw-process panes from AI
-  agent panes; each tool targets one. See [concepts › Pane surface vs agent surface](concepts.md#pane-surface-vs-agent-surface).
-- **Targeting.** Agents are targeted by **pane id** (`w1:p3`) or **name/label**
-  (resolved via `agent get`). **Names are lowercase `[a-z0-9-_]`** — herdr rejects
-  uppercase. See [concepts › Targets: pane id vs name](concepts.md#targets-pane-id-vs-name).
-- **⚠️ destructive tools.** Anything that closes/terminates/kills/deletes is marked
-  ⚠️ in its description and listed in [concepts › Destructive tools](concepts.md#destructive-tools-).
-- **Timeouts & abort everywhere.** Every blocking herdr call takes a `timeoutMs`
-  and honors an `AbortSignal`, resolving `TIMEOUT` instead of hanging. See
-  [concepts › Timeouts & abort](concepts.md#timeouts--abort).
-- **Agent kinds are live-validated.** `agent` is a free string validated against the
-  live `herdr agent` kind list (cached per session, hardcoded fallback), else
-  `VALIDATION_ERROR`. See [concepts › Agent kinds](concepts.md#agent-kinds).
+The `/subagents` command (bare, or `/subagents config`) opens the settings
+menu: one flat list of `key = value (source: …)` rows plus a confirmed
+**Kill all agents** action. Settings deep-merge from
+`~/.pi/agent/herdr.json` (global) and `<project>/.pi/herdr.json` (project wins
+per key — and per agent name for `models.agents`). Full table in the
+[project README](../README.md#settings-subagents-config).
 
-For testing and extending the extension, see [development.md](development.md).
+## Development
 
-## Status
+```bash
+npm install
+npm test            # offline suites (smoke + settings + spawn) — no herdr required
+npm run typecheck   # tsc --noEmit
+npm run test:live   # requires a running herdr session + a working model key
+```
 
-- Requires **herdr ≥ 0.9.0** (hard floor — one launch path on every OS; older
-  herdr refuses with `HERDR_TOO_OLD`).
-- Extension **v0.2.5** (package `@andrewjacop/pi-herdr`).
-- Offline smoke gate: **387 checks, all pass** (`npm test`; see [development.md](development.md)).
+See [development](development.md) and the project README's Development section.

@@ -19,21 +19,20 @@ import { execSync } from "node:child_process";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 
-const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
+const agentsTool = await jiti.import(join(ROOT, "src/tools/agents.ts"), {
 	parent: ROOT,
 });
 const herdr = (await jiti.import(join(ROOT, "src/herdr.ts"), { parent: ROOT }))
 	.herdr;
 
-// Build the delegate tool the same way pi would.
+// Build the spawn tool the same way pi would (the delegate composite died
+// with the v0.6 surface cut — spawn + wait is its composition).
 const tools = [];
-orch.registerOrchestration({
-	registerTool: (d) => tools.push(d),
-	on: () => {},
-});
-const delegate = tools.find((t) => t.name === "herdr_delegate");
-if (!delegate) {
-	console.error("herdr_delegate not registered");
+const mockPi = { registerTool: (d) => tools.push(d), on: () => {} };
+agentsTool.registerAgents(mockPi);
+const spawn = tools.find((t) => t.name === "herdr_spawn_agent");
+if (!spawn) {
+	console.error("herdr_spawn_agent not registered");
 	process.exit(1);
 }
 
@@ -114,9 +113,7 @@ const TASKS = [
 			return {
 				js,
 				pass:
-					lines.length === 15 &&
-					lines[2] === "Fizz" &&
-					lines[14] === "FizzBuzz",
+					lines.length === 15 && lines[2] === "Fizz" && lines[14] === "FizzBuzz",
 				out: lines.slice(0, 3).join("|") + " ... " + lines.slice(-2).join("|"),
 			};
 		},
@@ -137,24 +134,23 @@ console.log(`\nLaunching ${TASKS.length} agents in parallel...`);
 const t0 = Date.now();
 const results = await Promise.all(
 	TASKS.map((t) =>
-		delegate
+		spawn
 			.execute(
 				"multi",
 				{
 					name: `multi-${t.name}`,
-					agent: "pi",
-					agentArgs: AGENT_ARGS,
+					agent: { kind: "pi", agent_args: AGENT_ARGS },
 					cwd: t.cwd,
 					prompt: t.prompt,
-					timeoutMs: TIMEOUT,
-					closeOnSuccess: false,
+					wait: TIMEOUT,
 				},
 				undefined,
 			)
 			.then((r) => {
 				const dur = ((Date.now() - t0) / 1000).toFixed(0);
+				const status = r.details?.status ?? "?";
 				console.log(
-					`  [${t.name}] delegate settled in ${dur}s (isError=${r.isError ?? false})`,
+					`  [${t.name}] spawn settled in ${dur}s (isError=${r.isError ?? false}, status=${status})`,
 				);
 				return { ...t, r };
 			}),
@@ -167,7 +163,7 @@ for (const { name, cwd, r, verify } of results) {
 	console.log(`\n[${name}]`);
 	const paneId = r.details?.paneId;
 	const isError = r.isError === true;
-	check(!isError, `delegate completed without error (pane ${paneId ?? "?"})`);
+	check(!isError, `spawn completed without error (pane ${paneId ?? "?"})`);
 	const v = verify(cwd);
 	check(v.js, `produced the expected file(s) in ${cwd}`);
 	check(v.pass, `artifact runs correctly (output: ${v.out || "<empty>"})`);

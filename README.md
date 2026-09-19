@@ -7,10 +7,17 @@
 A [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) coding-agent
 extension that turns pi into an **orchestrator over a fleet of visible AI agent
 panes** running in [herdr](https://herdr.dev). Spawn another `pi`, `claude`,
-`codex`, or `opencode` in its own terminal pane, send it a prompt, wait for it to
-finish, and harvest its response — all from your pi session. Each spawned agent is
-an independent CLI process you can watch, attach to, and intervene in while pi
-coordinates them.
+`codex`, or `opencode` in its own terminal pane with a task, steer it while it
+works, wait for it to finish, and harvest its response — all from your pi
+session. Each spawned agent is an independent CLI process you can watch, attach
+to, and intervene in while pi coordinates them.
+
+The v0.6 surface is deliberately small: **one surface, nine tools today**
+(spawn, the result trio, list, and the pane quartet), converging to **twelve**
+as the remaining v0.6 tickets land (`get_agent_result`, `message_agent`,
+`interrupt`/`resume`, `run_workflow`). Everything else — layout, tab/workspace
+CRUD, worktrees, fleet introspection — is machinery you never have to switch
+to: the herdr UI stays the human's surface for that.
 
 > **Complementary to [`pi-subagents`](https://www.npmjs.com/package/pi-subagents):**
 > `pi-subagents` runs children **in-process** (fast, shared context). `pi-herdr`
@@ -98,10 +105,9 @@ server. If herdr is missing or not running, every tool returns a clean
 > ```
 >
 > herdr attaches to a *persistent* session, so you must stop the launchd server first
-> — otherwise `herdr` just reattaches to the minimal-PATH one.
->
-> If you must keep herdr in `brew services`, spawn agents with an absolute path **and**
-> inject `PATH` via the `env` field of `herdr_start_agent` / `herdr_delegate`.
+> — otherwise `herdr` just reattaches to the minimal-PATH one. There is no per-spawn
+> env injection on the v0.6 surface, so a minimal-PATH server can't be worked around
+> from a spawn — run herdr from your terminal.
 
 ### 3. This extension
 
@@ -148,7 +154,7 @@ pi
 Then just ask pi in natural language:
 
 ```
-Use herdr_delegate to spawn a fresh pi agent and ask it to summarize README.md in 3 bullets.
+Spawn a background agent to summarize README.md in 3 bullets, wait for it, and give me the result.
 ```
 
 You'll see a new pane appear in herdr, the spawned agent work, and pi return its
@@ -158,99 +164,113 @@ answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents 
 
 ## Examples
 
-### Example 1 — One-shot delegation (simplest)
+### Example 1 — One-shot task (the core pattern)
 
-Hand a self-contained task to a fresh agent and get the answer back in one call.
+Hand a self-contained task to a fresh agent and collect the result.
 
-> *Prompt:* `Use herdr_delegate to spawn a fresh pi and ask it: "what are 3 ways to reverse a list in Python?" Return its answer.`
+> 1. `Spawn an agent named "summ" with the task "Summarize README.md in 3 bullets" (herdr_spawn_agent).`
+> 2. `Wait for "summ" to finish (herdr_wait_agent, idle).`
+> 3. `Read "summ"'s output and give me the summary (herdr_read_agent).`
 
-**What happens:** `herdr_delegate` spawns a new pi pane, sends the prompt, waits for
-the agent to finish, reads its reply, and returns it. The spawned pane is left alive
-for follow-ups (pass `closeOnSuccess: true` to close it).
+**What happens:** `herdr_spawn_agent` splits a pane, launches the agent, submits
+the task, and returns a handle. The pane stays alive afterwards — you can send
+follow-ups or just look at it in herdr. Passing `wait: 180000` (ms) folds steps
+2–3 timing into the spawn call: it blocks until done-or-blocked and reports the
+terminal status.
 
-### Example 2 — Drive a pane step by step (watch a long task)
+### Example 2 — Parallel fan-out (do N things at once)
 
-When you want to watch an agent work and control it directly:
+Background spawns run concurrently, so you can fan work out:
 
-> 1. `Use herdr_start_agent to launch a pi agent named "helper" in this project.`
-> 2. `Use herdr_send_prompt to send "refactor utils.ts and run the tests" to "helper", with submit=true.`
-> 3. `Use herdr_wait_agent to wait for "helper" to reach idle (timeoutMs 300000).`
-> 4. `Use herdr_read_agent to read the last 80 lines from "helper" and summarize what it changed.`
+> *Prompt:* `In parallel, spawn three background agents — one to write tests for auth.ts, one for payment.ts, one for user.ts (herdr_spawn_agent ×3). Wait for all three (herdr_list_agents + herdr_wait_agent), then give me a combined summary and any failures.`
 
-**What happens:** You can switch to the `helper` pane in herdr at any time to watch
-or even type into it. pi waits independently via the state machine.
+**What happens:** Three panes spawn at once, each works its task concurrently.
+At `max_parallel_agents` the extra spawns are accepted **queued** — they start
+when a slot frees. Pair with `isolated: true` to give each agent its own
+auto-created git worktree (fresh checkout, no interference).
 
-### Example 3 — Parallel fan-out (do N things at once)
+### Example 3 — Heterogeneous review (a different agent reviews pi's work)
 
-`herdr_delegate` calls run concurrently, so you can fan work out:
-
-> *Prompt:* `In parallel, use herdr_delegate three times to spawn three pi agents — one to write tests for auth.ts, one for payment.ts, one for user.ts. Wait for all three, then give me a combined summary and any failures.`
-
-**What happens:** Three panes spawn at once, each works its task concurrently, pi
-collects all three results. (Pair with git worktrees — coming in a later tier — to
-give each its own checkout.)
-
-### Example 4 — Heterogeneous review (a different agent reviews pi's work)
-
-> *Prompt:* `Use herdr_start_agent to launch a claude agent, then herdr_send_prompt it "review the diff in git diff main" and wait for its verdict. (agent: "claude")`
+> *Prompt:* `Spawn a claude agent (inline definition, kind: "claude") with the task "review the diff in git diff main" and wait for its verdict.`
 
 **What happens:** A `claude` pane boots, receives the diff, and returns a review.
 Because each agent is a real CLI in its own pane, you can mix models/vendors freely.
+
+### Example 4 — Steering and questions (stay in control)
+
+While an agent works you can steer it, and if it asks a question you can answer:
+
+> *Prompt:* `Send "focus only on the auth module" to agent "tests" (herdr_send_prompt), then keep waiting.`
+
+If an agent blocks on an ask-user overlay, `herdr_wait_agent(target, blocked)`
+reports it; answer **freeform** questions with `herdr_send_prompt` and
+**option-list** questions with `herdr_send_keys` (typed text never reaches an
+option list — bare `Enter` picks option 1, `down` then `Enter` picks option 2).
 
 > ⚠️ **Interrupting a stuck pane:** to send Ctrl-C to a runaway agent, use
 > `herdr_send_keys` with `["ctrl+c"]` (set `agentScope: true` to target an agent
 > rather than the raw pane).
 
+### Example 5 — Raw panes (logs, servers, builds)
+
+The pane quartet drives *non-agent* panes you have open in herdr:
+
+> *Prompt:* `In pane w1:p3, run "npm run dev" (herdr_run_command), wait for the "ready" line (herdr_wait_output), and show me the first requests as they land (herdr_read_pane).`
+
+**What happens:** The command is typed + submitted in that pane; pi watches the
+output without spawning an agent for it.
+
 ---
 
 ## Tools
 
-`pi-herdr` exposes the full herdr tool surface across five tiers. **Tier 1
-(orchestration)** is the headline use case; tiers 2–5 cover layout, pane-sync,
-git worktrees, and fleet introspection. Every tool that targets an existing pane
-accepts `target` as a **pane id** (`w1:p3`), **agent name**, or **label**.
+`pi-herdr` exposes **one surface of nine tools** (twelve when the remaining v0.6
+tickets land). Every agent-surface tool accepts `target` as a **pane id**
+(`w1:p3`), **agent name**, or **label**.
 
-### Tier 1 — orchestration (spawn & drive agents)
+### The spawn entry point
 
 | Tool | What it does |
 | --- | --- |
-| `herdr_start_agent` | Launch an agent (`pi`/`claude`/`codex`/`gemini`/`cursor`/… — ~20 kinds) in a herdr pane; returns pane id + state. |
-| `herdr_send_prompt` | Send a prompt to a pane; submits with Enter by default. |
-| `herdr_read_agent` | Read recent/visible output text from a pane. |
+| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. |
+
+An inline `agent` definition takes: `name`, `description`, `kind` (default: the
+`default_kind` setting, `"pi"` — an unopinionated passthrough onto herdr's
+native `agent start --kind` axis), `model`, `system_prompt`, `prompt_mode`
+(`replace`\|`append`), `tools`, `exclude_tools`, `skills` (pi-only),
+`agent_args` (raw CLI flags, e.g. `["-ne","-e","./src/index.ts"]` to load a
+local extension). Honesty rule: a field the chosen kind cannot enforce refuses
+the spawn naming the field — use `agent_args` or another kind.
+
+### The result trio (the interim result path)
+
+| Tool | What it does |
+| --- | --- |
+| `herdr_send_prompt` | Send a prompt to an agent pane (submits with Enter by default) — steering, follow-ups, answers. |
 | `herdr_wait_agent` | Block until a pane reaches `idle`/`working`/`blocked`/`done`. |
-| `herdr_list_agents` | List all running agents with their status. |
-| `herdr_get_agent` | Get one agent's details. |
-| `herdr_stop_agent` ⚠️ | **Destructive.** Close an agent's pane (terminates it). |
-| `herdr_rename_agent` | Rename (or clear the name of) a pane. |
-| `herdr_focus_agent` | Focus a pane in the herdr UI. |
-| `herdr_explain_agent` | Natural-language explanation of what a pane is/does. |
-| `herdr_delegate` | **Composite one-shot:** spawn → send → wait → harvest response. |
+| `herdr_read_agent` | Read recent/visible output text from a pane. |
 
-### The other tiers (one line each)
+> These three are the **legacy** result path — `herdr_get_agent_result` (v0.6
+> ticket 04) retires them with exact session-file reads and push delivery.
 
-- **Tier 2 — layout:** `herdr_split_pane`, `herdr_close_pane`, `herdr_list_panes`,
-  `herdr_get_pane`, `herdr_resize_pane`, `herdr_zoom_pane`, `herdr_move_pane`,
-  `herdr_swap_panes`; tab + workspace `create`/`list`/`get`/`focus`/`rename`/`close`.
-- **Tier 3 — pane-sync:** `herdr_run_command`, `herdr_read_pane`, `herdr_wait_output`,
-  `herdr_send_keys` ⚠️ (send logical keys like `ctrl+c` / `esc`).
-- **Tier 4 — worktrees:** `herdr_worktree_create` / `open` / `list` / `remove` ⚠️.
-- **Tier 5 — fleet introspection:** `herdr_api_snapshot`, `herdr_session_list`,
-  `herdr_session_stop` ⚠️, `herdr_session_delete` ⚠️.
+### Fleet introspection
 
-`herdr_start_agent` and `herdr_delegate` take an `AgentSpec`:
+| Tool | What it does |
+| --- | --- |
+| `herdr_list_agents` | List all running agents with status — the fleet's single introspection tool. |
 
-| Field | Default | Notes |
-| --- | --- | --- |
-| `agent` | `"pi"` | Agent kind, passed as `agent start --kind`. herdr ships ~20 kinds (`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `maki`); an unknown kind returns a `VALIDATION_ERROR` listing the kinds your herdr supports (the list is fetched live and cached per session, with this hardcoded fallback offline). The old `custom`/`argv` launch surface is gone — use `agentArgs` to load a local extension instead. |
-| `agentArgs` | — | Extra flags appended to the agent CLI after launch, e.g. `["-ne","-e","./src/index.ts"]` to load a **local extension** instead of the installed copy (the dev / self-host loop). These follow `--` in `agent start`. *(v0.2.4)* |
-| `cwd` | — | Working directory for the spawned agent. |
-| `name` | `agent-<timestamp>` | Unique pane name. |
+### The pane-sync quartet (raw pane control)
 
-`herdr_delegate` also takes **`onBlocked`** (`"wait"` default, `"return"`): when the
-spawned agent blocks on `ask_user`, `"wait"` holds the call open until a human
-answers in the spawned pane, then returns the final answer; `"return"` returns
-`{blocked, question, paneId}` so the orchestration session can relay the question
-itself. See [orchestration tools](docs/tools/orchestration.md#herdr_delegate).
+| Tool | What it does |
+| --- | --- |
+| `herdr_run_command` | Run a shell command (text + Enter) in an existing raw pane. |
+| `herdr_read_pane` | Read a raw pane's terminal output. |
+| `herdr_wait_output` | Block until a pane emits matching output (e.g. a server `ready` marker). |
+| `herdr_send_keys` ⚠️ | Send logical key presses (`ctrl+c`, `esc`, `Enter`) — interrupts, option-list answers. |
+
+Per-tool reference: [docs/tools/orchestration.md](docs/tools/orchestration.md) ·
+[docs/tools/pane-sync.md](docs/tools/pane-sync.md) ·
+[docs/concepts.md](docs/concepts.md).
 
 ## How completion is detected (and why it's reliable)
 
@@ -268,17 +288,14 @@ and `pi-cursor-sdk:ask-question:blocked` ([`pi-cursor-sdk`](https://github.com/f
 are kept for back-compat (`active: true → blocked`, `active: false → working` so
 the turn resumes). pi-herdr is the bridge that turns `herdr:blocked` into a herdr
 `pane report-agent --state blocked` — nothing else in JS consumes it, so without
-this bridge blocked detection relies on herdr's native TUI-watching. herdr
-renders that idle-after-working as `done` on builds that derive it;
-`herdr_delegate` / `herdr_wait_agent` race the `idle` and `done` transition waits
-(plus a polling fallback — see below). A global install
+this bridge blocked detection relies on herdr's native TUI-watching. A global install
 (`pi install npm:@andrewjacop/pi-herdr`) loads the extension into **every** pi —
 including spawned ones — so all pi agents report reliably.
 
 Completion is read from herdr's state events — never inferred from the
 rendered `Working…` spinner (tool-call output replaces that spinner mid-work, which
-would otherwise cause false "idle" reports). `herdr_delegate` submits and waits in
-one atomic call (`agent prompt <target> <text> --wait`) and `herdr_wait_agent`
+would otherwise cause false "idle" reports). The spawn submits its task with one
+atomic `agent prompt <pane> <text> --wait` call, and `herdr_wait_agent`
 blocks on the repeatable `agent wait <target> --until <status>` (`idle` / `done` /
 `blocked` can be raced in a single call). Both also **race a polling `agent get`
 fallback** alongside the event wait: if the event never fires (e.g. a `done`/`idle`
@@ -296,19 +313,21 @@ self-report (e.g. `claude`/`codex`), the poll catches the settled state too.
 | `HERDR_BIN` | `herdr` (resolved via `PATH`/`PATHEXT`) | Override the herdr binary path. |
 | `PI_HERDR_NO_SELF_REPORT` | unset | Set to `1` to disable self-report in this pi. |
 
-## Settings (`/herdr`)
+## Settings (`/subagents config`)
 
-Run `/herdr` for the settings menu: one flat list of
-`key = value (source: project | global | default)` rows — safety gates first,
-then behavior — plus a confirmed **Kill all agents** action. Bool rows toggle,
-enum rows pick, number rows input, and each edit persists to whichever file
-owns the key (a default-sourced key writes the project file), so a project
-checkout never mutates your global config. There is deliberately **no**
-`/herdr set key value` args form: settings are user knobs, and hand-editing
-the JSON files stays the scriptable path.
+Run `/subagents` (or `/subagents config`) for the settings menu: one flat list of
+`key = value (source: project | global | default)` rows plus a confirmed
+**Kill all agents** action. Bool rows toggle, enum rows pick, number rows
+input, `default_kind` picks from the live kind list, `models.default` takes a
+free model id (empty unsets it), and the `models.agents` row edits one
+agent-name pin at a time (empty model removes the pin). Each edit persists to
+whichever file owns the key (a default-sourced key writes the project file), so
+a project checkout never mutates your global config. There is deliberately
+**no** `/subagents set key value` args form: settings are user knobs, and
+hand-editing the JSON files stays the scriptable path.
 
 Settings live in two JSON files, deep-merged with the project file winning per
-key:
+key (and per agent name for `models.agents`):
 
 | File | Scope |
 | --- | --- |
@@ -318,37 +337,60 @@ key:
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `agents_kill_switch` | `false` | Refuse new agent spawns. A gate only — never terminates running agents (that's the menu's Kill-all action). |
-| `allow_save_agent` | `false` | Allow the `save_agent` tool to write agent definitions to the registry. |
-| `surface` | `"agents"` | Tool set the model sees: `agents` (v0.5 agent-experience tools) or `full` (the complete fleet tool set). Read once at init — restart-required (`/reload`). |
 | `default_kind` | `"pi"` | Agent kind spawned when none is given (validated against the live `herdr agent` kind list). |
+| `models.default` | *(unset)* | Model id every spawned agent falls back to (routing level 4; consumed by the launch-plan ticket). Empty/absent = routing falls through to the parent session's model. |
+| `models.agents.<name>` | `{}` | Per-agent model pins (routing level 3): agent name → model id. Entries merge across both files, project winning per name. |
 | `max_parallel_agents` | `3` | Concurrency cap; spawns beyond it are queued until a slot frees. |
 | `max_spawn_depth` | `2` | Guard against runaway recursive fleets. |
 | `notifications` | `"normal"` | Verbosity of agent-completion notifications: `none` / `quiet` / `normal`. |
+| `idle_rearm_minutes` | `15` | After a user takeover, minutes of quiet before the agent's result is auto-delivered and its pane closes (consumed by the push-delivery ticket). |
+| `workflows_enabled` | `true` | Register the workflow tool (consumed by the workflows ticket). A gate on new runs only. |
 
-All keys except `surface` are read at the moment they matter, so menu edits
-take effect on the next operation — no restart needed. Malformed JSON in a
-settings file is reported (and ignored) rather than silently dropping your
-other file's values; the menu never overwrites a file it can't parse.
+Every key is read at the moment it matters, so menu edits take effect on the
+next operation — no restart needed. Malformed JSON in a settings file is
+reported (and ignored) rather than silently dropping your other file's values;
+the menu never overwrites a file it can't parse. The v0.5 `surface` and
+`allow_save_agent` keys are gone (see [Upgrading](#upgrading-v05--v06)).
+
+## Upgrading v0.5 → v0.6
+
+**Breaking: the tool surface was cut from 43 to one deliberate surface** (9
+tools today, 12 at v0.6 completion), and `/herdr` became `/subagents config`.
+Removed tools and their replacements:
+
+| Removed | Use instead |
+| --- | --- |
+| `herdr_delegate` | `herdr_spawn_agent` + `herdr_wait_agent` + `herdr_read_agent` (spawn + `wait: <ms>` is the one-shot form; push delivery lands with ticket 04 to make the trio unnecessary). |
+| `herdr_start_agent` | `herdr_spawn_agent` (same single `agent start --kind` launch path underneath; registry types or inline definitions instead of loose flag bags). |
+| `herdr_get_agent`, `herdr_explain_agent` | `herdr_list_agents`. |
+| `herdr_stop_agent` | The confirmed **Kill all agents** action in `/subagents config`; for one runaway agent, `herdr_send_keys` with `["ctrl+c"]`, or close the pane in the herdr UI. |
+| `herdr_rename_agent`, `herdr_focus_agent` | The herdr UI (rename/focus a pane yourself). |
+| `herdr_split_pane`, `herdr_close_pane` | The herdr UI — open/arrange panes yourself; drive them by id with `herdr_run_command` / `herdr_read_pane` / `herdr_wait_output` / `herdr_send_keys`. |
+| All layout CRUD (`herdr_list_panes`, `herdr_get_pane`, `herdr_resize_pane`, `herdr_zoom_pane`, `herdr_move_pane`, `herdr_swap_panes`, `herdr_list_tabs`, `herdr_create_tab`, `herdr_get_tab`, `herdr_focus_tab`, `herdr_rename_tab`, `herdr_close_tab`, `herdr_list_workspaces`, `herdr_create_workspace`, `herdr_get_workspace`, `herdr_focus_workspace`, `herdr_rename_workspace`, `herdr_close_workspace`) | The herdr UI — layout is a human action; the machinery survives internally where later tickets need it (pane focus for "go look"). |
+| Worktree CRUD (`herdr_worktree_create`, `herdr_worktree_open`, `herdr_worktree_list`, `herdr_worktree_remove`) | `isolated: true` on a spawn (auto-created worktree), or `herdr worktree …` in your own terminal. |
+| Introspection (`herdr_api_snapshot`, `herdr_session_list`, `herdr_session_stop`, `herdr_session_delete`) | `herdr` CLI directly (`herdr api snapshot`, `herdr session …`). |
+| Settings keys `surface`, `allow_save_agent` | Gone — one surface, nothing to switch to; `save_agent` lands ungated (ticket 03). Stale keys in your JSON files are ignored harmlessly. |
+
+No runtime nagging, no shim tools — a clean cut ([wayfinder ticket 09](wayfinder/tickets/09-surface-cut-settings.md)).
 
 ## Platform notes
 
 - **Requires herdr ≥ 0.9.0** (hard floor — see Requirements). Everything above the
   floor goes through exactly one launch path on every OS: split a pane, then
-  `agent start <name> --kind <kind> --pane <id> [-- <agentArgs>]`. herdr resolves
+  `agent start <name> --kind <kind> --pane <id> [-- <argv>]`. herdr resolves
   the kind to its CLI itself, so npm `.cmd` shims on Windows need no special
   handling here — 0.9.0 is the release that fixed that (and the flaky
   process-tree detection) on herdr's side.
 - **macOS:** the only macOS gotcha is environmental: a herdr server started by
   `brew services` / launchd (or a GUI launch) inherits macOS's minimal PATH, so
   node-based agents like `pi` can't find `node`. Launch herdr from your terminal
-  instead (see Requirements). If you can't, pass an absolute agent path and
-  inject `PATH` via the tool's `env`.
+  instead (see Requirements).
 
 ## Development
 
 ```bash
 npm install
-npm test                 # offline smoke (no herdr required)
+npm test                 # offline suites (smoke + settings + spawn) — no herdr required
 npm run typecheck        # tsc --noEmit
 npm run test:live        # requires a running herdr session
 npm run test:multi       # 3 parallel agents, multi-step, artifact-verified
@@ -362,7 +404,7 @@ The extension is TypeScript loaded via jiti — **no build step**. Edit `src/` a
 
 ```
 src/
-  index.ts               # entry; registers tools + footer status + self-report
+  index.ts               # entry; registers the 9-tool surface + footer status + self-report
   herdr.ts               # the one spawn module (envelope parse, timeouts, errors, version probe + floor gate)
   version.ts             # pure version-floor logic (parse/compare/HERDR_TOO_OLD)
   config.ts              # binary resolution + live agent-kind list (env + PATH)
@@ -370,16 +412,15 @@ src/
   selfreport.ts          # push this pi's state to herdr (reliable completion)
   spawn.ts               # the herdr_spawn_agent engine (gates, spec merge, queue, wait)
   agentdefs.ts           # agent-definition registry (built-in + session-ephemeral)
-  settings.ts            # effective-settings resolution (global + project JSON)
-  menu.ts                # the /herdr settings menu + Kill-all-agents action
-  tools/orchestration.ts # Tier 1 tools + herdr_delegate (spawn/wait/send/read/…)
-  tools/sync.ts          # Tier 3 pane-sync (split/run/read/wait_output/send_keys/close)
-  tools/layout.ts        # Tier 2 layout (panes/tabs/workspaces)
-  tools/worktrees.ts     # Tier 4 git worktrees
-  tools/introspection.ts # Tier 5 snapshot/sessions
+  settings.ts            # effective-settings resolution (global + project JSON, models.* routing keys)
+  menu.ts                # the /subagents config menu + Kill-all-agents action
+  tools/agents.ts        # herdr_spawn_agent registration (the spawn entry point)
+  tools/orchestration.ts # result trio + list_agents; the launch/wait machinery every spawn uses
+  tools/sync.ts          # pane-sync quartet (run/read/wait_output/send_keys)
+  tools/worktrees.ts     # worktree machinery (powers isolated; no model-facing tools)
 tests/
-  smoke.mjs              # offline smoke (no herdr required)
-  live.mjs, pong.mjs, delegate.mjs, selfreport.mjs, multi.mjs, stress.mjs
+  smoke.mjs, settings.mjs, spawn.mjs   # offline suites (npm test)
+  live.mjs, pong.mjs, selfreport.mjs, blocked.mjs, spawn-live.mjs, dev-load.mjs, …
 ```
 
 ## Contributing
@@ -387,14 +428,31 @@ tests/
 Contributions are welcome — especially macOS/Linux testing! Please open an issue
 first to discuss substantial changes. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
+## Appendix: fleet machinery (internal, off the model surface)
+
+These capabilities exist in herdr and remain fully available **to you** — they
+are just no longer registered as model-facing tools (the v0.6 surface cut).
+pi-herdr keeps the thin slices it needs internally:
+
+- **Worktree create/remove** — powers `isolated: true` spawns (auto branch +
+  path). Hand management: `herdr worktree create|open|list|remove`.
+- **Pane close / focus** — powers the menu's confirmed Kill-all action and
+  future "go look" affordances. Hand use: the herdr UI, or
+  `herdr pane close|focus …`.
+- **`agent get` polling** — the internal fallback that catches settled states
+  the event waits miss. Hand use: `herdr agent get <pane>`.
+- **Sessions & snapshot** — `herdr session list|stop|delete`, `herdr api
+  snapshot` (herdr's own debugging surface).
+
 ## Limitations / roadmap
 
-- **v0.2:** Tier 1 orchestration (`herdr_delegate` + the 10 atomic tools), macOS
-  support, polling-fallback completion detection.
-- **v0.2.5:** branched for herdr 0.7.5 (`agent prompt --wait`, `agent wait --until`,
-  dynamic agent-kind validation), and added Tier 2 layout (panes/tabs/workspaces),
-  Tier 3 pane-sync (`split` / `run` / `read` / `wait_output` / `send_keys` /
-  `close`), Tier 4 git worktrees, and Tier 5 snapshot/sessions.
+- **v0.6 in flight** (the subagent experience layer): session-file substrate +
+  `get_agent_result` (exact results, no tail heuristics), push delivery with
+  user-takeover and idle re-arm, a 10-state projected lifecycle with watchdog,
+  fork/lineage/standalone session modes, model/thinking routing
+  (`models.default` / `models.agents.<name>`), interrupt + resume, a fleet
+  widget, and scripted workflows (`run_workflow`). See
+  [wayfinder/map.md](wayfinder/map.md).
 - **Tested on Windows and macOS** (see [Platform support](#platform-support)).
 - Self-report is pi-only; heterogeneous (claude/codex) completion relies on herdr's
   auto-detect (also caught by the `agent get` polling fallback).

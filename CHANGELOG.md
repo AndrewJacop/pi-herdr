@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking: the v0.6 surface cut — 43 tools → one deliberate surface of 9
+  (12 at completion); `/herdr` became `/subagents config`.** One surface,
+  nothing to switch to: the `surface: agents|full` setting is gone. Kept
+  today: `herdr_spawn_agent`, the legacy result trio (`herdr_send_prompt` /
+  `herdr_wait_agent` / `herdr_read_agent` — retired by `get_agent_result` in
+  ticket 04), `herdr_list_agents` (the fleet's single introspection tool),
+  and the pane-sync quartet (`herdr_run_command` / `herdr_read_pane` /
+  `herdr_wait_output` / `herdr_send_keys`); later tickets register
+  `get_agent_result`, `message_agent`, `interrupt`/`resume`, and
+  `run_workflow`. Removed from the model surface, with replacements:
+  `herdr_delegate` → spawn + `wait` (+ wait/read; push delivery makes it
+  redundant); `herdr_start_agent` → `herdr_spawn_agent` (same single
+  `agent start --kind` path); `herdr_get_agent` / `herdr_explain_agent` →
+  `herdr_list_agents`; `herdr_stop_agent` → the confirmed Kill-all menu
+  action or `herdr_send_keys ["ctrl+c"]`; `herdr_rename_agent` /
+  `herdr_focus_agent` → the herdr UI; `herdr_split_pane` / `herdr_close_pane`
+  → the herdr UI (drive existing panes by id); all 18 layout tools
+  (panes/tabs/workspaces CRUD) → the herdr UI; worktree CRUD →
+  `isolated: true` or `herdr worktree …`; `herdr_api_snapshot` /
+  `herdr_session_*` → the `herdr` CLI. **Machinery survives internally —
+  code deletion ≠ capability deletion**: worktree create/remove powers
+  `isolated` (`src/tools/worktrees.ts` is machinery-only now), pane close
+  powers kill-all, the `agent get` poll loop powers every wait;
+  `src/tools/layout.ts` and `src/tools/introspection.ts` are deleted
+  outright (no internal consumers). Tools keep the `herdr_` prefix; no
+  runtime nagging, no shim tools. Decided by wayfinder ticket 09
+  (surface-cut settings).
+
 ### Changed
 
 - **Breaking: version floor — herdr ≥ 0.9.0, hard.** herdr below 0.9.0 now
@@ -39,6 +69,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Settings: new key table — `models.*` routing, `idle_rearm_minutes`,
+  `workflows_enabled`; `surface` and `allow_save_agent` die.** `models.default`
+  (routing level 4, default unset = fall through to the parent session's
+  model) and `models.agents.<name>` (per-agent model pins, routing level 3)
+  resolve from nested JSON with deep-merge project-wins — per key, and per
+  agent name for the record. `idle_rearm_minutes` (default 15) and
+  `workflows_enabled` (default true) land for their consuming tickets. All
+  are editable in the `/subagents config` menu: `models.default` takes a free
+  model id (empty input unsets — absence, never a sentinel value), the
+  `models.agents` row edits one agent-name pin at a time (empty model removes
+  the pin), and every write persists nested into the owning file (unknown
+  keys preserved, empty containers pruned). The `restart-required` marker is
+  gone with `surface` — every key is hot. Stale `surface` /
+  `allow_save_agent` entries in existing files are ignored harmlessly.
+- **`/subagents config` — the command (was `/herdr`).** Bare `/subagents` and
+  `/subagents config` both open the settings menu; an unknown sibling word is
+  answered with a pointer (future words can grow). Kill-all stays a confirmed
+  menu action. Still deliberately no `set key value` args form — settings are
+  user knobs; hand-edit the JSON to script them.
 - **`herdr_spawn_agent` — the v0.5 agent surface begins.** One call spawns a
   background agent pane, submits the task prompt, and returns
   `{name, paneId, status}`. The agent is specified by `type` (registry:

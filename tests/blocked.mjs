@@ -1,15 +1,14 @@
-// Full-round validation of the ask-user BLOCKED handling in herdr_delegate,
-// against REAL spawned `pi` sessions loaded with the LOCAL extension
-// (`-e <abs>/src/index.ts`). Runs the edited module via jiti, so this exercises
-// the new code paths (getAgentStatus, waitForBlockedResolved, onBlocked).
+// Full-round validation of ask-user BLOCKED handling through the KEPT surface
+// (v0.6 surface cut: herdr_delegate is gone; the composition is spawn →
+// wait → read, and the relay is send_keys), against REAL spawned `pi`
+// sessions loaded with the LOCAL extension (`-e <abs>/src/index.ts`). Runs
+// the edited modules via jiti, so this exercises the current code paths.
 //
-// Two modes:
-//   1. onBlocked:"return" — delegate must return {blocked:true, question, paneId};
-//      we then run the relay (send answer → wait idle → read) and check the
-//      grandchild used the answer.
-//   2. onBlocked:"wait"   — delegate blocks (no time bound) until the pane is
-//      answered; we concurrently poll for `blocked` and inject the answer, then
-//      check the delegate returned the grandchild's final answer.
+// Flow: herdr_spawn_agent (background, ask_user prompt) → wait until BLOCKED
+// (herdr_wait_agent — validates self-report) → read the question
+// (herdr_read_agent) → answer the overlay by key navigation
+// (herdr_send_keys — typed text never reaches an option list) → wait idle →
+// read the final line and check the agent used the answer.
 //
 // Run: node tests/blocked.mjs   (requires a running herdr session + `pi` on PATH)
 
@@ -19,13 +18,15 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync } from "node:fs";
 
-/** Fresh temp cwd PER MODE — a shared one leaks the previous grandchild's
- * session context into the next run (observed as "User answered Blue"
- * replaying mode 1's answer inside mode 2's pane). */
+/** Fresh temp cwd — a reused one leaks the previous child's session context
+ * into the next run. */
 const freshCwd = () => mkdtempSync(join(tmpdir(), "pi-herdr-blocked-"));
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
+const agentsTool = await jiti.import(join(ROOT, "src/tools/agents.ts"), {
+	parent: ROOT,
+});
 const orch = await jiti.import(join(ROOT, "src/tools/orchestration.ts"), {
 	parent: ROOT,
 });
@@ -35,18 +36,18 @@ const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
 
 const tools = [];
 const mockPi = { registerTool: (d) => tools.push(d), on: () => {} };
+agentsTool.registerAgents(mockPi);
 orch.registerOrchestration(mockPi);
-const delegate = tools.find((t) => t.name === "herdr_delegate");
-if (!delegate) {
-	console.error("✗ herdr_delegate tool not registered");
-	process.exit(1);
-}
+const tool = (name) => {
+	const t = tools.find((t) => t.name === name);
+	if (!t) throw new Error(`tool not registered: ${name}`);
+	return t;
+};
 
-// A neutral cwd (per mode — see freshCwd) so the project's package.json
-// `pi.extensions` does NOT auto-load a second copy of pi-herdr alongside the
-// global install (tool-name collision). The child loads the GLOBAL
-// @andrewjacop/pi-herdr for self-report (unchanged); the new delegate logic
-// runs in THIS harness via the jiti import above.
+// A neutral cwd so the project's package.json `pi.extensions` does NOT
+// auto-load a second copy of pi-herdr alongside the global install
+// (tool-name collision). The child loads the GLOBAL @andrewjacop/pi-herdr for
+// self-report; the spawn logic runs in THIS harness via the jiti import.
 const CWD = freshCwd();
 
 const ASK_PROMPT = [
@@ -69,238 +70,97 @@ const check = (c, m) => {
 	console.log((c ? "  ✓ " : "  ✗ ") + m);
 };
 
-async function getStatus(target) {
-	const r = await herdr(["agent", "get", target], {
-		timeoutMs: 10_000,
-		textOk: true,
-	});
-	if (!r.ok) return null;
-	const d = r.data;
-	const a = d && typeof d === "object" ? (d.agent ?? d) : null;
-	return a?.agent_status ?? null;
-}
+const watchdog = setTimeout(() => {
+	console.log("WATCHDOG");
+	process.exit(2);
+}, 300_000);
 
-async function waitStatus(target, want, timeoutMs) {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const s = await getStatus(target);
-		if (want.includes(s)) return s;
-		await sleep(1500);
-	}
-	return null;
-}
-
-async function readPane(target, lines = 60) {
-	const r = await herdr(
-		[
-			"agent",
-			"read",
-			target,
-			"--source",
-			"recent",
-			"--lines",
-			String(lines),
-			"--format",
-			"text",
-		],
-		{ timeoutMs: 15_000, textOk: true },
-	);
-	if (!r.ok) return "";
-	const d = r.data;
-	if (typeof d === "string") return d;
-	return d?.text ?? "";
-}
-
-/**
- * Answer a blocked pane's ask-user OVERLAY by key navigation (validated
- * empirically): focus starts on option 1 — bare Enter submits it; `Down` first
- * selects option 2. Typed text does NOT reach the option list, so freeform
- * injection is unusable without focusing the "Type something." row.
- */
-async function answerOverlay(paneId, { down = 0 } = {}) {
-	for (let i = 0; i < down; i++) {
-		const d = await herdr(["pane", "send-keys", paneId, "down"], {
-			timeoutMs: 10_000,
-		});
-		if (!d.ok) return d;
-		await sleep(300);
-	}
-	return herdr(["pane", "send-keys", paneId, "Enter"], { timeoutMs: 10_000 });
-}
-
-async function closePane(target) {
-	await herdr(["pane", "close", target], { timeoutMs: 10_000 }).catch(() => {});
-}
-
-// ===========================================================================
-// MODE 1: onBlocked = "return"
-// ===========================================================================
-async function testReturnMode() {
-	console.log('\n=== MODE 1: onBlocked === "return" ===');
-	const name = `blocked-return-${Date.now()}`;
-	const res = await delegate.execute(
-		"return-call",
-		{
-			name,
-			agent: "pi",
-			cwd: CWD,
-			onBlocked: "return",
-			prompt: ASK_PROMPT,
-			timeoutMs: 240_000,
-		},
+try {
+	console.log("[blocked] 1. herdr_spawn_agent (background, ask_user prompt)");
+	const name = `blocked-relay-${Date.now()}`;
+	const res = await tool("herdr_spawn_agent").execute(
+		"spawn",
+		{ name, prompt: ASK_PROMPT, cwd: CWD },
 		undefined,
 	);
+	const paneId = res.details?.paneId ?? null;
+	check(res.isError !== true, `spawn ok (isError=${res.isError})`);
+	check(!!paneId, `paneId present (${paneId})`);
+	if (!paneId) throw new Error("no pane id");
 
-	const det = res.details ?? {};
-	console.log("    isError:", res.isError ?? false);
-	console.log("    details.blocked:", det.blocked);
-	console.log("    details.paneId:", det.paneId);
-	check(
-		res.isError === true,
-		"return mode: result is an error (not a silent success)",
-	);
-	check(det.blocked === true, "return mode: details.blocked === true");
-	check(!!det.paneId, `return mode: paneId present (${det.paneId})`);
-	check(
-		typeof det.question === "string" && det.question.length > 0,
-		"return mode: question text captured (not treated as the answer)",
-	);
-
-	if (!det.paneId) {
-		console.log("    (no paneId — aborting mode 1 relay)");
-		return;
-	}
-
-	// The spawned agent must actually be BLOCKED right now (validates self-report).
-	const st = await getStatus(det.paneId);
-	console.log("    grandchild status after return:", st);
-	check(st === "blocked", `return mode: grandchild is blocked (got "${st}")`);
-
-	// Relay: select option 2 (Blue) on the ask overlay, wait, read the final line
-	// (key-nav at pane level — the same surface a human uses).
-	const inj = await answerOverlay(det.paneId, { down: 1 });
-	check(inj.ok, "return mode: relay selected answer (Blue) via overlay keys");
-	const settled = await waitStatus(det.paneId, ["idle", "done"], 120_000);
-	check(
-		!!settled,
-		`return mode: grandchild settled after answer (status "${settled}")`,
-	);
-	const out = await readPane(det.paneId);
-	console.log("    --- grandchild final output (tail) ---");
-	console.log(
-		out
-			.split("\n")
-			.slice(-12)
-			.map((l) => "      " + l)
-			.join("\n"),
-	);
-	check(
-		/the color is blue/i.test(out),
-		'return mode: grandchild used the answer ("The color is Blue")',
-	);
-
-	await closePane(det.paneId);
-}
-
-// ===========================================================================
-// MODE 2: onBlocked = "wait"  (default)
-// ===========================================================================
-async function testWaitMode() {
-	console.log('\n=== MODE 2: onBlocked === "wait" (default) ===');
-	const name = `blocked-wait-${Date.now()}`;
-	const waitCwd = freshCwd();
-
-	// Concurrent injector: poll the named pane until it is BLOCKED, then answer.
-	// This is the "human answers in the spawned pane" stand-in.
-	const injector = (async () => {
-		for (let i = 0; i < 180; i++) {
-			await sleep(1500);
-			const s = await getStatus(name);
-			if (s === "blocked") {
-				console.log(`    [injector] saw blocked at t=${(i + 1) * 1.5}s`);
-				await sleep(800); // let the ask overlay fully settle
-				// pane commands take pane IDs, not agent names — resolve first.
-				const g = await herdr(["agent", "get", name], { timeoutMs: 10_000 });
-				const pid = g.ok ? (g.data?.agent ?? g.data)?.pane_id : null;
-				if (!pid) return "resolve-failed";
-				// bare Enter = option 1 = "Red" (validated overlay semantics)
-				const r = await answerOverlay(pid);
-				console.log(
-					`    [injector] answerOverlay(Enter->Red) -> ${r.ok ? "sent" : "FAILED: " + r.error?.message}`,
-				);
-				if (!r.ok) return "inject-failed";
-				await sleep(2500);
-				const after = await readPane(pid, 25);
-				console.log(
-					"    [injector] pane after inject (tail):\n" +
-						after
-							.split("\n")
-							.slice(-10)
-							.map((l) => "      " + l)
-							.join("\n"),
-				);
-				return "injected";
-			}
-		}
-		return "never-blocked";
-	})();
-
-	const res = await delegate.execute(
-		"wait-call",
-		{
-			name,
-			agent: "pi",
-			cwd: waitCwd,
-			onBlocked: "wait",
-			prompt: ASK_PROMPT,
-			timeoutMs: 300_000,
-		},
+	console.log("\n[blocked] 2. herdr_wait_agent (status: blocked)");
+	const w = await tool("herdr_wait_agent").execute(
+		"wait-blocked",
+		{ target: paneId, status: "blocked", timeoutMs: 240_000 },
 		undefined,
 	);
-	const inj = await injector;
+	check(!w.isError, "agent reached BLOCKED (self-report through the wait tool)");
 
-	const det = res.details ?? {};
-	console.log("    isError:", res.isError ?? false);
-	console.log("    details.wasBlocked:", det.wasBlocked);
-	console.log("    injector:", inj);
-	const text = res.content?.[0]?.text ?? "";
-	console.log("    --- delegate response (tail) ---");
+	console.log("\n[blocked] 3. herdr_read_agent (the question)");
+	const q = await tool("herdr_read_agent").execute(
+		"read-q",
+		{ target: paneId, source: "recent", lines: 60 },
+		undefined,
+	);
+	const qText = q.content?.[0]?.text ?? "";
+	check(!q.isError, "read ok while blocked");
+	check(
+		/favorite color/i.test(qText),
+		"the question text is readable (not treated as an answer)",
+	);
+
 	console.log(
-		text
-			.split("\n")
-			.slice(-12)
-			.map((l) => "      " + l)
-			.join("\n"),
+		"\n[blocked] 4. herdr_send_keys — answer the overlay (Blue = down×1 + Enter)",
+	);
+	// Empirically validated overlay semantics: focus starts on option 1 — bare
+	// Enter submits it; `down` first selects option 2. Typed text does NOT
+	// reach the option list.
+	const keys = await tool("herdr_send_keys").execute(
+		"answer",
+		{ target: paneId, keys: ["down", "Enter"] },
+		undefined,
+	);
+	check(!keys.isError, "keys sent to the pane (option 2: Blue)");
+
+	console.log("\n[blocked] 5. herdr_wait_agent (settle -> idle)");
+	const settle = await tool("herdr_wait_agent").execute(
+		"wait-idle",
+		{ target: paneId, status: "idle", timeoutMs: 240_000 },
+		undefined,
+	);
+	check(!settle.isError, "agent settled after the answer");
+
+	console.log("\n[blocked] 6. herdr_read_agent (the answer)");
+	await sleep(1500); // let the response render before reading
+	const a = await tool("herdr_read_agent").execute(
+		"read-a",
+		{ target: paneId, source: "recent", lines: 60 },
+		undefined,
+	);
+	const aText = a.content?.[0]?.text ?? "";
+	console.log(
+		"    --- tail of response ---\n" +
+			aText
+				.split("\n")
+				.filter(Boolean)
+				.slice(-6)
+				.map((l) => "      " + l)
+				.join("\n"),
+	);
+	check(!a.isError, "final read ok");
+	check(
+		/the color is blue/i.test(aText),
+		'agent used the answer ("The color is Blue")',
 	);
 
-	check(
-		inj === "injected",
-		`wait mode: injector saw blocked & answered (${inj})`,
+	await herdr(["pane", "close", paneId], { timeoutMs: 10_000 }).catch(() => {});
+} catch (e) {
+	console.error("threw:", e);
+	fail += 1;
+} finally {
+	clearTimeout(watchdog);
+	console.log(
+		`\n${fail === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${pass} passed, ${fail} failed)`,
 	);
-	check(
-		res.isError !== true,
-		"wait mode: delegate returned success after the answer",
-	);
-	check(det.wasBlocked === true, "wait mode: details.wasBlocked === true");
-	check(
-		/the color is red/i.test(text),
-		'wait mode: delegate returned the grandchild\'s final answer ("The color is Red")',
-	);
-
-	if (det.paneId) await closePane(det.paneId);
+	process.exit(fail === 0 ? 0 : 1);
 }
-
-// ===========================================================================
-await testReturnMode().catch((e) => {
-	console.error("mode 1 threw:", e);
-	fail += 1;
-});
-await testWaitMode().catch((e) => {
-	console.error("mode 2 threw:", e);
-	fail += 1;
-});
-
-console.log(
-	`\n${fail === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${pass}/${pass + fail})`,
-);
-process.exit(fail === 0 ? 0 : 1);

@@ -1,7 +1,8 @@
-// TEMP validation of the polling fallback in the EDITED src (loaded via jiti).
-// 1) herdr_wait_agent(idle) on an ALREADY-idle pane -> must SUCCEED via poll fallback
-//    (the event wait needs a transition; an already-settled pane has none to fire).
-// 2) herdr_delegate -> must still return the reply (no happy-path regression).
+// Validation of the polling fallback in the EDITED src (loaded via jiti).
+// herdr_wait_agent(idle) on an ALREADY-idle pane -> must SUCCEED via poll
+// fallback (the event wait needs a transition; an already-settled pane has
+// none to fire). herdr_delegate died with the v0.6 surface cut; the spawn
+// surface (spawn-live.mjs) covers the spawn+wait+read round-trip.
 import { createJiti } from "jiti";
 import { join } from "node:path";
 
@@ -21,7 +22,10 @@ orch.registerOrchestration({
 	on: () => {},
 });
 const waitAgent = tools.find((t) => t.name === "herdr_wait_agent");
-const delegate = tools.find((t) => t.name === "herdr_delegate");
+if (!waitAgent) {
+	console.error("✗ herdr_wait_agent tool not registered");
+	process.exit(1);
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const close = async (t) => {
 	await herdr(["pane", "close", t], { timeoutMs: 8000 }).catch(() => {});
@@ -71,22 +75,6 @@ try {
 		`resolved fast via poll, not by waiting the 15s budget (${ms}ms)`,
 	);
 	await close(pid);
-
-	console.log("\n[2] regression: herdr_delegate still completes");
-	const d = await delegate.execute(
-		"t",
-		{
-			prompt: "Reply with exactly one word: pong",
-			cwd: process.cwd(),
-			timeoutMs: 90000,
-			closeOnSuccess: true,
-		},
-		undefined,
-	);
-	const txt = d.content?.[0]?.text ?? "";
-	check(!d.isError, `delegate succeeded (isError=${d.isError})`);
-	check(/pong/i.test(txt), `delegate response contains 'pong'`);
-	console.log("   paneId:", d.details?.paneId);
 } finally {
 	clearTimeout(watchdog);
 	console.log(
