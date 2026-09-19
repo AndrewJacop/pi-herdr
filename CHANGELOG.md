@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The `.md` agent registry + `herdr_save_agent` (v0.6 issue 03).** Agent
+  definitions now load from YAML-frontmatter `.md` files: `.pi/agents/`
+  (project) > `~/.pi/agent/agents/` (global) > bundled — first-hit-wins per
+  name, project shadowing global, session inline definitions shadowing both,
+  read-at-use (a saved file resolves without a reload). The frontmatter
+  dialect is the full v0.6 field set — `model`, `thinking`, `session-mode`,
+  `auto-exit`, `interactive`, `spawning`, `deny-tools`, `args` (raw CLI
+  flags), `cwd`, `prompt_mode`, plus the identity/system-prompt fields, with
+  the system prompt as the file body — and it is deliberately shared with the
+  coinstallable prior art: unknown keys are ignored on both sides, list
+  values accept JSON arrays or comma lists, a malformed file is skipped and
+  reported without killing the rest of the registry. `herdr_save_agent`
+  persists an inline definition or any registry `type` to the project
+  (default) or global folder — ungated by decision (low risk, reversible by
+  deleting the file), with an overwrite guard for existing files. Inline
+  definitions gained the same v0.6 fields (`thinking`, `session_mode`,
+  `auto_exit`, `interactive`, `spawning`, `cwd`); definition `cwd` feeds the
+  spawn (spawn param wins), frontmatter `args` ride `agent_args` today.
+  Surface: 9 → 10 tools.
+
 ### Removed
 
 - **Breaking: the v0.6 surface cut — 43 tools → one deliberate surface of 9

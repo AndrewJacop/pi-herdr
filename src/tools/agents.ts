@@ -12,6 +12,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { spawnAgent } from "../spawn.js";
+import { saveAgent } from "../agentdefs.js";
 import type { ToolReturn } from "../env.js";
 import { BUILT_IN_AGENTS } from "../agentdefs.js";
 
@@ -35,10 +36,13 @@ const DESCRIPTION =
 	"{name, paneId, status}. Address the agent by `name` afterwards. " +
 	"Specify the agent EITHER by `type` (registry) or an inline `agent` definition — exactly one. " +
 	`Built-in types:\n${builtInTypeLines()}\n` +
+	"The registry also serves `.md` definitions from `.pi/agents/` (project) and the global " +
+	"agents dir — project shadows global, session inline definitions shadow both. " +
 	"Inline definitions from earlier spawns this session are addressable by `type` too. " +
-	"Inline `agent` fields: name, description, kind, model, system_prompt, prompt_mode " +
+	"Inline `agent` fields: name, description, kind, model, thinking, system_prompt, prompt_mode " +
 	"(replace|append, default replace), tools, exclude_tools, skills (pi-only), agent_args " +
-	"(raw CLI flags). Honesty rule: a field the chosen kind cannot enforce refuses the spawn " +
+	"(raw CLI flags), session_mode (standalone|lineage-only|fork), auto_exit, interactive, " +
+	"spawning, cwd. Honesty rule: a field the chosen kind cannot enforce refuses the spawn " +
 	"naming the field — use agent_args or another kind. `kind` (default: settings default_kind, " +
 	"'pi') is an unopinionated passthrough onto herdr's native `agent start --kind` axis: a non-pi " +
 	"child is text in a pane with a TUI-detected lifecycle, nothing else. " +
@@ -49,6 +53,77 @@ const DESCRIPTION =
 	"(worktree stays after the agent — remove it yourself with `herdr worktree remove` or git). " +
 	"Gates, checked in order before any side effect: kill-switch, spawn depth, parallel cap. " +
 	"No layout parameters — panes split right in the current tab.";
+
+/** The inline `agent: {…}` definition schema — shared by spawn_agent and save_agent. */
+const AGENT_DEF_SCHEMA = Type.Object({
+	name: Type.Optional(
+		Type.String({
+			description:
+				"Definition name; registers session-ephemerally (addressable by type later).",
+		}),
+	),
+	description: Type.Optional(Type.String()),
+	kind: Type.Optional(
+		Type.String({ description: "Agent kind (default: settings default_kind)." }),
+	),
+	model: Type.Optional(
+		Type.String({ description: "Model pin (omit to inherit)." }),
+	),
+	thinking: Type.Optional(
+		Type.String({ description: "Thinking-level pin (omit to inherit)." }),
+	),
+	system_prompt: Type.Optional(
+		Type.String({ description: "System prompt; empty = child CLI default." }),
+	),
+	prompt_mode: Type.Optional(
+		StringEnum(["replace", "append"] as const, {
+			description: "How system_prompt applies (default replace).",
+		}),
+	),
+	tools: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Tool allowlist, e.g. [read, bash, grep, find, ls].",
+		}),
+	),
+	exclude_tools: Type.Optional(
+		Type.Array(Type.String(), { description: "Tool denylist." }),
+	),
+	skills: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Skill paths to preload (pi-only; other kinds refuse).",
+		}),
+	),
+	agent_args: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Raw agent-CLI flags appended last (escape hatch).",
+		}),
+	),
+	session_mode: Type.Optional(
+		StringEnum(["standalone", "lineage-only", "fork"] as const, {
+			description: "How the child session begins (default standalone).",
+		}),
+	),
+	auto_exit: Type.Optional(
+		Type.Boolean({
+			description:
+				"Stance: auto-exit on settle — autonomous (default when interactive unset).",
+		}),
+	),
+	interactive: Type.Optional(
+		Type.Boolean({
+			description:
+				"Stance override: pane intentionally open, stall pings suppressed.",
+		}),
+	),
+	spawning: Type.Optional(
+		Type.Boolean({ description: "Whether this agent may spawn children." }),
+	),
+	cwd: Type.Optional(
+		Type.String({
+			description: "Working directory for spawns of this definition.",
+		}),
+	),
+});
 
 export function registerAgents(pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -70,51 +145,7 @@ export function registerAgents(pi: ExtensionAPI): void {
 						'Registry agent type, e.g. "general-purpose", "Explore", "Plan", or a session inline definition name. Exactly one of type/agent.',
 				}),
 			),
-			agent: Type.Optional(
-				Type.Object({
-					name: Type.Optional(
-						Type.String({
-							description:
-								"Definition name; registers session-ephemerally (addressable by type later).",
-						}),
-					),
-					description: Type.Optional(Type.String()),
-					kind: Type.Optional(
-						Type.String({
-							description: "Agent kind (default: settings default_kind).",
-						}),
-					),
-					model: Type.Optional(
-						Type.String({ description: "Model pin (omit to inherit)." }),
-					),
-					system_prompt: Type.Optional(
-						Type.String({ description: "System prompt; empty = child CLI default." }),
-					),
-					prompt_mode: Type.Optional(
-						StringEnum(["replace", "append"] as const, {
-							description: "How system_prompt applies (default replace).",
-						}),
-					),
-					tools: Type.Optional(
-						Type.Array(Type.String(), {
-							description: "Tool allowlist, e.g. [read, bash, grep, find, ls].",
-						}),
-					),
-					exclude_tools: Type.Optional(
-						Type.Array(Type.String(), { description: "Tool denylist." }),
-					),
-					skills: Type.Optional(
-						Type.Array(Type.String(), {
-							description: "Skill paths to preload (pi-only; other kinds refuse).",
-						}),
-					),
-					agent_args: Type.Optional(
-						Type.Array(Type.String(), {
-							description: "Raw agent-CLI flags appended last (escape hatch).",
-						}),
-					),
-				}),
-			),
+			agent: Type.Optional(AGENT_DEF_SCHEMA),
 			name: Type.Optional(
 				Type.String({
 					description:
@@ -170,6 +201,67 @@ export function registerAgents(pi: ExtensionAPI): void {
 				: `Spawned ${d.kind} agent "${d.name}"${type} in ${where}; status: ${d.status}.${d.worktreePath ? ` Isolated worktree: ${d.worktreePath}` : ""}`;
 			return {
 				content: [{ type: "text", text }],
+				details: d,
+			};
+		},
+	});
+
+	// save_agent --------------------------------------------------------------
+	pi.registerTool({
+		name: "herdr_save_agent",
+		label: "Save agent definition",
+		description:
+			"Persist an agent definition to the `.md` registry so every session (this one included) " +
+			"can spawn it by `type`. Source is EITHER an inline `agent` definition OR the `type` of an " +
+			"existing registry entry (session inline, `.md` file, or built-in — saving a copy of a " +
+			"built-in to customize it is fine). Target folder: `project` (`.pi/agents/`, default — " +
+			"local and reversible) or `global` (the user-wide agents dir). The file is `---` frontmatter " +
+			"(`name`, `description`, `kind`, `model`, `thinking`, `session-mode`, `auto-exit`, " +
+			"`interactive`, `spawning`, `tools`, `deny-tools`, `skills`, `args`, `cwd`, `prompt_mode`) " +
+			"plus the system prompt as the body; unknown keys in hand-written files are ignored (the " +
+			"folder is shared with other agent tools). Ungated by design — deleting the file undoes it. " +
+			"Refuses to overwrite an existing file unless `overwrite: true`.",
+		promptSnippet: "Persist an inline agent definition to the .md registry",
+		promptGuidelines: [
+			"Use herdr_save_agent when a task defines an agent worth reusing: it writes the .md file the registry resolves by type.",
+			"Prefer the project target (reversible via file deletion); go global only when the user asks for a user-wide agent.",
+		],
+		parameters: Type.Object({
+			agent: Type.Optional(AGENT_DEF_SCHEMA),
+			type: Type.Optional(
+				Type.String({
+					description:
+						"Registry name of an existing definition to persist (inline definitions must carry a name). Exactly one of type/agent.",
+				}),
+			),
+			target: Type.Optional(
+				StringEnum(["project", "global"] as const, {
+					description: "Which registry folder to write (default: project).",
+				}),
+			),
+			overwrite: Type.Optional(
+				Type.Boolean({
+					description:
+						"Replace an existing file at the target path (default: refuse).",
+				}),
+			),
+		}),
+		async execute(_id, p) {
+			const r = saveAgent({
+				type: p.type,
+				agent: p.agent,
+				target: p.target,
+				overwrite: p.overwrite,
+			});
+			if (!r.ok) return fail(r.error.message, r.error.code, r.error.details);
+			const d = r.data;
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Saved agent "${d.name}" to ${d.path} (${d.target} registry) — spawn it by type "${d.name}" in any session.`,
+					},
+				],
 				details: d,
 			};
 		},

@@ -43,6 +43,8 @@ import {
 	type HerdrSettings,
 } from "./settings.js";
 import {
+	type AgentDirs,
+	defaultAgentDirs,
 	registerSessionAgent,
 	resolveSpecifier,
 	type AgentDefinition,
@@ -56,6 +58,11 @@ export {
 	BUILT_IN_AGENTS,
 	clearSessionAgents,
 	listAgentTypes,
+	loadFileAgents,
+	parseAgentMarkdown,
+	formatAgentMarkdown,
+	defaultAgentDirs,
+	saveAgent,
 	registerSessionAgent,
 	resolveAgentType,
 	resolveSpecifier,
@@ -507,6 +514,8 @@ export interface SpawnDeps {
 	worktree?: (projectCwd: string) => Promise<Result<string>>;
 	/** Env view — default: process.env. */
 	env?: Record<string, string | undefined>;
+	/** `.md` registry folders — default: `<cwd>/.pi/agents` + global agents dir. */
+	agentDirs?: AgentDirs;
 	/** Disable the background queue-drain timer (tests drive drains explicitly). */
 	autodrain?: boolean;
 	signal?: AbortSignal;
@@ -817,8 +826,12 @@ export async function spawnAgent(
 ): Promise<SpawnResult> {
 	const signal = deps.signal;
 
-	// 1. specifier: `type` xor `agent` (pure)
-	const spec = resolveSpecifier({ type: params.type, agent: params.agent });
+	// 1. specifier: `type` xor `agent` (pure). File-backed types resolve from
+	// the `.md` registry folders (project shadows global, read-at-use).
+	const spec = resolveSpecifier(
+		{ type: params.type, agent: params.agent },
+		deps.agentDirs ?? defaultAgentDirs(),
+	);
 	if (!spec.ok) return spec;
 	const { definition, inline } = spec.data;
 
@@ -894,7 +907,9 @@ export async function spawnAgent(
 		agentArgs: mat.data,
 		depth: parseSpawnDepth(env.PI_HERDR_SPAWN_DEPTH) + 1,
 		isolated: Boolean(params.isolated),
-		cwd: params.cwd,
+		// spawn cwd > definition cwd (frontmatter `cwd`); `isolated` ignores the
+		// definition's — the worktree IS the cwd choice at spawn level
+		cwd: params.cwd ?? (params.isolated ? undefined : merged.cwd),
 		orchestratorPane: env.HERDR_PANE_ID,
 		spawnedAt: Date.now(),
 		submitted: false,

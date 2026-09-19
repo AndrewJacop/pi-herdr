@@ -1,8 +1,9 @@
 // pi-herdr extension entry point.
 // Registers the herdr tool surface and surfaces fleet status in the pi footer.
 //
-// The v0.6 surface cut (wayfinder ticket 09): ONE surface, nine tools today —
-// herdr_spawn_agent, the legacy result trio (send_prompt / wait_agent /
+// The v0.6 surface cut (wayfinder ticket 09): ONE surface, ten tools today —
+// herdr_spawn_agent, herdr_save_agent (the `.md` registry, v0.6 issue 03),
+// the legacy result trio (send_prompt / wait_agent /
 // read_agent, retired by get_agent_result in a later ticket), list_agents,
 // and the pane-sync quartet — converging to twelve as later tickets register
 // theirs. Layout, tab/workspace, worktree, and introspection tools are OFF

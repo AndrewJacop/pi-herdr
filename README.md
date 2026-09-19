@@ -224,22 +224,67 @@ output without spawning an agent for it.
 
 ## Tools
 
-`pi-herdr` exposes **one surface of nine tools** (twelve when the remaining v0.6
+`pi-herdr` exposes **one surface of ten tools** (twelve when the remaining v0.6
 tickets land). Every agent-surface tool accepts `target` as a **pane id**
 (`w1:p3`), **agent name**, or **label**.
+
+### The agent registry
+
+Spawn `type` names resolve through a layered registry — **session** (inline
+definitions from accepted spawns this session) > **project** (`.pi/agents/*.md`)
+> **global** (`~/.pi/agent/agents/*.md`) > **built-in** (`general-purpose`,
+`Explore`, `Plan`). First-hit-wins per name, so a project file shadows a
+global one and a session definition shadows both. The file layers are
+read-at-use: a freshly saved `.md` resolves without a reload.
+
+An agent file is YAML-ish frontmatter plus the system prompt as the body:
+
+```markdown
+---
+name: auditor
+description: Audits a diff for quality and security
+kind: pi
+model: anthropic/claude-opus-4-6
+thinking: high
+session-mode: fork
+auto-exit: true
+interactive: false
+spawning: false
+tools: read, bash
+deny-tools: ["write", "edit"]
+skills: ["/skills/audit"]
+args: ["--plan"]
+cwd: /repo
+prompt_mode: append
+---
+
+You audit things. Be thorough.
+```
+
+The folder is **shared** with other agent-definition tools (same locations,
+same precedence as the coinstallable prior art): unknown frontmatter keys are
+ignored on both sides, and list values accept either a JSON array or a plain
+comma list. A malformed file is skipped and reported (in the unknown-type
+error) — it never kills the rest of the registry. The stance fields
+(`thinking`, `session-mode`, `auto-exit`, `interactive`, `spawning`) parse,
+validate, and round-trip today; the launch-plan and session-mode tickets wire
+them into the child argv.
 
 ### The spawn entry point
 
 | Tool | What it does |
 | --- | --- |
 | `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. |
+| `herdr_save_agent` | Persist an inline `agent` definition or an existing registry `type` to a `.md` file in the project (`.pi/agents/`, default) or global registry — spawn it by `type` in any session afterwards. Ungated (delete the file to undo); refuses to overwrite an existing file unless `overwrite: true`. |
 
 An inline `agent` definition takes: `name`, `description`, `kind` (default: the
 `default_kind` setting, `"pi"` — an unopinionated passthrough onto herdr's
-native `agent start --kind` axis), `model`, `system_prompt`, `prompt_mode`
-(`replace`\|`append`), `tools`, `exclude_tools`, `skills` (pi-only),
-`agent_args` (raw CLI flags, e.g. `["-ne","-e","./src/index.ts"]` to load a
-local extension). Honesty rule: a field the chosen kind cannot enforce refuses
+native `agent start --kind` axis), `model`, `thinking`, `system_prompt`,
+`prompt_mode` (`replace`\|`append`), `tools`, `exclude_tools`, `skills`
+(pi-only), `agent_args` (raw CLI flags, e.g.
+`["-ne","-e","./src/index.ts"]` to load a local extension), `session_mode`
+(`standalone`\|`lineage-only`\|`fork`), `auto_exit`, `interactive`,
+`spawning`, `cwd`. Honesty rule: a field the chosen kind cannot enforce refuses
 the spawn naming the field — use `agent_args` or another kind.
 
 ### The result trio (the interim result path)
@@ -411,7 +456,7 @@ src/
   env.ts                 # shared types + unwrap/normalize/extractText helpers
   selfreport.ts          # push this pi's state to herdr (reliable completion)
   spawn.ts               # the herdr_spawn_agent engine (gates, spec merge, queue, wait)
-  agentdefs.ts           # agent-definition registry (built-in + session-ephemeral)
+  agentdefs.ts           # agent-definition registry (built-in + session + .md file layers)
   settings.ts            # effective-settings resolution (global + project JSON, models.* routing keys)
   menu.ts                # the /subagents config menu + Kill-all-agents action
   tools/agents.ts        # herdr_spawn_agent registration (the spawn entry point)

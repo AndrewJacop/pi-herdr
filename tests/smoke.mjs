@@ -60,6 +60,8 @@ const expected = [
 	// 05 → message_agent, 10 → interrupt/resume, 12 → run_workflow) and the
 	// count converges to 12.
 	"herdr_spawn_agent",
+	// the `.md` registry persistence tool (issue 03; ungated by decision)
+	"herdr_save_agent",
 	// the legacy result trio (retired by get_agent_result in ticket 04)
 	"herdr_send_prompt",
 	"herdr_wait_agent",

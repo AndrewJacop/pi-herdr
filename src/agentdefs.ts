@@ -1,5 +1,6 @@
 // Agent definitions: the schema `spawn_agent` consumes, the built-in trio,
-// and the session-ephemeral registry layer.
+// the session-ephemeral registry layer, and the `.md` file registry (v0.6
+// issue 03).
 //
 // Decided by wayfinder ticket 01 — spawn_agent surface (specifier: `type` xor
 // `agent`, exactly one; inline field set with enforce-or-error honesty) and
@@ -9,14 +10,28 @@
 // inherits the user's configured pi model, pinning stays a registry override;
 // no isDefault flag — ticket 01 killed silent defaults).
 //
-// Registry precedence is session > project > global > built-in. This module
-// owns the session + built-in layers; the file-backed project/global layers
-// arrive with the `.md` registry ticket and slot into resolveAgentType.
+// Registry precedence is session > project > global > built-in. The `.md`
+// layers live in `.pi/agents/` (project) and `<agent dir>/agents/` (global)
+// — the SAME folders the coinstallable prior art reads (research §1, §11):
+// unknown frontmatter keys are ignored on both sides, so the folder is
+// shared, not fenced.
 
 import type { Err, Result } from "./env.js";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
 
 /** System-prompt application mode (shared with the `.md` frontmatter dialect). */
 export type PromptMode = "replace" | "append";
+
+/** How a child session begins (v0.6 field; consumed by the session-modes ticket). */
+export type SessionMode = "standalone" | "lineage-only" | "fork";
 
 /**
  * An agent definition — one `spawn_agent` blueprint.
@@ -46,12 +61,24 @@ export interface AgentDefinition {
 	skills?: string[];
 	/** Raw agent-CLI flags appended after every computed flag (escape hatch). */
 	agent_args?: string[];
+	/** Thinking pin (routing level 2; consumed by the launch-plan ticket). */
+	thinking?: string;
+	/** Session mode (frontmatter `session-mode`; launch-plan ticket consumes). */
+	session_mode?: SessionMode;
+	/** Stance: auto-exit on settle (autonomous) — default when `interactive` is unset. */
+	auto_exit?: boolean;
+	/** Stance override: pane intentionally open, stall pings suppressed. */
+	interactive?: boolean;
+	/** Whether this agent may spawn children (frontmatter `spawning`). */
+	spawning?: boolean;
+	/** Working directory for spawns of this definition (frontmatter `cwd`). */
+	cwd?: string;
 }
 
 /** A resolved registry lookup: the definition plus which layer served it. */
 export interface ResolvedAgent {
 	definition: AgentDefinition;
-	layer: "session" | "built-in";
+	layer: "session" | "project" | "global" | "built-in";
 }
 
 // ---- built-in trio (tintinweb content, verbatim) ----------------------------
@@ -127,13 +154,17 @@ export function clearSessionAgents(): void {
 	sessionAgents.clear();
 }
 
-/** Every addressable type: session names first, then the built-in trio. */
-export function listAgentTypes(): {
+/** Every addressable type: session names, then project files, global files, built-ins. */
+export function listAgentTypes(dirs: AgentDirs = defaultAgentDirs()): {
 	name: string;
 	layer: ResolvedAgent["layer"];
 }[] {
 	return [
 		...sessionAgentNames().map((name) => ({ name, layer: "session" as const })),
+		...[...loadFileAgents(dirs).entries.entries()].map(([name, e]) => ({
+			name,
+			layer: e.layer,
+		})),
 		...[...BUILT_IN_AGENTS.keys()].map((name) => ({
 			name,
 			layer: "built-in" as const,
@@ -142,24 +173,44 @@ export function listAgentTypes(): {
 }
 
 /**
- * Resolve a `type` name against the registry. Session wins over built-in;
-// project/global file layers slot in here when the `.md` registry lands.
- * Unknown names error listing every available type.
+ * Resolve a `type` name against the registry: session > project > global >
+ * built-in, first-hit-wins per name (project shadows global). File layers are
+ * read at the moment they matter (same read-at-use rule as settings — a
+ * freshly saved `.md` resolves without a reload). Malformed files never kill
+ * the rest of the registry: they are skipped and reported in the unknown-type
+ * error, the moment a lookup misses.
  */
-export function resolveAgentType(type: string): Result<ResolvedAgent> {
+export function resolveAgentType(
+	type: string,
+	dirs: AgentDirs = defaultAgentDirs(),
+): Result<ResolvedAgent> {
 	const sessionDef = sessionAgents.get(type);
 	if (sessionDef)
 		return { ok: true, data: { definition: sessionDef, layer: "session" } };
+	const fileAgents = loadFileAgents(dirs);
+	const fileEntry = fileAgents.entries.get(type);
+	if (fileEntry)
+		return {
+			ok: true,
+			data: { definition: fileEntry.definition, layer: fileEntry.layer },
+		};
 	const builtIn = BUILT_IN_AGENTS.get(type);
 	if (builtIn)
 		return { ok: true, data: { definition: builtIn, layer: "built-in" } };
+	const issues = fileAgents.issues
+		.map((i) => `${i.path} (${i.problem})`)
+		.join("; ");
 	return {
 		ok: false,
 		error: {
 			code: "VALIDATION_ERROR",
-			message: `Unknown agent type "${type}". Available: ${listAgentTypes()
-				.map((t) => t.name)
-				.join(", ")}.`,
+			message:
+				`Unknown agent type "${type}". Available: ${listAgentTypes(dirs)
+					.map((t) => t.name)
+					.join(", ")}.` +
+				(issues
+					? ` Skipped malformed agent file(s): ${issues} — fix or delete them.`
+					: ""),
 		},
 	};
 }
@@ -240,6 +291,34 @@ export function validateAgentDefinition(raw: unknown): Result<AgentDefinition> {
 			return err("agent.agent_args must be an array of CLI flag strings");
 		def.agent_args = o.agent_args;
 	}
+	if (o.thinking !== undefined) {
+		if (typeof o.thinking !== "string" || !o.thinking.trim())
+			return err("agent.thinking must be a non-empty string");
+		def.thinking = o.thinking;
+	}
+	if (o.session_mode !== undefined) {
+		if (
+			o.session_mode !== "standalone" &&
+			o.session_mode !== "lineage-only" &&
+			o.session_mode !== "fork"
+		)
+			return err(
+				'agent.session_mode must be "standalone", "lineage-only", or "fork"',
+			);
+		def.session_mode = o.session_mode;
+	}
+	for (const b of ["auto_exit", "interactive", "spawning"] as const) {
+		if (o[b] !== undefined) {
+			if (typeof o[b] !== "boolean")
+				return err(`agent.${b} must be true or false`);
+			def[b] = o[b];
+		}
+	}
+	if (o.cwd !== undefined) {
+		if (typeof o.cwd !== "string" || !o.cwd.trim())
+			return err("agent.cwd must be a non-empty string");
+		def.cwd = o.cwd;
+	}
 	return { ok: true, data: def };
 }
 
@@ -248,10 +327,13 @@ export function validateAgentDefinition(raw: unknown): Result<AgentDefinition> {
  * ticket 01 decision 1 — no silent default agent). Returns the definition and
  * whether it came from the registry or was inline.
  */
-export function resolveSpecifier(spec: {
-	type?: unknown;
-	agent?: unknown;
-}): Result<{ definition: AgentDefinition; inline: boolean }> {
+export function resolveSpecifier(
+	spec: {
+		type?: unknown;
+		agent?: unknown;
+	},
+	dirs: AgentDirs = defaultAgentDirs(),
+): Result<{ definition: AgentDefinition; inline: boolean }> {
 	const hasType = spec.type !== undefined;
 	const hasAgent = spec.agent !== undefined;
 	if (hasType && hasAgent) {
@@ -272,7 +354,354 @@ export function resolveSpecifier(spec: {
 	if (typeof spec.type !== "string" || !spec.type.trim()) {
 		return err("`type` must be a non-empty string");
 	}
-	const r = resolveAgentType(spec.type);
+	const r = resolveAgentType(spec.type, dirs);
 	if (!r.ok) return r;
 	return { ok: true, data: { definition: r.data.definition, inline: false } };
+}
+
+// ---- the `.md` frontmatter dialect (v0.6 issue 03) ----------------------------
+//
+// A file is `---\n<frontmatter>\n---\n\n<body>`: frontmatter carries the
+// identity/routing/stance fields, the body IS the system prompt. The dialect
+// is deliberately shared with the coinstallable prior art (research §1, §11):
+// keys we don't know are ignored, and our keys are ignored by theirs. Key
+// spellings follow the issue's mixed dialect — kebab-case for the keys whose
+// shape we share with the prior art (`session-mode`, `auto-exit`, `deny-tools`,
+// `args`), snake_case for ours (`prompt_mode`). List values accept either a
+// JSON array (what the writer emits; JSON is valid YAML flow syntax) or a
+// plain comma list (what the prior art writes). Scalars may be bare or
+// quoted (double-quoted values parse as JSON strings, so any character
+// round-trips).
+
+/** The frontmatter keys this dialect knows, mapped to definition fields. */
+const FRONTMATTER_KEYS: Readonly<Record<string, keyof AgentDefinition>> = {
+	name: "name",
+	description: "description",
+	kind: "kind",
+	model: "model",
+	thinking: "thinking",
+	"session-mode": "session_mode",
+	"auto-exit": "auto_exit",
+	interactive: "interactive",
+	spawning: "spawning",
+	"deny-tools": "exclude_tools",
+	args: "agent_args",
+	cwd: "cwd",
+	prompt_mode: "prompt_mode",
+	tools: "tools",
+	skills: "skills",
+};
+
+/** Reverse map: definition field → canonical frontmatter key. */
+const FIELD_TO_KEY: Readonly<Partial<Record<keyof AgentDefinition, string>>> =
+	Object.fromEntries(Object.entries(FRONTMATTER_KEYS).map(([k, f]) => [f, k]));
+
+/** Written field order: identity, routing, stance, tooling, io. */
+const FIELD_ORDER: readonly (keyof AgentDefinition)[] = [
+	"name",
+	"description",
+	"kind",
+	"model",
+	"thinking",
+	"session_mode",
+	"auto_exit",
+	"interactive",
+	"spawning",
+	"tools",
+	"exclude_tools",
+	"skills",
+	"agent_args",
+	"cwd",
+	"prompt_mode",
+];
+
+const FRONTMATTER_BLOCK = /^---\r?\n([\s\S]*?)\r?\n?---(?:\r?\n|$)/;
+
+/** Read one double- or single-quoted (or bare) scalar. */
+function unquoteScalar(value: string, key: string): Result<string> {
+	const t = value.trim();
+	if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+		try {
+			const parsed: unknown = JSON.parse(t);
+			if (typeof parsed === "string") return { ok: true, data: parsed };
+		} catch {
+			/* fall through to the error */
+		}
+		return err(`frontmatter key "${key}": malformed double-quoted value (${t})`);
+	}
+	if (t.length >= 2 && t.startsWith("'") && t.endsWith("'"))
+		return { ok: true, data: t.slice(1, -1) };
+	return { ok: true, data: t };
+}
+
+/** Read a list value: JSON array (writer form) or plain comma list (prior art). */
+function parseListValue(value: string, key: string): Result<string[]> {
+	const t = value.trim();
+	if (t.startsWith("[")) {
+		try {
+			const parsed: unknown = JSON.parse(t);
+			if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string"))
+				return { ok: true, data: parsed as string[] };
+		} catch {
+			/* fall through to the error */
+		}
+		return err(`frontmatter key "${key}": malformed array value (${t})`);
+	}
+	return {
+		ok: true,
+		data: t
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean),
+	};
+}
+
+/**
+ * Parse one `.md` agent file. Frontmatter lines become the (coerced) raw
+ * object `validateAgentDefinition` checks — one definition contract for
+ * inline and file sources. Unknown keys are ignored (shared folder);
+ * indented/colon-less lines are ignored as foreign YAML (nesting, block
+ * lists) rather than fatal. The body, when non-empty, becomes system_prompt.
+ */
+export function parseAgentMarkdown(
+	content: string,
+	fallbackName: string,
+): Result<AgentDefinition> {
+	if (content.charCodeAt(0) === 0xfeff) content = content.slice(1); // BOM
+	const m = content.match(FRONTMATTER_BLOCK);
+	if (!m)
+		return err(
+			"no YAML frontmatter block (`---` … `---`) at the top of the file",
+		);
+	const body = content.replace(FRONTMATTER_BLOCK, "").trim();
+	const raw: Record<string, unknown> = {};
+	for (const line of m[1].split(/\r?\n/)) {
+		if (!line.trim() || /^\s/.test(line) || line.trim().startsWith("#")) continue;
+		const idx = line.indexOf(":");
+		if (idx === -1) continue;
+		const key = line.slice(0, idx).trim();
+		const value = line.slice(idx + 1);
+		const field = FRONTMATTER_KEYS[key];
+		if (!field) continue; // unknown key — ignored (shared folder)
+		if (
+			field === "auto_exit" ||
+			field === "interactive" ||
+			field === "spawning"
+		) {
+			// true/false coerce to booleans; anything else passes through for the
+			// validator to reject naming the field.
+			const t = value.trim();
+			if (t === "true" || t === "false") raw[field] = t === "true";
+			else if (t !== "") raw[field] = t;
+			continue;
+		}
+		if (
+			field === "tools" ||
+			field === "skills" ||
+			field === "exclude_tools" ||
+			field === "agent_args"
+		) {
+			if (value.trim() === "") continue; // empty list ≡ absent
+			const list = parseListValue(value, key);
+			if (!list.ok) return list;
+			raw[field] = list.data;
+			continue;
+		}
+		if (value.trim() === "") continue; // empty scalar ≡ absent (name falls back)
+		const scalar = unquoteScalar(value, key);
+		if (!scalar.ok) return scalar;
+		raw[field] = scalar.data;
+	}
+	if (raw.name === undefined) raw.name = fallbackName;
+	const v = validateAgentDefinition(raw);
+	if (!v.ok) return v;
+	if (body) v.data.system_prompt = body;
+	return v;
+}
+
+/** How the writer quotes a scalar (reader inverse: JSON strings round-trip). */
+function quoteScalar(value: string): string {
+	if (value === "" || /^[\s"'[{]/.test(value) || /\s$/.test(value))
+		return JSON.stringify(value);
+	return value;
+}
+
+/**
+ * Serialize a definition to the `.md` dialect: every set field in canonical
+ * order, lists as JSON arrays, the system prompt as the body. Refuses the
+ * one value the line-based dialect cannot carry: a newline inside a
+ * frontmatter scalar (the system prompt belongs in the body, not here).
+ */
+export function formatAgentMarkdown(def: AgentDefinition): Result<string> {
+	const lines: string[] = [];
+	for (const field of FIELD_ORDER) {
+		const value = def[field];
+		if (value === undefined) continue;
+		const key = FIELD_TO_KEY[field];
+		if (!key) continue;
+		if (typeof value === "boolean") {
+			lines.push(`${key}: ${value}`);
+		} else if (Array.isArray(value)) {
+			if (value.length) lines.push(`${key}: ${JSON.stringify(value)}`);
+		} else {
+			if (/[\r\n]/.test(value))
+				return err(
+					`agent.${field} cannot be saved: frontmatter values must be single-line (move prose to the system-prompt body)`,
+				);
+			lines.push(`${key}: ${quoteScalar(value)}`);
+		}
+	}
+	const body = def.system_prompt ?? "";
+	return { ok: true, data: `---\n${lines.join("\n")}\n---\n\n${body}\n` };
+}
+
+// ---- file layers ---------------------------------------------------------------
+
+/** The two `.md` registry folders (project shadows global). */
+export interface AgentDirs {
+	project: string;
+	global: string;
+}
+
+/** Default folders for a session cwd: `<cwd>/.pi/agents` and `<agent dir>/agents`. */
+export function defaultAgentDirs(cwd: string = process.cwd()): AgentDirs {
+	return {
+		project: join(cwd, CONFIG_DIR_NAME, "agents"),
+		global: join(getAgentDir(), "agents"),
+	};
+}
+
+/** A problem with one agent file, reported without killing the rest. */
+export interface AgentFileIssue {
+	path: string;
+	problem: string;
+}
+
+/** One loaded file-backed definition. */
+export interface FileAgentEntry {
+	definition: AgentDefinition;
+	layer: "project" | "global";
+	path: string;
+}
+
+export interface FileAgents {
+	/** name → entry, first-hit-wins per name (project scanned before global). */
+	entries: ReadonlyMap<string, FileAgentEntry>;
+	/** Malformed/unreadable files: skipped, never fatal to the rest. */
+	issues: readonly AgentFileIssue[];
+}
+
+function errMsg(e: unknown): string {
+	return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Load every `.md` agent file from both registry dirs. Project is scanned
+ * before global and first-hit-wins per name, so a project file shadows a
+ * same-name global one. A file that is unreadable, frontmatter-less, or fails
+ * validation becomes an issue and is skipped — the rest of the registry
+ * still loads.
+ */
+export function loadFileAgents(dirs: AgentDirs): FileAgents {
+	const entries = new Map<string, FileAgentEntry>();
+	const issues: AgentFileIssue[] = [];
+	for (const layer of ["project", "global"] as const) {
+		const dir = dirs[layer];
+		let files: string[];
+		try {
+			if (!existsSync(dir)) continue;
+			// sorted for deterministic first-hit within a dir (two files claiming
+			// one name in the SAME dir is a user error; the first wins, stably)
+			files = readdirSync(dir)
+				.filter((f) => f.endsWith(".md"))
+				.sort();
+		} catch (e) {
+			issues.push({
+				path: dir,
+				problem: `could not list directory (${errMsg(e)})`,
+			});
+			continue;
+		}
+		for (const file of files) {
+			const path = join(dir, file);
+			let content: string;
+			try {
+				content = readFileSync(path, "utf8");
+			} catch (e) {
+				issues.push({ path, problem: `could not be read (${errMsg(e)})` });
+				continue;
+			}
+			const parsed = parseAgentMarkdown(content, file.replace(/\.md$/, ""));
+			if (!parsed.ok) {
+				issues.push({ path, problem: parsed.error.message });
+				continue;
+			}
+			if (!entries.has(parsed.data.name))
+				entries.set(parsed.data.name, { definition: parsed.data, layer, path });
+		}
+	}
+	return { entries, issues };
+}
+
+// ---- save_agent ------------------------------------------------------------------
+
+export interface SaveAgentParams {
+	/** Registry name of an existing definition (any layer) to persist. */
+	type?: unknown;
+	/** Inline definition to persist. */
+	agent?: unknown;
+	/** Which registry folder to write (default: project — local + reversible). */
+	target?: "project" | "global";
+	/** Replace an existing file at the target path (default: refuse). */
+	overwrite?: boolean;
+}
+
+export type SaveAgentResult = Result<{
+	name: string;
+	path: string;
+	target: "project" | "global";
+}>;
+
+/** File name for a registry name (non-path characters collapse to `-`). */
+function fileSlug(name: string): string {
+	return (
+		name.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "agent"
+	);
+}
+
+/**
+ * Persist a definition as a `.md` file in the chosen registry folder (v0.6
+ * issue 03 — ungated by decision: low risk, reversible by deleting the file).
+ * The written file resolves immediately (read-at-use registry) in this
+ * session and in every fresh one. Refuses to clobber an existing file unless
+ * `overwrite` is set — a hand-authored file is the user's content.
+ */
+export function saveAgent(
+	params: SaveAgentParams,
+	dirs: AgentDirs = defaultAgentDirs(),
+): SaveAgentResult {
+	const spec = resolveSpecifier(
+		{ type: params.type, agent: params.agent },
+		dirs,
+	);
+	if (!spec.ok) return spec;
+	const def = spec.data.definition;
+	if (!def.name)
+		return err("a saved agent needs a `name` to be addressable by `type` later");
+	const target = params.target ?? "project";
+	const text = formatAgentMarkdown(def);
+	if (!text.ok) return text;
+	const dir = target === "global" ? dirs.global : dirs.project;
+	const path = join(dir, `${fileSlug(def.name)}.md`);
+	if (!params.overwrite && existsSync(path))
+		return err(
+			`${path} already exists — pass overwrite: true to replace it, or delete the file first`,
+		);
+	try {
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(path, text.data, "utf8");
+	} catch (e) {
+		return err(`could not write ${path}: ${errMsg(e)}`);
+	}
+	return { ok: true, data: { name: def.name, path, target } };
 }
