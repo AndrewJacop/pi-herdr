@@ -1,10 +1,23 @@
 ---
 label: wayfinder:grilling
-status: open
-assignee:
+status: closed
+assignee: Andrew Jacop
 blocked-by: []
 ---
 
 ## Question
 
 How does the 43→~7 surface cut ship mechanically? The `surface` key itself is settled in ticket `03` (`.pi/herdr.json` + global, project wins per key, default `"agents"`, read once at init — restart-required, no mid-session setActiveTools swap). Decide here: what exactly hides vs unregisters in `agents` mode, whether the `herdr-qa` sweep prompt (built around 43 tools) runs against both surfaces or gains an agents-mode variant, deprecation story for existing users of the raw tools (CHANGELOG note? escape-hatch doc?), and the README restructure outline (agent-experience first, raw fleet second). QA live tests in `tests/*.mjs` that drive hidden tools must keep a path to run.
+
+## Resolution
+
+HITL-grilled (wayfinder work-through session). Facts cross-checked: `src/tools/*.ts` (43 tools, confirmed), `.pi/prompts/herdr-qa.md` (7-group live sweep, spawns testers via `herdr_start_agent` + `-ne -e ./src`), `tests/*.mjs` (17 files driving every tier), README heading spine, ticket `03`'s settled `surface` semantics.
+
+1. **Mechanism: register-all, deactivate at init.** The extension always registers every tool (43 + new v0.5 ones), then applies one init-time `ctx.setActiveTools()` from the resolved `surface`. One registration code path; the filter is data (a static `AGENT_TOOLS` list in the spec, not scattered conditionals). Hidden tools are *inactive*, not absent — error is "not an active tool", and `surface: "full"` via `/reload` re-exposes without re-registering. Matches ticket 03's restart-required decision.
+2. **The agents-mode visible set = 11 tools.** `spawn_agent`, `get_agent_result`, `steer_agent`, `save_agent`, `message_orchestrator`, `message_agent` (all new), plus `run_command`, `read_pane`, `wait_output`, `send_keys` (existing pane-sync quartet), plus **`list_agents`** — the one fleet-listing primitive (handle·kind·status·age only). `list_agents` earns its slot: after context compaction a model that lost its spawn-returned handles has no other recovery path. Everything else (layout, worktrees, introspection, agent-pane primitives, focus/sessions/delegate) is deactivated. Naming note: all tools keep the existing `herdr_` prefix convention; the charter's unprefixed names were shorthand.
+3. **QA sweep: full surface + one new agents-mode group.** The existing 7 groups run unchanged against `surface: "full"` — the sweep proves the code, and every tool is code that must work regardless of visibility. New 8th group `surface`: spawn a tester booted with the agents surface (env override or scratch project `.pi/herdr.json`), assert all 11 visible tools are callable and at least one hidden tool (e.g. `herdr_split_pane`) is rejected. The filter itself additionally gets offline unit tests (set membership + setActiveTools call shape).
+4. **Live tests: hermetic via env override.** The test harness sets `PI_HERDR_SURFACE=full` when booting the test pi — raw-tool tests stay green regardless of the dev machine's own `herdr.json`. This env var is the sanctioned test backdoor and sits at the top of config precedence: **env > project > global > default** (recorded here as an addendum to ticket 03's storage decision). New agents-mode tests assert the visible/hidden split live.
+5. **Deprecation: CHANGELOG + README note, no nagging.** v0.5 CHANGELOG carries a prominent breaking-change entry: default surface flips to `agents`, 43→11 tools visible, one-line remedy (`surface: "full"` in `.pi/herdr.json`). README's Configuration section documents the key with an "Upgrading from v0.4" note pointing at the escape hatch. No in-band notices, no boot-time detection machinery.
+6. **README: agents-first, fleet-as-appendix.** New spine: *What is herdr?* (rewritten: agent-experience layer) → Install → Quick start (spawn_agent → get_agent_result) → Examples (parallel fan-out; agent files & shipped defaults; messaging the fleet; steering/blocked Q&A) → The agent surface (11 tools) → Settings (`/herdr` + `herdr.json`, incl. `surface`) → Notifications & fleet widget → **The raw fleet surface (escape hatch)** (`surface: "full"` → 43 tools, one line per tier, detail delegated to `docs/tools/`) → completion-detection appendix → Configuration/Platform/Development/Roadmap/License. Old pane-driving/delegate examples fold into the raw-fleet section or get rewritten agent-first.
+
+**Consumed by:** ticket `10` — in agents mode `get_agent_result`/`steer_agent` **replace** `herdr_read_agent`/`herdr_send_prompt` in the visible set (the old pair is deactivated there, stays in full mode); what remains for 10 is param/return shape and whether the new tools share implementation with the old pair.
