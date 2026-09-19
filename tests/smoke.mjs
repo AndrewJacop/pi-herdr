@@ -33,10 +33,12 @@ console.log("\n[1] Extension load + tool registration (AC1, AC7)");
 const ext = await jiti.import(join(ROOT, "src/index.ts"), { parent: ROOT });
 
 const tools = [];
+const commands = [];
 const events = {};
 const busEvents = {};
 const mockPi = {
 	registerTool: (def) => tools.push(def),
+	registerCommand: (name, def) => commands.push({ name, def }),
 	on: (ev, handler) => {
 		(events[ev] ??= []).push(handler);
 	},
@@ -108,6 +110,10 @@ assert(
 	`exactly ${expected.length} tools (got ${names.length})`,
 );
 assert(events.agent_start?.length >= 1, "wired agent_start footer hook");
+assert(
+	commands.some((c) => c.name === "herdr"),
+	"registered the /herdr settings command",
+);
 assert(events.turn_end?.length === 1, "wired turn_end footer hook");
 // Self-report (src/selfreport.ts) activates only inside a herdr pane; when it
 // does, it adds session_start/agent_start/agent_settled/session_shutdown hooks
@@ -875,11 +881,7 @@ assert(
 	"createTabArgs: workspace/cwd/label/env/focus in order",
 );
 assert(
-	eq(layoutMod.createTabArgs({ focus: false }), [
-		"tab",
-		"create",
-		"--no-focus",
-	]),
+	eq(layoutMod.createTabArgs({ focus: false }), ["tab", "create", "--no-focus"]),
 	"createTabArgs: focus:false -> --no-focus; undefined options omitted",
 );
 // workspaces: create serializes cwd/label/env/focus (no --workspace).

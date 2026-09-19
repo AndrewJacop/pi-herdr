@@ -8,6 +8,7 @@ import { registerLayout } from "./tools/layout.js";
 import { registerWorktrees } from "./tools/worktrees.js";
 import { registerIntrospection } from "./tools/introspection.js";
 import { registerSelfReport } from "./selfreport.js";
+import { registerHerdrCommand } from "./menu.js";
 import { herdr } from "./herdr.js";
 import { formatVersion, probeHerdr, refreshHerdrProbe } from "./version.js";
 
@@ -21,6 +22,9 @@ export default function (pi: ExtensionAPI): void {
 	registerLayout(pi);
 	registerWorktrees(pi);
 	registerIntrospection(pi);
+
+	// The /herdr command: settings menu + confirmed Kill-all-agents action.
+	registerHerdrCommand(pi);
 
 	// Re-probe herdr on a fresh run (startup) or after /reload so an
 	// install/upgrade is noticed immediately; toast when it's missing/unparseable.
@@ -59,9 +63,7 @@ export default function (pi: ExtensionAPI): void {
 					return;
 				}
 				const agents = r.data?.agents ?? [];
-				const working = agents.filter(
-					(a) => a.agent_status === "working",
-				).length;
+				const working = agents.filter((a) => a.agent_status === "working").length;
 				const noun = agents.length === 1 ? "agent" : "agents";
 				setStatus(
 					"pi-herdr",

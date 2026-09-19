@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Settings layer + `/herdr` menu.** Effective settings are the deep merge of
+  `~/.pi/agent/herdr.json` (global) and `<project>/.pi/herdr.json` (project wins
+  per key), with each value's source tracked (project | global | default). The
+  bare `/herdr` command renders one flat interactive list — safety gates first,
+  then behavior, then a confirmed **Kill all agents** action. Bool rows toggle,
+  enum rows pick, number rows input; writes persist to the chosen file and every
+  key except `surface` is hot (read when it matters). `surface` is read once at
+  init and its row is marked restart-required. Malformed JSON is reported and
+  ignored, never silently clobbered. There is deliberately no `/herdr set key
+  value` args form — settings are user knobs; hand-edit the JSON to script them.
+
 ## [0.5.0] - 2026-09-12
 
 ### Changed

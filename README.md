@@ -322,6 +322,38 @@ self-report (e.g. `claude`/`codex`), the poll catches the settled state too.
 Built-in presets: `pi`, `claude`, `codex`, `omp` (opencode). On Windows they're
 launched as `cmd /c <cli>`; elsewhere as the bare command.
 
+## Settings (`/herdr`)
+
+Run `/herdr` for the settings menu: one flat list of
+`key = value (source: project | global | default)` rows — safety gates first,
+then behavior — plus a confirmed **Kill all agents** action. Bool rows toggle,
+enum rows pick, number rows input, and every edit persists to the file you
+choose. There is deliberately **no** `/herdr set key value` args form: settings
+are user knobs, and hand-editing the JSON files stays the scriptable path.
+
+Settings live in two JSON files, deep-merged with the project file winning per
+key:
+
+| File | Scope |
+| --- | --- |
+| `~/.pi/agent/herdr.json` | global |
+| `<project>/.pi/herdr.json` | project (wins per key) |
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `agents_kill_switch` | `false` | Refuse new agent spawns. A gate only — never terminates running agents (that's the menu's Kill-all action). |
+| `allow_save_agent` | `false` | Allow the `save_agent` tool to write agent definitions to the registry. |
+| `surface` | `"agents"` | Tool set the model sees: `agents` (v0.5 agent-experience tools) or `full` (the complete fleet tool set). Read once at init — restart-required (`/reload`). |
+| `default_kind` | `"pi"` | Agent kind spawned when none is given (validated against the live `herdr agent` kind list). |
+| `max_parallel_agents` | `3` | Concurrency cap; spawns beyond it are queued until a slot frees. |
+| `max_spawn_depth` | `2` | Guard against runaway recursive fleets. |
+| `notifications` | `"normal"` | Verbosity of agent-completion notifications: `none` / `quiet` / `normal`. |
+
+All keys except `surface` are read at the moment they matter, so menu edits
+take effect on the next operation — no restart needed. Malformed JSON in a
+settings file is reported (and ignored) rather than silently dropping your
+other file's values; the menu never overwrites a file it can't parse.
+
 ## Platform notes
 
 - **Windows:** the agent CLIs (`pi`, `claude`, …) are npm `.cmd` shims. `herdr` is
