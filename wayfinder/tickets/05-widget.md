@@ -1,7 +1,7 @@
 ---
 label: wayfinder:prototype
 status: open
-assignee:
+assignee: Andrew Jacop
 blocked-by: []
 ---
 
