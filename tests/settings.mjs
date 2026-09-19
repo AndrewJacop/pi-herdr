@@ -316,27 +316,27 @@ console.log("\n[7] Menu: flat rows, ordering, sources, restart marker");
 }
 
 console.log(
-	"\n[8] Menu: bool toggle persists to chosen file; kill-switch kills nothing",
+	"\n[8] Menu: bool toggle persists to owning file; kill-switch kills nothing",
 );
 {
 	const p = pathsFor("m8");
 	const { ctx, calls } = scriptedCtx({
-		select: [
-			"agents_kill_switch = false (source: default)",
-			`Project — ${p.projectPath}`,
-			DONE,
-		],
+		select: ["agents_kill_switch = false (source: default)", DONE],
 	});
 	const herdrMock = herdrRecorder([]);
 	await menu.runSettingsMenu(ctx, { paths: p, herdrFn: herdrMock.fn, kindsFn });
 	assert(
 		readJson(p.projectPath).agents_kill_switch === true,
-		"toggle persisted true to project file",
+		"default-sourced key writes the project file",
 	);
 	const fs0 = await import("node:fs");
 	assert(
 		!fs0.existsSync(p.globalPath) && herdrMock.calls.length === 0,
 		"no herdr call made, no global file touched (kill-switch is a gate only)",
+	);
+	assert(
+		calls.select.every((s) => !s.title.startsWith("Save ")),
+		"no save-target prompt — write goes to the owning file",
 	);
 	assert(
 		calls.notify.some(
@@ -347,7 +347,7 @@ console.log(
 		"save notify names the file",
 	);
 	assert(
-		calls.select[2].options.includes(
+		calls.select[1].options.includes(
 			"agents_kill_switch = true (source: project)",
 		),
 		"menu re-renders with new value + source",
@@ -355,18 +355,13 @@ console.log(
 }
 
 console.log(
-	"\n[9] Menu: enum pick (surface) + save-to-global when global owns the key",
+	"\n[9] Menu: enum pick (default_kind) + global-owned key writes global",
 );
 {
 	const p = pathsFor("m9");
 	writeFile(p.globalPath, JSON.stringify({ default_kind: "claude" }));
 	const { ctx, calls } = scriptedCtx({
-		select: [
-			"default_kind = claude (source: global)",
-			"pi",
-			`Global — ${p.globalPath}`,
-			DONE,
-		],
+		select: ["default_kind = claude (source: global)", "pi", DONE],
 	});
 	await menu.runSettingsMenu(ctx, { paths: p, kindsFn });
 	assert(
@@ -374,8 +369,10 @@ console.log(
 		"kind picker uses the live kind list",
 	);
 	assert(
-		calls.select[2].options[0].startsWith("Global —"),
-		"owner file offered first",
+		calls.select.every(
+			(s) => s.title === "herdr settings" || s.title.startsWith("default_kind"),
+		),
+		"no save-target dialog — the global owner file is written directly",
 	);
 	assert(readJson(p.globalPath).default_kind === "pi", "global file updated");
 	const fs = await import("node:fs");
@@ -405,11 +402,7 @@ console.log("\n[10] Menu: number input validates before writing");
 {
 	const p = pathsFor("m10b");
 	const { ctx } = scriptedCtx({
-		select: [
-			"max_parallel_agents = 3 (source: default)",
-			`Project — ${p.projectPath}`,
-			DONE,
-		],
+		select: ["max_parallel_agents = 3 (source: default)", DONE],
 		input: ["7"],
 	});
 	await menu.runSettingsMenu(ctx, { paths: p, kindsFn });

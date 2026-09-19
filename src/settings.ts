@@ -165,6 +165,10 @@ function isPlainObject(v: unknown): v is JsonObject {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function msg(e: unknown): string {
+	return e instanceof Error ? e.message : String(e);
+}
+
 /**
  * Deep-merge two parsed settings files: plain objects merge per key, anything
  * else (scalars, arrays) is replaced. `project` wins.
@@ -257,7 +261,7 @@ function readSettingsFile(path: string): RawFile {
 			issues: [
 				{
 					path,
-					problem: `could not be read (${e instanceof Error ? e.message : String(e)})`,
+					problem: `could not be read (${msg(e)})`,
 				},
 			],
 		};
@@ -271,7 +275,7 @@ function readSettingsFile(path: string): RawFile {
 			issues: [
 				{
 					path,
-					problem: `malformed JSON (${e instanceof Error ? e.message : String(e)}) — values from this file are ignored; fix it by hand`,
+					problem: `malformed JSON (${msg(e)}) — values from this file are ignored; fix it by hand`,
 				},
 			],
 		};
@@ -360,7 +364,7 @@ export function writeSetting(
 		} catch (e) {
 			return {
 				ok: false,
-				error: `${path} is malformed JSON (${e instanceof Error ? e.message : String(e)}) — fix it by hand before editing settings here`,
+				error: `${path} is malformed JSON (${msg(e)}) — fix it by hand before editing settings here`,
 			};
 		}
 		if (!isPlainObject(parsed)) {
@@ -378,7 +382,7 @@ export function writeSetting(
 	} catch (e) {
 		return {
 			ok: false,
-			error: `could not write ${path}: ${e instanceof Error ? e.message : String(e)}`,
+			error: `could not write ${path}: ${msg(e)}`,
 		};
 	}
 	return { ok: true, path };

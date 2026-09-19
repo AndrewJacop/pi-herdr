@@ -6,28 +6,25 @@
 //
 // Row shape: `key = value (source: project | global | default)`, ordered
 // safety gates → behavior, then the Kill-all action row. Bool rows toggle,
-// enum rows pick, number rows input, and every write persists to the file the
-// user chooses (the file owning the key is offered first; a project checkout
-// never mutates global config unless the user explicitly picks global).
+// enum rows pick, number rows input, and each write persists to whichever
+// file owns the key (a default-sourced key writes the project file) — a
+// project checkout never mutates global config.
 //
 // Decided by wayfinder ticket 03 — settings menu.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentKinds } from "./config.js";
 import { herdr } from "./herdr.js";
-import { normalizeAgent, type Result } from "./env.js";
+import { normalizeAgent } from "./env.js";
 import {
 	SETTING_KEYS,
 	getSettingsPaths,
 	loadSettings,
-	settingKeyDef,
 	type JsonObject,
 	type ResolvedSettings,
-	type SettingKey,
 	type SettingKeyDef,
 	type SettingValue,
 	type SettingsPaths,
-	type SettingsSource,
 	writeSetting,
 } from "./settings.js";
 
@@ -166,40 +163,17 @@ async function editSetting(
 		next = pick;
 	}
 
-	const target = await chooseSaveTarget(ctx, def, resolved, paths);
-	if (!target) return; // cancelled
+	// The write goes to whichever file owns the key — never a target prompt.
+	// A default-sourced key lands in the project file, so a project checkout
+	// never mutates global config.
+	const target =
+		resolved.sources[def.key] === "global" ? paths.globalPath : paths.projectPath;
 	const r = writeSetting(target, def.key, next);
 	if (r.ok) {
 		ctx.ui.notify(`${def.key} = ${next} saved to ${r.path}`, "info");
 	} else {
 		ctx.ui.notify(r.error, "error");
 	}
-}
-
-/** Pick which file a write goes to; the file owning the key is offered first. */
-async function chooseSaveTarget(
-	ctx: MenuContext,
-	def: SettingKeyDef,
-	resolved: ResolvedSettings,
-	paths: SettingsPaths,
-): Promise<string | null> {
-	const source: SettingsSource = resolved.sources[def.key];
-	const rows =
-		source === "global"
-			? [
-					{ label: `Global — ${paths.globalPath}`, path: paths.globalPath },
-					{ label: `Project — ${paths.projectPath}`, path: paths.projectPath },
-				]
-			: [
-					{ label: `Project — ${paths.projectPath}`, path: paths.projectPath },
-					{ label: `Global — ${paths.globalPath}`, path: paths.globalPath },
-				];
-	const label = await ctx.ui.select(
-		`Save ${def.key} to:`,
-		rows.map((r) => r.label),
-	);
-	if (label === undefined) return null;
-	return rows.find((r) => r.label === label)?.path ?? null;
 }
 
 /**
@@ -253,12 +227,3 @@ async function killAllAgents(
 		ctx.ui.notify(`Killed ${killed} ${noun}.`, "info");
 	}
 }
-
-/** Convenience for later tickets: read effective settings for a session cwd. */
-export function effectiveSettings(cwd: string): ResolvedSettings {
-	return loadSettings(getSettingsPaths(cwd));
-}
-
-// Re-exported for consumers (spawn/save/notify gates in later tickets) so
-// they don't need to import settings.ts directly.
-export { loadSettings, writeSetting, settingKeyDef, type Result };

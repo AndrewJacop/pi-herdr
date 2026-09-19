@@ -327,9 +327,11 @@ launched as `cmd /c <cli>`; elsewhere as the bare command.
 Run `/herdr` for the settings menu: one flat list of
 `key = value (source: project | global | default)` rows — safety gates first,
 then behavior — plus a confirmed **Kill all agents** action. Bool rows toggle,
-enum rows pick, number rows input, and every edit persists to the file you
-choose. There is deliberately **no** `/herdr set key value` args form: settings
-are user knobs, and hand-editing the JSON files stays the scriptable path.
+enum rows pick, number rows input, and each edit persists to whichever file
+owns the key (a default-sourced key writes the project file), so a project
+checkout never mutates your global config. There is deliberately **no**
+`/herdr set key value` args form: settings are user knobs, and hand-editing
+the JSON files stays the scriptable path.
 
 Settings live in two JSON files, deep-merged with the project file winning per
 key:
