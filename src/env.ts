@@ -14,7 +14,8 @@ export type HerdrErrorCode =
 	| "AGENT_START_FAILED"
 	| "AGENT_NOT_READY"
 	| "HERDR_UNAVAILABLE"
-	| "PANE_GONE";
+	| "PANE_GONE"
+	| "SPAWN_REFUSED";
 
 /** Built-in agent presets (extensible via HERDR_PRESET_* env). */
 export type AgentPreset = "pi" | "claude" | "codex" | "omp" | "custom";

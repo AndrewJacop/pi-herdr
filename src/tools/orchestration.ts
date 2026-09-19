@@ -319,7 +319,7 @@ async function waitForAgentDetected(
 }
 
 /** Detect herdr version once and dispatch to the matching launch path. */
-async function startHerdrAgent(
+export async function startHerdrAgent(
 	input: StartInput,
 ): Promise<Result<{ agent: Record<string, unknown> }>> {
 	// Without --cwd, herdr spawns the pane in the DAEMON's cwd (home folder for a
@@ -503,7 +503,7 @@ export function transitionWaitArgs(
  * `agent wait --until` (repeatable), so on the new API one call races every
  * requested state; legacy fans out one `wait agent-status` per state.
  */
-async function waitForStatus(
+export async function waitForStatus(
 	paneId: string,
 	statuses: string[],
 	deadline: number,
@@ -590,7 +590,7 @@ async function raceIdleDone(
 }
 
 /** Read the live agent_status of a pane (idle/working/blocked/done/unknown). */
-async function getAgentStatus(
+export async function getAgentStatus(
 	paneId: string,
 	signal?: AbortSignal,
 ): Promise<Result<string>> {
@@ -775,7 +775,7 @@ export function promptWaitArgs(
  * Returns `NOT_STARTED` (in `error.message`) when the turn never entered
  * working, so the caller (herdr_delegate) can re-send.
  */
-async function submitAndWait(
+export async function submitAndWait(
 	paneId: string,
 	text: string,
 	opts: {

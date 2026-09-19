@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`herdr_spawn_agent` — the v0.5 agent surface begins.** One call spawns a
+  background agent pane, submits the task prompt, and returns
+  `{name, paneId, status}`. The agent is specified by `type` (registry:
+  built-in `general-purpose` / `Explore` / `Plan` with tintinweb-verbatim
+  content — full descriptions, read-only allowlists, no model pins — plus
+  session-ephemeral inline definitions from earlier spawns) xor an inline
+  `agent: {...}` definition; exactly one, enforced. `name` is the pane handle
+  (fallback chain spawn name → definition name → `agent-<timestamp>`,
+  uniquified when taken). `kind`/`model` merge over the definition and the
+  merged spec is validated enforce-or-error per kind — a field the kind
+  can't enforce refuses the spawn naming the field (use `agent_args` or
+  another kind; multiline pi system prompts ride a temp file through herdr's
+  single-line-safe arg surface, other kinds refuse). Gates, checked in order
+  before any side effect: kill-switch → spawn depth (`PI_HERDR_SPAWN_DEPTH`,
+  unset = 1, child = +1) → parallel cap; at cap the spawn is accepted
+  `status: "queued"` with no pane until a slot frees. `isolated: true`
+  spawns into a fresh auto-created herdr-side git worktree. Background by
+  default; `wait: true` blocks until done-or-blocked, `wait: <ms>` returns the
+  current state on expiry. Children carry `PI_HERDR_SPAWN_DEPTH` (incremented)
+  and `PI_HERDR_ORCHESTRATOR_PANE`.
 - **Settings layer + `/herdr` menu.** Effective settings are the deep merge of
   `~/.pi/agent/herdr.json` (global) and `<project>/.pi/herdr.json` (project wins
   per key), with each value's source tracked (project | global | default). The

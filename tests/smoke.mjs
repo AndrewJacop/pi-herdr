@@ -55,6 +55,7 @@ await ext.default(mockPi);
 const names = tools.map((t) => t.name);
 const expected = [
 	"herdr_start_agent",
+	"herdr_spawn_agent",
 	"herdr_send_prompt",
 	"herdr_read_agent",
 	"herdr_wait_agent",

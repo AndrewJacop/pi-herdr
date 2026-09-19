@@ -3,6 +3,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerOrchestration } from "./tools/orchestration.js";
+import { registerAgents } from "./tools/agents.js";
 import { registerPaneSync } from "./tools/sync.js";
 import { registerLayout } from "./tools/layout.js";
 import { registerWorktrees } from "./tools/worktrees.js";
@@ -18,6 +19,7 @@ export default function (pi: ExtensionAPI): void {
 	registerSelfReport(pi);
 
 	registerOrchestration(pi);
+	registerAgents(pi);
 	registerPaneSync(pi);
 	registerLayout(pi);
 	registerWorktrees(pi);
