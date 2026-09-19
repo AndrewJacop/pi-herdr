@@ -682,6 +682,19 @@ console.log("\n[12] Over-cap spawn queues; pane appears when a slot frees");
 	assert(!!rec?.paneId, "queued record now has a pane");
 	const rec3 = spawn.spawnRecords().get("third");
 	assert(!rec3?.paneId, "the third stays queued (cap still held)");
+	// hand-spawned fleet panes never hold a session slot (watch-scope decision)
+	const h2 = makeDeps({
+		settings: { max_parallel_agents: 1 },
+		live: [{ name: "human-pane", paneId: "px" }],
+	});
+	const r2 = await spawn.spawnAgent(
+		{ prompt: "x", type: "Plan", name: "next-to-human" },
+		h2.deps,
+	);
+	assert(
+		r2.ok && r2.data.paneId !== undefined,
+		"a hand-spawned pane in the fleet does not queue the session's spawn",
+	);
 }
 
 // ---------------------------------------------------------------------------

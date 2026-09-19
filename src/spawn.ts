@@ -206,6 +206,10 @@ export function materializeAgentArgs(
 		deps.tmpPath ??
 		((h: string, n: number) =>
 			join(tmpdir(), `pi-herdr-spawn-${slug(h)}-sysprompt-${n}.md`));
+	// ponytail: prompt files are never deleted — the child reads them during
+	// boot (deleting after the boot gate would race slow boots). Deterministic
+	// per-handle names keep re-spawns overwriting; OS tmp cleanup owns the rest.
+	// Add per-spawn unlink after the boot gate if tmpdir growth ever matters.
 	const isPi = kind.toLowerCase() === "pi";
 	const out: string[] = [];
 	let fileN = 0;
@@ -793,6 +797,9 @@ export interface SpawnResultData {
 	queued?: boolean;
 	worktreePath?: string;
 	waited?: boolean;
+	/** Set when a queued record's deferred start failed (status reads "gone" —
+	 * the closest terminal in the six-state vocabulary; no pane ever existed). */
+	startError?: string;
 }
 
 export type SpawnResult = Result<SpawnResultData>;
@@ -833,11 +840,20 @@ export async function spawnAgent(
 	const agentArgs = buildAgentArgs(merged);
 
 	// 4. fleet snapshot (read-only) — feeds the cap count + handle uniquify
+	const env = deps.env ?? process.env;
 	const live = await (deps.list ?? defaultList)();
-	const liveCount = live.filter((a) => a.paneId).length;
+	// Cap semantics match the drain loop exactly: THIS SESSION's live spawned
+	// agents (registry panes still in the fleet), not the whole fleet — the
+	// watch-scope decision (ticket 04): hand-spawned panes stay the human's
+	// business and never hold a session slot.
+	const livePaneIds = new Set(
+		live.map((a) => a.paneId).filter((p): p is string => Boolean(p)),
+	);
+	const liveCount = [...spawnRegistry.values()].filter(
+		(r) => r.paneId && livePaneIds.has(r.paneId),
+	).length;
 
 	// 5. gates, in order, before any side effect
-	const env = deps.env ?? process.env;
 	const gates = checkGates(settings, env, liveCount);
 	if (gates.decision === "refuse") return { ok: false, error: gates.error };
 
@@ -846,7 +862,7 @@ export async function spawnAgent(
 	const badKind = kindError(merged.kind, kinds);
 	if (badKind) return { ok: false, error: badKind.error };
 
-	// 7. side effects start here: handle, session registration, record
+	// 7. side effects start here: handle, record, session registration
 	const taken = new Set([
 		...live.map((a) => a.name).filter((n): n is string => Boolean(n)),
 		...spawnRegistry.keys(),
@@ -854,27 +870,30 @@ export async function spawnAgent(
 	const base =
 		params.name ?? (definition.name ? definition.name : `agent-${Date.now()}`);
 	const handle = uniqueHandle(base, taken);
-	if (inline && definition.name) {
-		// session-ephemeral registration: later spawns may `type:` this name
-		registerSessionAgent(definition);
-	}
 
 	// multiline values must be carried by temp files (pi prompt flags) or the
-	// spawn refuses — herdr's arg encoder rejects newlines outright
+	// spawn refuses — herdr's arg encoder rejects newlines outright. This is
+	// the LAST validation: everything after it is a committed side effect.
 	const mat = materializeAgentArgs(agentArgs, handle, merged.kind);
 	if (!mat.ok) return mat;
 
-	const env2 = deps.env ?? process.env;
+	// accepted spawn — an inline definition with a name registers
+	// session-ephemerally here, AFTER every refusal path (agentdefs' contract:
+	// accepted spawns only; a refused spec never pollutes the registry)
+	if (inline && definition.name) {
+		registerSessionAgent(definition);
+	}
+
 	const record: SpawnRecord = {
 		name: handle,
 		kind: merged.kind,
 		type: definition.name || params.type,
 		prompt: params.prompt,
 		agentArgs: mat.data,
-		depth: parseSpawnDepth(env2.PI_HERDR_SPAWN_DEPTH) + 1,
+		depth: parseSpawnDepth(env.PI_HERDR_SPAWN_DEPTH) + 1,
 		isolated: Boolean(params.isolated),
 		cwd: params.cwd,
-		orchestratorPane: env2.HERDR_PANE_ID,
+		orchestratorPane: env.HERDR_PANE_ID,
 		spawnedAt: Date.now(),
 		submitted: false,
 		sawWorking: false,
@@ -912,6 +931,7 @@ export async function spawnAgent(
 				queued: true,
 				worktreePath: record.worktreePath,
 				waited: true,
+				...(record.startError ? { startError: record.startError } : {}),
 			},
 		};
 	}
@@ -934,8 +954,13 @@ export async function spawnAgent(
 		};
 	}
 
-	// 9. wait vocabulary: default = return immediately; true = done-or-blocked;
-	//    ms = current state on expiry. Queued records wait through the queue.
+	// 9. wait vocabulary. The DEFAULT (no wait) blocks through pane start +
+	// boot gate + prompt submission, then returns — "returns immediately" in
+	// wayfinder ticket 01 decision 6 contrasts with waiting for the TURN, not
+	// with the submission handoff (same profile as herdr_delegate; returning
+	// before the prompt is in would leave the caller unable to trust the task
+	// ever started). true = done-or-blocked; ms = current state on expiry
+	// (queued records wait through the queue — handled in 8a).
 	if (params.wait === undefined || params.wait === false) {
 		return {
 			ok: true,
