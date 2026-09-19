@@ -20,3 +20,5 @@ Matrix complete (merged to `main`: [`wayfinder/research/capability-matrix.md`](.
 - **Kind-specific:** skills preload (pi-only `--skill`; claude is cwd/`--plugin-dir` based, codex config-only), extensions/MCP disable (pi `-ne`, claude `--safe-mode`/`--strict-mcp-config`, codex config).
 - **Do not promise:** worktree/branch creation (claude `-w` and cursor only — our `isolated` param must be a pi-herdr-side worktree, not a child flag), codex system-prompt and skills via CLI (config-file only).
 - Housekeeping: `AGENT_KINDS_FALLBACK` in `src/config.ts` is missing `qwen` vs live `herdr agent` output.
+
+> Update from ticket `11` (resolved): **this decision is mooted by the pi-only scope ruling.** v0.5 promises nothing for non-pi kinds; `kind` survives on `spawn_agent` as an unopinionated passthrough param (herdr's native `agent start --kind` axis) with one honest line — *text in a pane, TUI-detected lifecycle, nothing else*. The matrix above stays as verified reference for anyone who later redraws the destination to multi-kind; it no longer constrains the v0.5 spec. (The `qwen` fallback housekeeping note remains valid regardless.)
