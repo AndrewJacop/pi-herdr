@@ -1,7 +1,7 @@
 ---
 label: wayfinder:grilling
 status: open
-assignee:
+assignee: Andrew Jacop
 blocked-by: []
 ---
 
