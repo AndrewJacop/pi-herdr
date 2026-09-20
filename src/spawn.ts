@@ -36,6 +36,7 @@ import { seedSessionFile, writeSteerWatermark } from "./sessionfile.js";
 import {
 	type Err,
 	type HerdrErrorCode,
+	type NormalizedAgent,
 	normalizeAgent,
 	type Result,
 } from "./env.js";
@@ -587,6 +588,20 @@ export interface SpawnRecord {
 	delivery?: { kind: DeliveryKind; at: number };
 	/** A human took the pane over (child-reported <session>.takeover). */
 	takenOver?: boolean;
+	/** Turn cancelled (issue 10): when the parent sent Escape to the pane.
+	 * Drives the projected `interrupted` state; cleared by new work (a
+	 * message delivery) and reset by resume. */
+	interruptedAt?: number;
+	/** The merged spec at spawn time, captured BEFORE routing resolution
+	 * (issue 10 resume fallback): the launch plan re-derivation falls back
+	 * to this when the definition can't be re-resolved by `type` (anonymous
+	 * inline spawn, deleted .md). Frontmatter pins are the spawn-time
+	 * snapshot; routing levels 3–5 still resolve against CURRENT settings. */
+	definition?: SpawnSpec;
+	/** Message-less resume (issue 10): the boot IS the handoff — the
+	 * original prompt must NOT be resubmitted. Rides the record so the
+	 * queue drain's startRecordNow stays silent too. */
+	resumeSilent?: boolean;
 	/** The quiet `user took over <agent>` note was sent. */
 	tookNotified?: boolean;
 	/** A blocked wake was pushed for the current blocked episode. */
@@ -617,6 +632,11 @@ export function clearSpawnRegistry(): void {
 	spawnRegistry.clear();
 }
 
+/** Insert a record directly (tests — resume/offline harnesses). */
+export function putSpawnRecordForTests(record: SpawnRecord): void {
+	spawnRegistry.set(record.name, record);
+}
+
 /** Records accepted but not yet started (the queue, in accept order). */
 function queuedRecords(): SpawnRecord[] {
 	return [...spawnRegistry.values()].filter((r) => !r.paneId && !r.startError);
@@ -631,6 +651,10 @@ export interface SpawnDeps {
 	kinds?: () => Promise<string[]>;
 	/** Live agents (fleet) — default: `herdr agent list`. */
 	list?: () => Promise<{ name?: string; paneId?: string }[]>;
+	/** Live agents, Result-wrapped — default: the shared fleetList(). Resume
+	 * (issue 10) reads the fleet through THIS seam: a FAILED observation is
+	 * never absence evidence, so the gone-check must see the failure. */
+	fleet?: (signal?: AbortSignal) => Promise<Result<NormalizedAgent[]>>;
 	/** Pane creation — default: startHerdrAgent (the single `agent start
 	 * --kind` launch path). */
 	start?: typeof startHerdrAgent;
@@ -680,6 +704,7 @@ export interface SpawnDeps {
 
 const defaultLoad = (): HerdrSettings =>
 	loadSettings(getSettingsPaths(process.cwd())).effective;
+export { defaultLoad };
 
 const defaultList = async (): Promise<{ name?: string; paneId?: string }[]> => {
 	const r = await herdr<{ agents?: unknown[] }>(["agent", "list"], {
@@ -743,7 +768,7 @@ export function deriveStatus(
 	}
 }
 
-async function currentStatus(
+export async function currentStatus(
 	record: SpawnRecord,
 	deps: SpawnDeps,
 ): Promise<SpawnStatus> {
@@ -863,8 +888,11 @@ export async function startRecordNow(
 
 	// 1. isolated → herdr-side worktree (auto branch+path via the existing
 	//    worktree machinery). The pane itself stays in the current workspace.
-	let cwd = record.cwd;
-	if (record.isolated) {
+	//    A resume of an isolated record (issue 10) keeps ITS worktree — the
+	//    session file was seeded under that cwd; creating another would
+	//    orphan it.
+	let cwd = record.worktreePath ?? record.cwd;
+	if (record.isolated && !record.worktreePath) {
 		const wt = await (deps.worktree ?? defaultWorktree)(
 			record.cwd ?? process.cwd(),
 		);
@@ -883,10 +911,14 @@ export async function startRecordNow(
 	if (isPiKind(record.kind)) {
 		const seedErr = seedRecordSession(record, cwd ?? process.cwd(), deps);
 		if (seedErr) return seedErr;
-		const task = buildTaskPrompt(record.prompt, record.sessionPath, {});
-		if (!task.ok) return task;
-		record.prompt = task.data.prompt;
-		record.taskArtifactPath = task.data.artifactPath;
+		// A message-less resume (issue 10) skips the task artifact: the
+		// original prompt is already in the replayed session, not the task.
+		if (!record.resumeSilent) {
+			const task = buildTaskPrompt(record.prompt, record.sessionPath, {});
+			if (!task.ok) return task;
+			record.prompt = task.data.prompt;
+			record.taskArtifactPath = task.data.artifactPath;
+		}
 	}
 	record.launchPlan = buildLaunchPlan({
 		kind: record.kind,
@@ -953,6 +985,14 @@ export async function startRecordNow(
 
 	// 4. submit the prompt; retry once when the turn never started (the
 	//    prompt can be lost if typed before the TUI input was ready).
+	//    A message-less resume (issue 10) submits NOTHING — the boot IS the
+	//    handoff: pi replays the session and sits open. `submitted` is set
+	//    so the projection reads the settled state as waiting (open and
+	//    intentionally so), never a phantom forever-`starting`.
+	if (record.resumeSilent) {
+		record.submitted = true;
+		return { ok: true, data: { paneId: record.paneId } };
+	}
 	await submitRecordPrompt(record, deps);
 	const status = await currentStatus(record, deps);
 	if (status === "idle") {
@@ -992,8 +1032,12 @@ async function submitRecordPrompt(
 const DRAIN_INTERVAL_MS = 3_000;
 let drainTimer: NodeJS.Timeout | null = null;
 
-/** Best-effort background drain while anything is queued (self-scheduling). */
-function ensureDrainLoop(deps: SpawnDeps): void {
+/**
+ * Best-effort background drain while anything is queued (self-scheduling).
+ * Exported for resume (issue 10): an over-cap resume re-enters the same
+ * queue the spawn path uses.
+ */
+export function ensureDrainLoop(deps: SpawnDeps): void {
 	if (drainTimer || deps.autodrain === false) return;
 	const tick = async (): Promise<void> => {
 		drainTimer = null;
@@ -1204,6 +1248,10 @@ export async function spawnAgent(
 		settings,
 		parent: deps.parent,
 	});
+	// Resume fallback snapshot (issue 10): the spec BEFORE routing resolves
+	// model/thinking onto it, so a fallback-path resume re-runs the chain
+	// against CURRENT settings instead of replaying the dead run's pins.
+	const definitionSnapshot: SpawnSpec = { ...merged };
 	merged.model =
 		routing.modelSource === "parent" && !kindCaps(merged.kind).model
 			? undefined
@@ -1306,6 +1354,7 @@ export async function spawnAgent(
 		session_mode: merged.session_mode,
 		routing,
 		deniedTools: merged.exclude_tools,
+		definition: definitionSnapshot,
 	};
 	spawnRegistry.set(handle, record);
 

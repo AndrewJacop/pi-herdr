@@ -323,6 +323,8 @@ file whatever its lineage.
 | --- | --- |
 | `herdr_get_agent_result` | **The result tool.** For spawned pi children it reads the EXACT final assistant message from the child's parent-owned session file (byte-identical, complete — no screen scraping); mid-flight calls return an interim snapshot. A failing child surfaces as a typed error (`stopReason`/`errorMessage` mined off the session). Panes this session didn't spawn (or non-pi kinds) fall back to pane-tail reading. A gone pane still answers with last-known metadata — its session file stays readable and resumable. `wait: true` blocks until done/failed/blocked/gone (through the queue). |
 | `herdr_message_agent` | **The open channel** — anyone ↔ anyone, no broker. Resolves `target` (pane id → herdr name → spawn handle → reserved `orchestrator` role; real names win) and injects text through the send machinery. Physics-adaptive: a blocked target gets the raw text as its answer; everything else is wrapped as `<agent-message from="…" to="…">` — spawner-declared identity, never verified. Fire-and-forget: the receipt reports `{delivery: "message"\|"answer"}`; delivered-to-the-pane ≠ consumed-by-the-model. |
+| `herdr_interrupt_agent` | **Turn cancel** (pi children) — sends Escape to the pane and stamps the registry so the fleet reports `interrupted` immediately, even while herdr still shows the pane working; a lagging pre-interrupt activity snapshot can't overwrite it. The pane, session file, and supervision all stay intact. Not a terminate — closing panes is the kill-all action. Follow with `herdr_message_agent` for stop-and-redirect. Refuses honestly: non-pi kinds (use `herdr_send_keys` for a raw Escape), queued/never-started agents, settled panes, and gone panes — which point at `herdr_resume_agent`. |
+| `herdr_resume_agent` | **The recovery move** — relaunch a `gone` agent on its retained session file (`pi --session <retained>` in a fresh pane), by registry HANDLE (never a raw path). The launch plan re-derives NOW (the routing chain against current settings and this session's model — a settings change since death takes effect); the optional `message` is the opening prompt. Re-enters normal supervision: fleet row, watchdog, push-on-completion. Same gates as any spawn (kill-switch → depth → cap, over-cap = queued). Stance follows the definition: autonomous resumes auto-exit-and-push, interactive stay open. Honest limit: resume replays the session file — anything that lived only in the dead process is gone. |
 
 > `herdr_wait_agent` / `herdr_read_agent` are **retired** (v0.6 issue 04):
 > `herdr_get_agent_result` replaces them with exact session-file reads.
@@ -363,6 +365,27 @@ orphan panes.
 `herdr_get_agent_result` stays pure inspection: mid-flight snapshot, bounded
 wait, re-read — never a mandatory second step after spawn.
 > Raw pane reads remain on the pane-sync quartet (`herdr_read_pane`).
+
+### Interrupt, resume, and recovery
+
+**Interrupt** (`herdr_interrupt_agent`) cancels an agent's CURRENT turn, not
+the agent: Escape lands in the pane, the session file and supervision stay
+untouched, and the fleet row flips to `interrupted` on the spot (the parent's
+Escape receipt leads herdr's own view — a lagging activity snapshot can't
+overwrite it). New work ends the interrupt: `herdr_message_agent` returns the
+agent to `active` — stop-and-redirect in one flow. A human typing into the
+pane ends it too (the projection self-corrects on the first fresh active
+snapshot).
+
+**Resume** (`herdr_resume_agent`) is the documented recovery move for a
+gone agent — crashed, errored, or pane-closed mid-run. The registry kept the
+retained session file; resume relaunches on it, so the child boots with its
+full conversation, not from scratch. The launch plan re-resolves at resume
+time (routing levels against current settings — change `models.default`
+between death and resume and the child relaunches on the new model), and the
+run re-enters every supervision path as any spawn. Same gates, same honest
+limit: the session file is the whole truth — anything that lived only in the
+dead process is gone.
 
 ### Fleet introspection
 
@@ -514,9 +537,9 @@ The extension is TypeScript loaded via jiti — **no build step**. Edit `src/` a
 
 ### Project layout
 
-```
+```text
 src/
-  index.ts               # entry; registers the 9-tool surface + footer status + self-report
+  index.ts               # entry; registers the 11-tool surface + footer status + self-report
   herdr.ts               # the one spawn module (envelope parse, timeouts, errors, version probe + floor gate)
   version.ts             # pure version-floor logic (parse/compare/HERDR_TOO_OLD)
   config.ts              # binary resolution + live agent-kind list (env + PATH)
@@ -531,11 +554,12 @@ src/
   tools/agents.ts        # herdr_spawn_agent registration (the spawn entry point)
   tools/result.ts        # herdr_get_agent_result (exact JSONL result; pane-tail fallback for unspawned panes)
   tools/message.ts       # herdr_message_agent (the open channel: resolution chain, envelope, physics-adaptive delivery)
+  tools/lifecycle.ts     # herdr_interrupt_agent + herdr_resume_agent (turn cancel; the gone-agent recovery move)
   tools/orchestration.ts # list_agents + the send machinery (spawn submit, message delivery, launch/wait paths)
   tools/sync.ts          # pane-sync quartet (run/read/wait_output/send_keys)
   tools/worktrees.ts     # worktree machinery (powers isolated; no model-facing tools)
 tests/
-  smoke.mjs, substrate.mjs, settings.mjs, spawn.mjs, agentfiles.mjs, message.mjs   # offline suites (npm test)
+  smoke.mjs, substrate.mjs, settings.mjs, spawn.mjs, agentfiles.mjs, message.mjs, lifecycle.mjs   # offline suites (npm test)
   live.mjs, selfreport.mjs, blocked.mjs, spawn-live.mjs, message-live.mjs, dev-load.mjs, …
 ```
 

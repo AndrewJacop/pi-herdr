@@ -1,22 +1,23 @@
 // pi-herdr extension entry point.
 // Registers the herdr tool surface and surfaces fleet status in the pi footer.
 //
-// The v0.6 surface (issue 02 cut + issue 04/05): ONE surface, nine tools —
-// herdr_spawn_agent, herdr_save_agent (the `.md` registry), herdr_get_agent_result
+// The v0.6 surface (issue 02 cut + issue 04/05): ONE surface — herdr_spawn_agent,
+// herdr_save_agent (the `.md` registry), herdr_get_agent_result
 // (the pull/inspection tool: exact JSONL result for spawned pi children,
 // pane-tail fallback for panes we didn't spawn; retired the wait/read pair of
 // the legacy result trio), herdr_message_agent (the open channel; absorbed
-// the last of the trio, herdr_send_prompt), herdr_list_agents, and the
-// pane-sync quartet — converging to twelve as later tickets register theirs.
-// Layout, tab/workspace, worktree, and introspection tools are OFF the model
-// surface; their machinery survives internally (spawn's isolated worktrees,
-// the poll loop, kill-all's pane closes). The /subagents command is the only
-// command.
+// the last of the trio, herdr_send_prompt), herdr_interrupt_agent /
+// herdr_resume_agent (the lifecycle pair, issue 10), herdr_list_agents, and the
+// pane-sync quartet. Layout, tab/workspace, worktree, and introspection tools
+// are OFF the model surface; their machinery survives internally (spawn's
+// isolated worktrees, the poll loop, kill-all's pane closes). The /subagents
+// command is the only command.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerOrchestration } from "./tools/orchestration.js";
 import { registerResultTool } from "./tools/result.js";
 import { registerMessageTool } from "./tools/message.js";
+import { registerLifecycle } from "./tools/lifecycle.js";
 import { registerAgents } from "./tools/agents.js";
 import { registerPaneSync } from "./tools/sync.js";
 import { registerDelivery, stopDeliveryLoop } from "./delivery.js";
@@ -33,6 +34,10 @@ export default function (pi: ExtensionAPI): void {
 	registerOrchestration(pi);
 	registerResultTool(pi);
 	registerMessageTool(pi);
+	// Lifecycle actions (v0.6 issue 10): herdr_interrupt_agent (turn cancel)
+	// + herdr_resume_agent (the gone-agent recovery move on the retained
+	// session file).
+	registerLifecycle(pi);
 	registerAgents(pi);
 	registerPaneSync(pi);
 

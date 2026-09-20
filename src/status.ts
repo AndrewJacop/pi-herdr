@@ -167,8 +167,6 @@ export interface ProjectionObs {
 	 * declaration, delivered or not. */
 	sidecar: boolean;
 	activity: ActivityRead;
-	/** Reserved for issue 10 (turn cancelled, pane still open). */
-	interrupted?: boolean;
 	/** Clock — injected so offline tests advance time freely. */
 	now: number;
 }
@@ -188,6 +186,11 @@ export interface ProjectableRecord {
 	sessionPath?: string;
 	activityPath?: string;
 	delivery?: { kind: string; at: number };
+	/** Turn cancelled (issue 10): when the parent sent Escape. Drives the
+	 * projected `interrupted` state — immediate, ahead of herdr's own view —
+	 * and the stale-snapshot discard window; cleared by new work (a message
+	 * send, or self-corrected by a fresh phase-active snapshot). */
+	interruptedAt?: number;
 	submitted: boolean;
 	sawWorking: boolean;
 	/** Watchdog bookkeeping: first sighting of a broken-substrate problem. */
@@ -216,13 +219,20 @@ export function isSubstrateChild(record: {
  *      death is already a stall; the delivery pass's bounded grace resolves
  *      the terminal answer afterwards)
  *   6. herdr blocked → blocked                    (inspection)
- *   7. inspection unhealthy → stalled past the
+ *   7. turn cancelled (interruptedAt set, pane open, no fresh active
+ *      run) → interrupted — IMMEDIATELY, ahead of herdr's own view; the
+ *      flag is the parent's Escape receipt (issue 10). A snapshot written
+ *      before the escape is discarded (a lagging `bash 7m` cannot
+ *      overwrite the interrupt); the child's own post-abort settle write
+ *      (fresh `waiting`) holds the state; new work (fresh `active`, or
+ *      the flag cleared at message-send time) ends it.
+ *   8. inspection unhealthy → stalled past the
  *      threshold, else last-known-live            (inspection + watchdog)
- *   8. herdr working → activity phase (active+detail / waiting), coarse
+ *   9. herdr working → activity phase (active+detail / waiting), coarse
  *      active until a substrate problem ages past the threshold, or plain
  *      `running` for snapshot-less (non-pi) panes
- *   9. settled (idle/done/unknown): fresher-than-herdr activity active
- *      wins; pre-submit → starting; reserved interrupted; else waiting
+ *  10. settled (idle/done/unknown): fresher-than-herdr activity active
+ *      wins; pre-submit → starting; else waiting
  */
 export function projectStatus(
 	record: ProjectableRecord,
@@ -230,7 +240,27 @@ export function projectStatus(
 ): Projection {
 	const now = obs.now;
 	const isPi = isSubstrateChild(record);
-	const activityRead = obs.activity;
+	// Interrupt window (issue 10): while interruptedAt is set, snapshots
+	// written before the escape are discarded (stale pre-interrupt readings
+	// never overwrite the interrupt), and a fresh phase-ACTIVE snapshot is
+	// new-work evidence that self-corrects the state without waiting for a
+	// registry write. The child's own post-abort settle write (fresh
+	// `waiting`) is NOT new work — the interrupted state holds.
+	const interruptedAt = record.interruptedAt;
+	const raw = obs.activity;
+	// While a turn-cancel is in effect (issue 10), snapshots written before
+	// the escape are discarded (a lagging pre-interrupt reading cannot
+	// overwrite the interrupt); a fresh phase-ACTIVE snapshot is new-work
+	// evidence that self-corrects the state. The child's own post-abort
+	// settle write (fresh `waiting`) is NOT new work — the state holds.
+	const discarded =
+		raw.state === "ok" &&
+		interruptedAt !== undefined &&
+		raw.activity.updatedAt <= interruptedAt;
+	const activityRead: ActivityRead = discarded ? { state: "missing" } : raw;
+	const freshActive =
+		raw.state === "ok" && !discarded && raw.activity.phase === "active";
+	const interrupted = interruptedAt !== undefined && !freshActive;
 	const activityOk = activityRead.state === "ok";
 	const snapshot = activityOk ? activityRead.activity : undefined;
 	const phase = snapshot?.phase;
@@ -249,6 +279,12 @@ export function projectStatus(
 	if (obs.absent) return { status: "stalled" };
 
 	if (obs.live === "blocked") return { status: "blocked" };
+
+	// Turn cancelled (issue 10): the pane is still open and the escape is
+	// the parent's declared fact — wins over herdr's own view (which may
+	// still say `working` until the child processes the interrupt) and over
+	// the unhealthy last-known-live fallback.
+	if (interrupted) return { status: "interrupted" };
 
 	if (obs.unhealthy) {
 		const problemSince = record.watch?.problemSince;
@@ -287,6 +323,5 @@ export function projectStatus(
 			status: "active",
 			detail: activeDetail(snapshot, now),
 		};
-	if (obs.interrupted) return { status: "interrupted" };
 	return { status: "waiting" };
 }

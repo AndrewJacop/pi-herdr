@@ -111,7 +111,9 @@ function fail(r: SendError): ToolReturn {
 	};
 }
 
-const defaultAgentGet = async (
+/** The bare `agent get` view (resolution + the physics/state inputs).
+ * Exported for the lifecycle tools (issue 10) — same resolution inputs. */
+export const defaultAgentGet = async (
 	target: string,
 	signal?: AbortSignal,
 ): Promise<Result<AgentView>> => {
@@ -309,8 +311,12 @@ export async function messageAgent(
 	// Steer watermark (issue 06): the exact text about to be typed into a
 	// registry child. The child matches its input event against it so the
 	// orchestrator's own follow-up is never mistaken for a human takeover.
-	if (resolved.kind === "live" && resolved.record?.sessionPath) {
-		writeSteerWatermark(resolved.record.sessionPath, payload);
+	// A delivery to a registry record is also NEW WORK (issue 10): it ends
+	// the interrupted state — stop-and-redirect in one live flow.
+	if (resolved.kind === "live" && resolved.record) {
+		resolved.record.interruptedAt = undefined;
+		if (resolved.record.sessionPath)
+			writeSteerWatermark(resolved.record.sessionPath, payload);
 	}
 	const r = await send(resolved.paneId, payload, {
 		submit,

@@ -286,13 +286,84 @@ console.log("\n[1] Activity sidecar reader + age format + ten-state projection")
 		"3h valid waiting never becomes stalled by aging",
 	);
 
-	// interrupted is reserved for issue 10 but already derivable — a settled
-	// pane with no contradicting active run
+	// --- interrupted (issue 10): the parent-stamped interruptedAt flag ---
+	// Flips immediately — ahead of herdr's own view — and holds until new work
+	// (a fresh phase-active snapshot) self-corrects it.
 	assert(
 		project({
-			obs: { interrupted: true, live: "idle", activity: { state: "missing" } },
+			record: rec({ interruptedAt: NOW - 100 }),
+			obs: { live: "idle", activity: { state: "missing" } },
 		}).status === "interrupted",
-		"interrupted derives from the reserved flag (issue 10 sets it)",
+		"interrupted derives from record.interruptedAt (settled pane, no snapshot)",
+	);
+	assert(
+		project({
+			record: rec({ interruptedAt: NOW - 100 }),
+			obs: {
+				live: "working",
+				activity: act({ updatedAt: NOW - 500 }), // pre-interrupt reading
+			},
+		}).status === "interrupted",
+		"interrupted beats herdr working immediately (not on next poll)",
+	);
+	assert(
+		project({
+			record: rec({ interruptedAt: NOW - 100 }),
+			obs: {
+				live: "working",
+				activity: act({
+					tool: "bash",
+					toolStartedAt: NOW - 7 * 60_000,
+					updatedAt: NOW - 500, // stale: last write before the escape
+				}),
+			},
+		}).status === "interrupted" &&
+			project({
+				record: rec({ interruptedAt: NOW - 100 }),
+				obs: {
+					live: "working",
+					activity: act({ updatedAt: NOW - 500 }),
+				},
+			}).detail === undefined,
+		"stale pre-interrupt snapshot discarded — a lagging bash 7m cannot overwrite the interrupt",
+	);
+	assert(
+		project({
+			record: rec({ interruptedAt: NOW - 5_000 }),
+			obs: {
+				live: "idle",
+				activity: act({
+					phase: "waiting",
+					waitingSince: NOW - 100,
+					updatedAt: NOW - 100, // the child's own post-abort settle write
+				}),
+			},
+		}).status === "interrupted",
+		"the abort-settle (fresh waiting) does not clear the interrupted state",
+	);
+	assert(
+		project({
+			record: rec({ interruptedAt: NOW - 5_000 }),
+			obs: {
+				live: "working",
+				activity: act({ activeSince: NOW - 100, updatedAt: NOW - 100 }),
+			},
+		}).status === "active",
+		"new work (fresh phase-active snapshot) returns it to active naturally",
+	);
+	assert(
+		project({
+			record: rec({ interruptedAt: NOW - 100 }),
+			obs: { absent: true },
+		}).status === "stalled",
+		"absence still wins — interrupted means the pane is still open",
+	);
+	assert(
+		project({
+			record: rec({ interruptedAt: NOW - 100 }),
+			obs: { live: "blocked", activity: { state: "missing" } },
+		}).status === "blocked",
+		"herdr blocked still wins while the escape is landing",
 	);
 
 	// transient inspection failure keeps the last-known-live view

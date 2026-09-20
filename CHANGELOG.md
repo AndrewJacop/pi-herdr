@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Interrupt + resume: the lifecycle pair (v0.6 issue 10).**
+  `herdr_interrupt_agent(target)` is a turn-level cancel, not a terminate: it
+  sends Escape to the child pane via the existing key-send machinery and
+  stamps the registry so the projection flips to `interrupted` immediately —
+  ahead of herdr's own view — while stale pre-interrupt activity snapshots
+  are discarded so a lagging reading can't overwrite the interrupt. The pane,
+  session file, and supervision stay intact; new work ends the interrupt
+  (a `herdr_message_agent` delivery clears the flag — stop-and-redirect in
+  one live flow — and the projection self-corrects on the first fresh
+  active snapshot, so a human typing into the pane ends it too).
+  `herdr_resume_agent(target, message?)` is the documented recovery move for
+  a `gone` agent: the target is a registry handle, never a raw path; the
+  registry holds the retained session file, and resume relaunches
+  `pi --session <retained>` in a fresh pane with a re-derived launch plan —
+  the definition's kind/model/thinking resolved NOW via the routing chain
+  (a settings change between death and resume takes effect), falling back to
+  the spawn-time definition snapshot when the type can no longer be
+  resolved. The optional `message` is submitted as the opening prompt (with
+  the steer watermark and task-artifact machinery); a message-less resume
+  replays the session and sits open without resubmitting the old task. The
+  run re-enters normal supervision (fleet row, watchdog, push-on-completion);
+  same gates as any spawn (kill-switch → depth → parallel cap, over-cap =
+  queued via the same drain); stance follows the definition (autonomous
+  resumes auto-exit-and-push, interactive stay open). The previous run's
+  sidecars are cleared on relaunch so a stale completion can never be
+  re-delivered as the resumed run's result. Pi-only: non-pi panes get an
+  honest refusal pointing at `herdr_send_keys` (interrupt) or a
+  re-spawn (resume); re-derived non-pi kinds refuse (`--session` is
+  pi-only). Honest limit, documented: resume replays the session file —
+  anything that lived only in the dead process is gone. Offline suites
+  (`tests/lifecycle.mjs`, projection pins in `tests/status.mjs`) + a live
+  suite (`tests/lifecycle-live.mjs`): interrupt → stop-and-redirect and one
+  crash → gone → resume → push round-trip where the resumed child answers
+  from its replayed conversation.
+
 - **Session modes: standalone / lineage-only / fork (v0.6 issue 09).** How a
   spawned pi child's session begins relative to the parent's conversation.
   `standalone` (default) is unchanged — an empty seeded file pi initializes

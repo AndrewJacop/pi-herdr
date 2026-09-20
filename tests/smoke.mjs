@@ -67,6 +67,9 @@ const expected = [
 	// the open message channel (issue 05) — absorbed send_prompt, the last of
 	// the legacy trio
 	"herdr_message_agent",
+	// the lifecycle pair (issue 10): turn cancel + the gone-agent recovery move
+	"herdr_interrupt_agent",
+	"herdr_resume_agent",
 	// the fleet's single introspection tool
 	"herdr_list_agents",
 	// the pane-sync quartet

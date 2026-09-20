@@ -467,6 +467,30 @@ export type ReadSidecarResult =
 	| { state: "ok"; sidecar: ExitSidecar }
 	| { state: "invalid" };
 
+/**
+ * Drop the previous run's sidecars before a resume relaunch (issue 10).
+ * The completion sidecar MUST go: a stale done/error would be re-delivered
+ * instantly as the resumed run's result (the delivery loop reads it before
+ * anything else). The takeover marker would suppress blocked wakes for the
+ * new run; a stale activity snapshot would mis-age the first projected
+ * state. The `<session>.activity.json` suffix mirrors spawn's construction
+ * (`${seeded.path}.activity.json`). Best-effort throughout — an already-
+ * gone file is fine.
+ */
+export function clearSidecars(sessionPath: string): void {
+	for (const path of [
+		sidecarPathFor(sessionPath),
+		takeoverPathFor(sessionPath),
+		`${sessionPath}.activity.json`,
+	]) {
+		try {
+			unlinkSync(path);
+		} catch {
+			/* already gone or raced — harmless */
+		}
+	}
+}
+
 /** Read the completion sidecar for a session file (missing = not finished). */
 export function readExitSidecar(sessionPath: string): ReadSidecarResult {
 	const path = sidecarPathFor(sessionPath);
