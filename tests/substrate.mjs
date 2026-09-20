@@ -552,6 +552,12 @@ console.log("\n[8] Launch plan — --session + -e injection and registry growth"
 		},
 		worktree: async () => ({ ok: true, data: "D:/wt/auto-branch" }),
 		childExtension: "/ext/child.ts",
+		// Accept-all registry: this suite is about the substrate, not routing —
+		// but a model pin must validate against SOME registry to spawn at all.
+		registry: {
+			find: (p, id) => ({ provider: p, id }),
+			hasConfiguredAuth: () => true,
+		},
 		autodrain: false,
 	};
 	spawnMod.clearSpawnRegistry();
@@ -570,16 +576,16 @@ console.log("\n[8] Launch plan — --session + -e injection and registry growth"
 		rec.activityPath === `${join(dir, "seeded.jsonl")}.activity.json`,
 		"activityPath recorded (reserved for 07)",
 	);
+	const plan = rec.launchPlan ?? [];
 	assert(
-		eq(rec.launchPlan, [
+		eq(plan.slice(0, 4), [
 			"--session",
 			join(dir, "seeded.jsonl"),
 			"-e",
 			"/ext/child.ts",
-			"--exclude-tools",
-			"write",
-		]),
-		"launch plan = --session + -e child extension, then the spec's own flags",
+			]) && plan.includes("--append-system-prompt") &&
+			eq(plan.slice(-2), ["--exclude-tools", "write"]),
+		"launch plan = --session + -e child extension, then identity/mode-hint blocks (multiline → temp file), then the spec's own flags",
 	);
 	assert(
 		eq(started[0].agentArgs, rec.launchPlan),
@@ -617,12 +623,12 @@ console.log("\n[8] Launch plan — --session + -e injection and registry growth"
 	);
 	spawnMod.clearSpawnRegistry();
 	await spawnMod.spawnAgent(
-		{ prompt: "x", agent: { name: "cc", kind: "claude", model: "m" } },
+		{ prompt: "x", agent: { name: "cc", kind: "claude", model: "prov/m" } },
 		deps,
 	);
 	const rec3 = spawnMod.spawnRecords().get("cc");
 	assert(
-		!rec3.sessionPath && eq(rec3.launchPlan, ["--model", "m"]),
+		!rec3.sessionPath && eq(rec3.launchPlan, ["--model", "prov/m"]),
 		"non-pi kinds: no session substrate, plain argv launch plan",
 	);
 

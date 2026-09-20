@@ -50,7 +50,20 @@ import {
 	registerSessionAgent,
 	resolveSpecifier,
 	type AgentDefinition,
+	type SessionMode,
 } from "./agentdefs.js";
+import {
+	buildIdentityBlock,
+	buildLaunchPlan,
+	buildModeHintBlock,
+	buildTaskPrompt,
+	composePromptFlags,
+	type ParentRouting,
+	resolveRouting,
+	type RoutingRegistry,
+	type RoutingResolution,
+	validateRouting,
+} from "./launchplan.js";
 
 // The agent-definition API future tickets and tests consume THROUGH this
 // module: jiti-based tests importing src/agentdefs.ts directly would get a
@@ -285,6 +298,8 @@ export interface KindCaps {
 	tools: boolean;
 	excludeTools: boolean;
 	skills: boolean;
+	/** pi-only: `--thinking` exists; explicit thinking pins elsewhere refuse. */
+	thinking: boolean;
 }
 
 /**
@@ -300,6 +315,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		tools: true,
 		excludeTools: true,
 		skills: true,
+		thinking: true,
 	},
 	claude: {
 		model: true,
@@ -307,6 +323,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		tools: true,
 		excludeTools: true,
 		skills: false,
+		thinking: false,
 	},
 	codex: {
 		model: true,
@@ -314,6 +331,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		tools: false,
 		excludeTools: false,
 		skills: false,
+		thinking: false,
 	},
 	gemini: {
 		model: true,
@@ -321,6 +339,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		tools: false,
 		excludeTools: false,
 		skills: false,
+		thinking: false,
 	},
 	cursor: {
 		model: true,
@@ -328,6 +347,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		tools: false,
 		excludeTools: false,
 		skills: false,
+		thinking: false,
 	},
 	opencode: {
 		model: true,
@@ -335,6 +355,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		tools: false,
 		excludeTools: false,
 		skills: false,
+		thinking: false,
 	},
 };
 
@@ -344,6 +365,7 @@ const NO_CAPS: KindCaps = {
 	tools: false,
 	excludeTools: false,
 	skills: false,
+	thinking: false,
 };
 
 export function kindCaps(kind: string): KindCaps {
@@ -357,22 +379,28 @@ function kindsSupporting(field: keyof KindCaps): string[] {
 		.map(([k]) => k);
 }
 
-/** A merged spawn spec: the definition with kind/model resolved onto it. */
+/** A merged spawn spec: the definition with kind/model/thinking resolved onto it. */
 export interface SpawnSpec extends AgentDefinition {
 	/** Resolved kind: spawn param > definition > settings default_kind. */
 	kind: string;
 }
 
-/** Merge spawn-level kind/model over the definition; defaults fill the rest. */
+/**
+ * Merge spawn-level kind/model/thinking over the definition; defaults fill
+ * the rest. Routing levels 3–5 (settings pins, parent inheritance) are
+ * resolved separately (resolveRouting) and assigned onto the merged spec by
+ * the caller before validation/flag-building.
+ */
 export function mergeSpawnSpec(
 	def: AgentDefinition,
-	over: { kind?: string; model?: string },
+	over: { kind?: string; model?: string; thinking?: string },
 	defaultKind: string,
 ): SpawnSpec {
 	return {
 		...def,
 		kind: over.kind ?? def.kind ?? defaultKind,
 		model: over.model ?? def.model,
+		thinking: over.thinking ?? def.thinking,
 	};
 }
 
@@ -405,39 +433,62 @@ export function validateKindEnforcement(spec: SpawnSpec): Err | null {
 /**
  * Compile the merged spec into agent-CLI flags (appended after herdr's
  * `agent start --kind` / the preset argv). Only fields the capability table
- * marked enforceable reach here (validateKindEnforcement ran first), so the
- * switch below mirrors the table exactly. The v0.6 substrate flags for pi
- * children (parent-owned `--session` + injected `-e child.ts`) are composed
- * onto this plan at start time — see startRecordNow.
+ * marked enforceable reach here (validateKindEnforcement + validateRouting
+ * ran first), so the switch below mirrors the table exactly. For pi children
+ * `opts.child` also folds the identity + mode-hint blocks into the prompt
+ * flags (issue 08); without it the definition's own prompt flags are emitted
+ * unchanged. Raw agent_args append LAST — spawn-level ones were concatenated
+ * after the definition's by mergeSpawnSpec's caller (last-wins override).
+ * The launch-plan substrate for pi children (parent-owned `--session` +
+ * injected `-e child.ts`) is composed by buildLaunchPlan at start time —
+ * see startRecordNow.
  */
-export function buildAgentArgs(spec: SpawnSpec): string[] {
+export function buildAgentArgs(
+	spec: SpawnSpec,
+	opts?: {
+		child?: {
+			name: string;
+			type?: string;
+			stance: Stance;
+			sessionMode?: SessionMode;
+		};
+	},
+): string[] {
 	const args: string[] = [];
 	const kind = spec.kind.toLowerCase();
 	switch (kind) {
-		case "pi":
-			if (spec.system_prompt) {
-				args.push(
-					spec.prompt_mode === "append"
-						? "--append-system-prompt"
-						: "--system-prompt",
-					spec.system_prompt,
-				);
-			}
+		case "pi": {
+			const child = opts?.child;
+			args.push(
+				...composePromptFlags({
+					defPrompt: spec.system_prompt,
+					promptMode: spec.prompt_mode,
+					identity: child
+						? buildIdentityBlock({ name: child.name, type: child.type })
+						: "",
+					modeHint: child
+						? buildModeHintBlock({
+								stance: child.stance,
+								sessionMode: child.sessionMode,
+							})
+						: "",
+				}),
+			);
 			if (spec.model) args.push("--model", spec.model);
+			if (spec.thinking) args.push("--thinking", spec.thinking);
 			if (spec.tools?.length) args.push("--tools", spec.tools.join(","));
 			if (spec.exclude_tools?.length)
 				args.push("--exclude-tools", spec.exclude_tools.join(","));
 			for (const s of spec.skills ?? []) args.push("--skill", s);
 			break;
+		}
 		case "claude":
-			if (spec.system_prompt) {
-				args.push(
-					spec.prompt_mode === "append"
-						? "--append-system-prompt"
-						: "--system-prompt",
-					spec.system_prompt,
-				);
-			}
+			args.push(
+				...composePromptFlags({
+					defPrompt: spec.system_prompt,
+					promptMode: spec.prompt_mode,
+				}),
+			);
 			if (spec.model) args.push("--model", spec.model);
 			if (spec.tools?.length) args.push("--tools", spec.tools.join(","));
 			if (spec.exclude_tools?.length)
@@ -500,6 +551,12 @@ export interface SpawnRecord {
 	launchPlan?: string[];
 	/** Whether the pane closes itself on settle. */
 	stance: Stance;
+	/** How the child session begins (issue 09 consumes; rides the plan here). */
+	session_mode?: SessionMode;
+	/** Resolved model/thinking + the supplying routing level (issue 08). */
+	routing?: RoutingResolution;
+	/** Task artifact path when the prompt was written to `<session>.task.md`. */
+	taskArtifactPath?: string;
 	/** Denied tool names (pi children; stamped to the child for its strip). */
 	deniedTools?: string[];
 	/** Terminal event already steered to the orchestrator (issue 06) —
@@ -579,6 +636,11 @@ export interface SpawnDeps {
 	seed?: (cwd: string) => { path: string; dir: string };
 	/** Injected child-extension path — default: src/child.ts beside this module. */
 	childExtension?: string;
+	/** pi's model registry (exact lookup + auth checks) — threaded from the
+	 * tool's ExtensionContext; required when a model must be validated. */
+	registry?: RoutingRegistry;
+	/** The parent session's active model (routing level 5). */
+	parent?: ParentRouting;
 	/** Disable the background queue-drain timer (tests drive drains explicitly). */
 	autodrain?: boolean;
 	signal?: AbortSignal;
@@ -735,22 +797,25 @@ export async function startRecordNow(
 
 	// 2. session substrate (pi children): seed the parent-owned session file
 	//    under pi's default sessions dir for the FINAL cwd (the worktree for
-	//    isolated spawns), then compose the launch plan: the parent-owned
-	//    --session and the injected child extension -e, ahead of the spec's own
-	//    flags. Non-pi kinds keep their plain argv — no substrate for them.
-	if (record.kind.toLowerCase() === "pi") {
+	//    isolated spawns); a long task is written to `<session>.task.md` and
+	//    the submitted prompt becomes its one-line reference (issue 08). The
+	//    full argv is composed by buildLaunchPlan — the substrate flags ahead
+	//    of the spec's own. Non-pi kinds get the same builder's passthrough
+	//    branch (plain argv, no substrate).
+	if (isPiKind(record.kind)) {
 		const seedErr = seedRecordSession(record, cwd ?? process.cwd(), deps);
 		if (seedErr) return seedErr;
-		record.launchPlan = [
-			"--session",
-			record.sessionPath!,
-			"-e",
-			deps.childExtension ?? childExtensionPath(),
-			...record.agentArgs,
-		];
-	} else {
-		record.launchPlan = [...record.agentArgs];
+		const task = buildTaskPrompt(record.prompt, record.sessionPath, {});
+		if (!task.ok) return task;
+		record.prompt = task.data.prompt;
+		record.taskArtifactPath = task.data.artifactPath;
 	}
+	record.launchPlan = buildLaunchPlan({
+		kind: record.kind,
+		sessionPath: record.sessionPath,
+		childExtension: deps.childExtension ?? childExtensionPath(),
+		specFlags: record.agentArgs,
+	});
 
 	// 3. pane (herdr's native kind axis; version-branched launcher)
 	const childEnv: Record<string, string> = {
@@ -931,6 +996,10 @@ export interface SpawnParams {
 	name?: string;
 	kind?: string;
 	model?: string;
+	/** Routing level 1: thinking pin (pi children emit `--thinking`). */
+	thinking?: string;
+	/** Raw CLI flags appended after the definition's (last-wins override). */
+	agent_args?: string[];
 	cwd?: string;
 	isolated?: boolean;
 	wait?: boolean | number;
@@ -954,12 +1023,35 @@ export interface SpawnResultData {
 	activityPath?: string;
 	/** Whether the pane closes itself on settle. */
 	stance: Stance;
+	/** How the child session begins (stands; consumed by 09's seeding). */
+	session_mode?: SessionMode;
+	/** Resolved model the child boots on (issue 08; routing's final value). */
+	model?: string;
+	/** Resolved thinking level (undefined = child's own default). */
+	thinking?: string;
 	/** Set when a queued record's deferred start failed (status reads "gone" —
 	 * the closest terminal in the six-state vocabulary; no pane ever existed). */
 	startError?: string;
 }
 
 export type SpawnResult = Result<SpawnResultData>;
+
+/** The pi-kind test for the session substrate (record/start-side; the
+ * capability table covers enforceable fields, launchplan covers its own). */
+const isPiKind = (kind: string): boolean => kind.toLowerCase() === "pi";
+
+/** The routing/session-mode fields every spawn return path carries (issue
+ * 08) — extracted so the four return sites can't drift apart. */
+function routingResultFields(
+	routing: RoutingResolution,
+	sessionMode: SessionMode | undefined,
+): Partial<SpawnResultData> {
+	return {
+		...(routing.model ? { model: routing.model } : {}),
+		...(routing.thinking ? { thinking: routing.thinking } : {}),
+		...(sessionMode ? { session_mode: sessionMode } : {}),
+	};
+}
 
 /**
  * spawn_agent, end to end. Pure validations first (specifier, merge,
@@ -993,12 +1085,43 @@ export async function spawnAgent(
 	}
 	const merged = mergeSpawnSpec(
 		definition,
-		{ kind: params.kind, model: params.model },
+		{ kind: params.kind, model: params.model, thinking: params.thinking },
 		settings.default_kind,
 	);
+	// Routing chain (issue 08): resolve model/thinking across all five levels
+	// (spawn param > frontmatter > models.agents pin > models.default > parent
+	// model; thinking never inherits from the parent), then enforce-or-error
+	// BEFORE any side effect. Resolved values land on the merged spec so each
+	// is emitted as exactly one --model/--thinking flag. Level-5 model on a
+	// kind that cannot enforce a model flag is a NO-OP (nothing to enforce —
+	// explicit levels 1–4 still refuse via validateKindEnforcement).
+	const routing = resolveRouting({
+		spawn: { model: params.model, thinking: params.thinking },
+		definition,
+		settings,
+		parent: deps.parent,
+	});
+	merged.model =
+		routing.modelSource === "parent" && !kindCaps(merged.kind).model
+			? undefined
+			: routing.model;
+	merged.thinking = routing.thinking;
+	// Raw flags: frontmatter `args:` first, spawn-level agent_args appended —
+	// later duplicates win by ordinary CLI semantics (the documented override).
+	merged.agent_args = [
+		...(merged.agent_args ?? []),
+		...(params.agent_args ?? []),
+	];
+	const routingError = validateRouting(
+		routing,
+		kindCaps(merged.kind),
+		deps.registry,
+		definition.name || undefined,
+		merged.kind,
+	);
+	if (routingError) return routingError;
 	const enforcement = validateKindEnforcement(merged);
 	if (enforcement) return enforcement;
-	const agentArgs = buildAgentArgs(merged);
 
 	// 4. fleet snapshot (read-only) — feeds the cap count + handle uniquify
 	const env = deps.env ?? process.env;
@@ -1035,6 +1158,22 @@ export async function spawnAgent(
 	// multiline values must be carried by temp files (pi prompt flags) or the
 	// spawn refuses — herdr's arg encoder rejects newlines outright. This is
 	// the LAST validation: everything after it is a committed side effect.
+	// The argv is built here (not earlier) so pi children fold in the identity
+	// + mode-hint blocks under the FINAL handle (issue 08); raw agent_args
+	// appended last by buildAgentArgs.
+	const agentArgs = buildAgentArgs(
+		merged,
+		isPiKind(merged.kind)
+			? {
+					child: {
+						name: handle,
+						type: definition.name || undefined,
+						stance: deriveStance(merged),
+						sessionMode: merged.session_mode,
+					},
+				}
+			: undefined,
+	);
 	const mat = materializeAgentArgs(agentArgs, handle, merged.kind);
 	if (!mat.ok) return mat;
 
@@ -1061,6 +1200,8 @@ export async function spawnAgent(
 		submitted: false,
 		sawWorking: false,
 		stance: deriveStance(merged),
+		session_mode: merged.session_mode,
+		routing,
 		deniedTools: merged.exclude_tools,
 	};
 	spawnRegistry.set(handle, record);
@@ -1081,6 +1222,7 @@ export async function spawnAgent(
 					depth: record.depth,
 					queued: true,
 					stance: record.stance,
+					...routingResultFields(routing, merged.session_mode),
 					...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
 					...(record.activityPath ? { activityPath: record.activityPath } : {}),
 				},
@@ -1100,6 +1242,7 @@ export async function spawnAgent(
 				stance: record.stance,
 				worktreePath: record.worktreePath,
 				waited: true,
+				...routingResultFields(routing, merged.session_mode),
 				...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
 				...(record.activityPath ? { activityPath: record.activityPath } : {}),
 				...(record.startError ? { startError: record.startError } : {}),
@@ -1147,6 +1290,7 @@ export async function spawnAgent(
 				depth: record.depth,
 				stance: record.stance,
 				worktreePath: record.worktreePath,
+				...routingResultFields(routing, merged.session_mode),
 				...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
 				...(record.activityPath ? { activityPath: record.activityPath } : {}),
 			},
@@ -1165,6 +1309,7 @@ export async function spawnAgent(
 			stance: record.stance,
 			worktreePath: record.worktreePath,
 			waited: true,
+			...routingResultFields(routing, merged.session_mode),
 			...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
 			...(record.activityPath ? { activityPath: record.activityPath } : {}),
 		},

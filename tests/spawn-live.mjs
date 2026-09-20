@@ -54,6 +54,10 @@ const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
 const { sessionsDirFor } = await jiti.import(join(ROOT, "src/sessionfile.ts"), {
 	parent: ROOT,
 });
+const { parseSessionEntries } = await jiti.import(
+	join(ROOT, "src/sessionfile.ts"),
+	{ parent: ROOT },
+);
 const { readActivityFile } = await jiti.import(join(ROOT, "src/status.ts"), {
 	parent: ROOT,
 });
@@ -183,6 +187,80 @@ try {
 			g.ok || v.status === "gone" || v.status === "done",
 			`pane state after settle: ${status}`,
 		);
+	}
+
+	// Routing chain live check (issue 08): a settings-pinned model must boot
+	// the child on that model. Gated on PI_HERDR_LIVE_MODEL (exact
+	// `provider/id` authenticated on this machine) — unset = skip honestly.
+	const pinned = process.env.PI_HERDR_LIVE_MODEL;
+	if (!pinned || !pinned.includes("/")) {
+		console.log(
+			"\n[live] settings-pinned model check SKIPPED (set PI_HERDR_LIVE_MODEL=provider/id to run it)",
+		);
+	} else {
+		console.log("\n[live] settings-pinned model boots the child on that model");
+		const [provider, ...rest] = pinned.split("/");
+		const id = rest.join("/");
+		// Hot-reload rule: settings are read at spawn time — rewrite the temp
+		// project's herdr.json with the pin and spawn again.
+		writeFileSync(
+			join(tmp, ".pi", "herdr.json"),
+			JSON.stringify({
+				agents_kill_switch: false,
+				max_parallel_agents: 3,
+				max_spawn_depth: 2,
+				default_kind: "pi",
+				models: { default: "", agents: { "general-purpose": pinned } },
+			}),
+		);
+		const name2 = `spawnlive-model-${Date.now()}`;
+		const res2 = await spawnTool.execute(
+			"live-spawn-model",
+			{
+				type: "general-purpose",
+				name: name2,
+				prompt: "Reply with exactly: ok",
+				wait: 180_000,
+			},
+			undefined,
+			undefined,
+			// The parent's real pi context would carry modelRegistry + model; in
+			// this harness a minimal registry stub validates the pin exactly.
+			{
+				modelRegistry: {
+					find: (p, mid) =>
+						p === provider && mid === id ? { provider: p, id: mid } : undefined,
+					hasConfiguredAuth: () => true,
+				},
+			},
+		);
+		const d2 = res2.details ?? {};
+		check(res2.isError !== true, `pinned-model spawn ok (${res2.isError ? JSON.stringify(res2.content?.[0]?.text ?? "").slice(0, 120) : "ok"})`);
+		check(
+			d2.model === pinned,
+			`spawn result reports the resolved model (${d2.model})`,
+			);
+		if (d2.sessionPath && existsSync(d2.sessionPath)) {
+			const parsed = parseSessionEntries(
+				readFileSync(d2.sessionPath, "utf8"),
+			);
+			const first = parsed.entries.find(
+				(e) => e.type === "message" && e.message?.role === "assistant",
+			);
+			check(
+				!!first,
+				"child session has an assistant message",
+			);
+			check(
+				first?.message?.provider === provider && first?.message?.model === id,
+				`child booted on the pinned model (got ${first?.message?.provider}/${first?.message?.model}, want ${pinned})`,
+			);
+		} else {
+			check(false, "child session file missing — cannot verify the boot model");
+		}
+		if (d2.paneId) {
+			await herdr(["pane", "close", d2.paneId], { timeoutMs: 10_000 });
+		}
 	}
 
 	console.log("\n[live] cleanup");

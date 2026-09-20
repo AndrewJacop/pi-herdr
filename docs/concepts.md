@@ -168,3 +168,50 @@ The old `agent:"custom"` + raw `argv` launch surface is gone. To load a **local
 extension** instead of the installed one, pass `agent_args` on the spawn
 definition (e.g. `["-ne","-e","./src/index.ts"]`) — they follow `--` in
 `agent start`, and herdr resolves the kind to its CLI on its own side.
+
+## Model & thinking routing
+
+Every spawn resolves `model` and `thinking` through a **routing chain**
+(first hit wins):
+
+1. **Spawn param** — `model` / `thinking` on the `herdr_spawn_agent` call.
+2. **Frontmatter** — the definition's `model:` / `thinking:` (`.md` file or
+   inline `agent`).
+3. **`models.agents.<name>`** — per-agent **model** pin in the settings files,
+   keyed by the definition's registry name.
+4. **`models.default`** — the settings **model** fallback (empty = unset).
+5. **Parent session's model** — the model the spawning session is running on
+   right now, pinned explicitly onto the child. `thinking` never inherits from
+   the parent: the child keeps its own configured default. Settings carry
+   model pins only, so the thinking chain is levels 1–2.
+
+**Enforce-or-error, no fuzzy resolution.** A model value must be an exact,
+authenticated `provider/model-id` (e.g. `anthropic/claude-opus-4-6`) — bare
+ids, unknown ids, and unauthenticated providers refuse the spawn. A thinking
+value must be a valid pi level (`off|minimal|low|medium|high|xhigh|max`). Every
+routing error **names the level that supplied the bad value** ("routing level 3
+(models.agents pin for "scout"): no such model…"), so a bad pin in a `.md` file
+or settings is immediately diagnosable. An explicit `thinking` pin on a kind
+without a thinking flag (everything but `pi`) also refuses; an unset thinking
+value on such kinds is simply absent.
+
+Raw CLI flags remain the escape hatch: frontmatter `args:` and spawn-level
+`agent_args` append **after** every computed flag (spawn-level after the
+definition's), so a later duplicate wins by ordinary CLI semantics — that is
+the documented override path, and it bypasses routing validation by design.
+
+## The launch plan
+
+One builder composes the argv handed to `agent start --kind <kind> --` for
+every spawn: for pi children — the parent-owned `--session <seeded file>`, the
+injected child extension (`-e`), the routing flags, the system-prompt flags
+(replace default, or one combined `--append-system-prompt` in append mode)
+with a lean identity + mode-hint block appended (`You are herdr/<name>…`, the
+settle/`agent_done` contract for autonomous children, the seeded-lineage note
+for `fork`/`lineage-only`), then raw flags. Every other kind keeps the honest
+one-liner passthrough — no multi-harness driver layer.
+
+Prompts longer than 2000 chars are written to `<session>.task.md` beside the
+child's session file and delivered as a one-line reference — length-safe on
+Windows, and the artifact survives for resume (the session dir is never
+cleaned).

@@ -8,7 +8,10 @@
 // Tool naming keeps the repo's herdr_ prefix (wayfinder ticket 06's naming
 // note: the charter's unprefixed names were shorthand).
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { spawnAgent } from "../spawn.js";
@@ -46,10 +49,15 @@ const DESCRIPTION =
 	"naming the field — use agent_args or another kind. `kind` (default: settings default_kind, " +
 	"'pi') is an unopinionated passthrough onto herdr's native `agent start --kind` axis: a non-pi " +
 	"child is text in a pane with a TUI-detected lifecycle, nothing else. " +
-	"`kind`/`model` override the definition's. Every pi child runs on a parent-owned session file in " +
+	"`kind`/`model`/`thinking` override the definition's; unset ones resolve down the routing chain — " +
+	"spawn param > frontmatter > models.agents.<name> (settings) > models.default (settings) > this session's model — " +
+	"exact authenticated provider/model-id only, no fuzzy resolution; a bad value refuses the spawn naming the routing level " +
+	"that supplied it. Thinking never inherits from the parent (the child keeps its own default). Every pi child runs on a parent-owned session file in " +
 	"pi's default sessions dir (`--session`, seeded before launch), loads the injected child extension " +
 	"(`agent_done`, identity strip, typed completion sidecars), and is named `herdr/<name>` in /resume — " +
-	"the session file is the source of truth for its result; sessions are never deleted. Stance (v0.6): " +
+	"the session file is the source of truth for its result; sessions are never deleted. Prompts over " +
+	"2000 chars are written to `<session>.task.md` and delivered as a one-line reference. Raw CLI flags " +
+	"ride `agent_args` (spawn level, appended after the definition's `args:` — last-wins). Stance (v0.6): " +
 	"autonomous by default (auto-exit on settle; pane closes, session retained), `interactive: true` or " +
 	"`auto_exit: false` keeps the pane open. Background by default; `wait: true` blocks until " +
 	"done-or-blocked, `wait: <ms>` returns the current state on expiry. At max_parallel_agents the " +
@@ -165,6 +173,18 @@ export function registerAgents(pi: ExtensionAPI): void {
 					description: "Model override (merges over the definition).",
 				}),
 			),
+			thinking: Type.Optional(
+				Type.String({
+					description:
+						"Thinking-level override (routing level 1): off|minimal|low|medium|high|xhigh|max. Pi children only — other kinds refuse an explicit pin.",
+				}),
+			),
+			agent_args: Type.Optional(
+				Type.Array(Type.String(), {
+					description:
+						"Raw agent-CLI flags appended after the definition's args: — later duplicates win (last-wins override).",
+				}),
+			),
 			cwd: Type.Optional(
 				Type.String({
 					description: "Working directory (mutually exclusive with isolated).",
@@ -182,7 +202,13 @@ export function registerAgents(pi: ExtensionAPI): void {
 				}),
 			),
 		}),
-		async execute(_id, p, signal) {
+		async execute(
+			_id,
+			p,
+			signal,
+			_onUpdate,
+			ctx: ExtensionContext | undefined,
+		) {
 			const r = await spawnAgent(
 				{
 					prompt: p.prompt,
@@ -191,11 +217,22 @@ export function registerAgents(pi: ExtensionAPI): void {
 					name: p.name,
 					kind: p.kind,
 					model: p.model,
+					thinking: p.thinking,
+					agent_args: p.agent_args,
 					cwd: p.cwd,
 					isolated: p.isolated,
 					wait: p.wait,
 				},
-				{ signal },
+				{
+					signal,
+					// Routing level 5 (parent session's model) + exact-model
+					// validation come from THIS session's pi context.
+					parent:
+						ctx?.model
+							? { model: { provider: ctx.model.provider, id: ctx.model.id } }
+							: undefined,
+					registry: ctx?.modelRegistry,
+				},
 			);
 			if (!r.ok) return fail(r.error.message, r.error.code, r.error.details);
 			const d = r.data;

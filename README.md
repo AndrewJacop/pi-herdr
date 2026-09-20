@@ -267,16 +267,18 @@ The folder is **shared** with other agent-definition tools (same locations,
 same precedence as the coinstallable prior art): unknown frontmatter keys are
 ignored on both sides, and list values accept either a JSON array or a plain
 comma list. A malformed file is skipped and reported (in the unknown-type
-error) — it never kills the rest of the registry. The stance fields
-(`thinking`, `session-mode`, `auto-exit`, `interactive`, `spawning`) parse,
-validate, and round-trip today; the launch-plan and session-mode tickets wire
-them into the child argv.
+error) — it never kills the rest of the registry. `model`/`thinking` resolve
+through the five-level routing chain (spawn param > frontmatter > settings pin
+> settings default > this session's model — exact `provider/model-id` only,
+enforce-or-error naming the level; see [Concepts](docs/concepts.md));
+`session-mode`, `auto-exit`, and `interactive` ride the spawn (the session-mode
+ticket lands the seeding next).
 
 ### The spawn entry point
 
 | Tool | What it does |
 | --- | --- |
-| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status, sessionPath, stance}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. Every pi child runs on a parent-owned session file in pi's default sessions dir (`herdr/<name>` in `/resume`) with the injected child extension (`agent_done`, identity strip, typed completion sidecars); stance: autonomous (auto-exit on settle — pane closes, session retained) by default, `interactive: true` keeps the pane open. |
+| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status, sessionPath, stance, model, thinking}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. `model`/`thinking` resolve down the five-level routing chain — spawn param > frontmatter > `models.agents.<name>` > `models.default` > this session's model — exact authenticated `provider/model-id` only, enforce-or-error naming the offending level. Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. Prompts over 2000 chars ride `<session>.task.md` beside the child's session file, delivered as a one-line reference. Every pi child runs on a parent-owned session file in pi's default sessions dir (`herdr/<name>` in `/resume`) with the injected child extension (`agent_done`, identity strip, typed completion sidecars); stance: autonomous (auto-exit on settle — pane closes, session retained) by default, `interactive: true` keeps the pane open. |
 | `herdr_save_agent` | Persist an inline `agent` definition or an existing registry `type` to a `.md` file in the project (`.pi/agents/`, default) or global registry — spawn it by `type` in any session afterwards. Ungated (delete the file to undo); refuses to overwrite an existing file unless `overwrite: true`. |
 
 An inline `agent` definition takes: `name`, `description`, `kind` (default: the
@@ -284,7 +286,8 @@ An inline `agent` definition takes: `name`, `description`, `kind` (default: the
 native `agent start --kind` axis), `model`, `thinking`, `system_prompt`,
 `prompt_mode` (`replace`\|`append`), `tools`, `exclude_tools`, `skills`
 (pi-only), `agent_args` (raw CLI flags, e.g.
-`["-ne","-e","./src/index.ts"]` to load a local extension), `session_mode`
+`["-ne","-e","./src/index.ts"]` to load a local extension — spawn-level
+`agent_args` append after the definition's, last-wins), `session_mode`
 (`standalone`\|`lineage-only`\|`fork`), `auto_exit`, `interactive`,
 `spawning`, `cwd`. Honesty rule: a field the chosen kind cannot enforce refuses
 the spawn naming the field — use `agent_args` or another kind.
@@ -420,7 +423,7 @@ key (and per agent name for `models.agents`):
 | --- | --- | --- |
 | `agents_kill_switch` | `false` | Refuse new agent spawns. A gate only — never terminates running agents (that's the menu's Kill-all action). |
 | `default_kind` | `"pi"` | Agent kind spawned when none is given (validated against the live `herdr agent` kind list). |
-| `models.default` | *(unset)* | Model id every spawned agent falls back to (routing level 4; consumed by the launch-plan ticket). Empty/absent = routing falls through to the parent session's model. |
+| `models.default` | *(unset)* | Model id every spawned agent falls back to (routing level 4). Empty/absent = routing falls through to the parent session's model. |
 | `models.agents.<name>` | `{}` | Per-agent model pins (routing level 3): agent name → model id. Entries merge across both files, project winning per name. |
 | `max_parallel_agents` | `3` | Concurrency cap; spawns beyond it are queued until a slot frees. |
 | `max_spawn_depth` | `2` | Guard against runaway recursive fleets. |

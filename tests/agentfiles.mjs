@@ -590,6 +590,12 @@ console.log(
 		boot: async () => ({ ok: true, data: true }),
 		submit: async () => ({ ok: true, data: true }),
 		status: async () => ({ ok: true, data: "working" }),
+		// Accept-all registry: the file-layer pin must validate against SOME
+		// registry to spawn (routing enforce-or-error, issue 08).
+		registry: {
+			find: (p, id) => ({ provider: p, id }),
+			hasConfiguredAuth: () => true,
+		},
 		env: { PI_HERDR_SPAWN_DEPTH: "1" },
 	};
 	const r = await spawn.spawnAgent({ prompt: "plan it", type: "planner" }, deps);

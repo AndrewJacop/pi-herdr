@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Launch plan builder + 5-level model/thinking routing chain (v0.6 issue
+  08).** One builder (`src/launchplan.ts`) composes the full argv for every
+  spawn — parent-owned `--session`, injected `-e` child extension, routing
+  flags, prompt flags, raw flags — replacing the two-site inline composition.
+  `model`/`thinking` now resolve through five levels (spawn param >
+  frontmatter > `models.agents.<name>` > `models.default` > this session's
+  model; thinking never inherits from the parent) with **enforce-or-error**
+  validation: exact authenticated `provider/model-id` only, no fuzzy
+  resolution, and every refusal names the level that supplied the bad value.
+  Pi children get a lean identity + mode-hint block appended to their system
+  prompt (`herdr/<name>`, the settle/`agent_done` contract, the seeded-lineage
+  note for fork/lineage-only), and prompts over 2000 chars are written to
+  `<session>.task.md` beside the session file, delivered as a one-line
+  reference (Windows argv/typing-length safe; survives resume). Frontmatter
+  `args:` (e.g. a plannotator `--plan` planner) and the new spawn-level
+  `agent_args` append last-wins — the sanctioned raw-CLI escape hatch. Stance
+  fields (`auto-exit`, `interactive`, `session-mode`, `isolated`) ride the
+  launch plan end to end; the spawn result now reports the resolved
+  `model`/`thinking` + `session_mode`. herdr stays the launcher: non-pi kinds
+  keep the honest one-liner passthrough, no multi-harness driver layer.
 - **Push delivery + user takeover + idle re-arm (v0.6 issue 06).** A spawned
   pi child's completion now comes to you: the delivery loop watches the spawn
   registry and steers the child's **full final assistant message** into your
