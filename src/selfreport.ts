@@ -93,7 +93,9 @@ export function mapAskUserBlockedToState(
  * Mapping:
  *   session_start   -> idle   (booted, waiting at the prompt)
  *   agent_start     -> working (a run began)
- *   agent_settled   -> idle   (pi will not auto-retry/compact/follow-up — truly done)
+ *   agent_settled   -> idle   (pi's definitive done; omp does NOT emit this)
+ *   agent_end       -> idle   (omp's run-completion signal; also safe on pi)
+ *   auto_retry_start / auto_compaction_start -> working (re-assert after agent_end)
  *   session_shutdown-> idle
  *   herdr:blocked { active: true }              -> blocked
  *   herdr:blocked { active: false }             -> working (resume the turn)
@@ -102,15 +104,20 @@ export function mapAskUserBlockedToState(
  *   pi-cursor-sdk:ask-question:blocked { active: true } -> blocked
  *   pi-cursor-sdk:ask-question:blocked { active: false }-> working (resume the turn)
  *
- * `agent_end` is deliberately NOT mapped: pi may auto-retry, auto-compact, or
- * continue with a queued follow-up after it, so reporting idle there would
- * flicker. `agent_settled` is the definitive idle signal.
+ * omp emits no `agent_settled`, so `agent_end` is mapped as the omp idle
+ * signal. To avoid a post-`agent_end` flicker on pi (auto-retry/compact/
+ * follow-up), `auto_retry_start`/`auto_compaction_start` re-assert `working`.
  */
 export function registerSelfReport(pi: ExtensionAPI): void {
 	if (!ENABLED) return;
 	pi.on("session_start", () => report("idle"));
 	pi.on("agent_start", () => report("working"));
 	pi.on("agent_settled", () => report("idle"));
+	// omp has no `agent_settled`; `agent_end` is its run-completion signal (also
+	// safe on pi). A post-end auto-retry/compaction re-asserts `working` below.
+	pi.on("agent_end", () => report("idle"));
+	pi.on("auto_retry_start", () => report("working"));
+	pi.on("auto_compaction_start", () => report("working"));
 	pi.on("session_shutdown", () => report("idle"));
 
 	const onAskBlocked = (data: unknown): void => {
