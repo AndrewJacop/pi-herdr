@@ -96,6 +96,123 @@ export function seedSessionFile(
 	return { path, dir };
 }
 
+// ---- session modes (v0.6 issue 09) --------------------------------------------
+// How a child session begins relative to the parent's conversation:
+//   standalone   — fresh, no lineage (the previous default; the file stays
+//                  EMPTY and pi initializes its own header on boot).
+//   lineage-only — the seeded header carries the `parentSession` link, zero
+//                  copied turns (pi's /resume builds the lineage tree from it).
+//   fork         — the parent conversation copied in, truncated just before
+//                  the parent's LAST user message, session-entry noise
+//                  filtered — the child boots knowing everything discussed
+//                  and receives its task as the natural next user turn.
+// Honest costs (wayfinder ticket 05): fork is a context-copy tax (the child
+// re-processes the whole copied conversation) and a snapshot (freezes at
+// spawn; the pushed result is the only sync-back).
+//
+// pi facts these builders mirror (dist/core/session-manager.js): the v3
+// header is {type:"session",version:3,id,timestamp,cwd,parentSession} where
+// parentSession is the parent session FILE PATH (what /resume reads); an
+// empty --session file gets a pi-written header, a non-empty one is opened
+// as-is with the context built by walking parentId from the leaf — hence the
+// fork copy's fresh linear re-chain.
+
+/** Deps for the header/seed builders (injected for offline tests). */
+export interface SeedHeaderDeps {
+	now?: () => Date;
+	uuid?: () => string;
+}
+
+/**
+ * The child session header (pi's SessionHeader, v3): fresh id, child cwd,
+ * and the `parentSession` link — the PARENT SESSION FILE PATH, the same
+ * value pi's own fork flow writes and what /resume reads for lineage.
+ */
+export function buildChildHeader(
+	input: { cwd: string; parentSession?: string },
+	deps: SeedHeaderDeps = {},
+): Record<string, unknown> {
+	return {
+		type: "session",
+		version: 3,
+		id: (deps.uuid ?? randomUUID)(),
+		timestamp: (deps.now ?? (() => new Date()))().toISOString(),
+		cwd: input.cwd,
+		...(input.parentSession ? { parentSession: input.parentSession } : {}),
+	};
+}
+
+/**
+ * The fork copy: the parent's conversation truncated just before its LAST
+ * user message, session-entry noise filtered, re-chained into a fresh linear
+ * tree. Pure.
+ *
+ *  - Truncation: entries from the last user-message entry onward are dropped
+ *    (including the parent's replies to it and any in-flight turn) — the
+ *    spawn's task prompt takes that user turn's place. No user message at
+ *    all → everything copies. Cutting AT a user boundary never splits a
+ *    toolCall/toolResult pair: those live inside a completed assistant turn.
+ *  - Noise filter: only `type: "message"` entries copy. Model/thinking
+ *    changes, compaction + branch summaries, custom extension entries and
+ *    labels are the parent process's session bookkeeping, not conversation.
+ *    Pre-compaction messages DO copy: the fork is a snapshot of the
+ *    conversation, not of the parent's context window.
+ *  - Re-chain: `parentId` is relinked linearly (the first copied entry roots
+ *    the tree) because pi's context walk follows parentId from the leaf —
+ *    copied links into filtered-out entries would truncate the walk. Original
+ *    ids and message objects stay verbatim (traceable to the parent); an
+ *    id-less entry gets a deterministic fresh id instead of being dropped.
+ */
+export function forkCopyEntries(
+	entries: Record<string, unknown>[],
+): Record<string, unknown>[] {
+	let lastUser = -1;
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const e = entries[i];
+		if (e.type !== "message") continue;
+		const role = (e.message as { role?: unknown } | undefined)?.role;
+		if (role === "user") {
+			lastUser = i;
+			break;
+		}
+	}
+	const end = lastUser === -1 ? entries.length : lastUser;
+	const out: Record<string, unknown>[] = [];
+	let prevId: string | null = null;
+	for (let i = 0; i < end; i++) {
+		const e = entries[i];
+		if (e.type !== "message") continue;
+		const id =
+			typeof e.id === "string" && e.id ? e.id : `herdr-fork-${out.length + 1}`;
+		out.push({ ...e, id, parentId: prevId });
+		prevId = id;
+	}
+	return out;
+}
+
+/**
+ * The mode's content lines for a freshly seeded child session file (JSON
+ * strings; the writer newline-joins them): the child header, plus the fork
+ * copy for fork mode. lineage-only = header only. standalone never calls
+ * this — its file stays empty for pi to initialize on boot.
+ */
+export function buildSessionSeedLines(
+	input: {
+		cwd: string;
+		parentSession: string;
+		mode: "lineage-only" | "fork";
+		parentEntries: Record<string, unknown>[];
+	},
+	deps: SeedHeaderDeps = {},
+): string[] {
+	const header = buildChildHeader(
+		{ cwd: input.cwd, parentSession: input.parentSession },
+		deps,
+	);
+	const rest = input.mode === "fork" ? forkCopyEntries(input.parentEntries) : [];
+	return [header, ...rest].map((e) => JSON.stringify(e));
+}
+
 // ---- session JSONL reading ---------------------------------------------------
 // A session file is line-delimited JSON entries. Message entries are
 // `{type:"message", id, parentId, timestamp, message:{role, content, ...}}`.

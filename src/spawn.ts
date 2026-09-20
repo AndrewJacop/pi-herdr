@@ -28,7 +28,7 @@
 
 import { getAgentKinds } from "./config.js";
 import { herdr } from "./herdr.js";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,10 @@ import {
 	type RoutingResolution,
 	validateRouting,
 } from "./launchplan.js";
+import {
+	buildSessionSeedLines,
+	parseSessionEntries,
+} from "./sessionfile.js";
 
 // The agent-definition API future tickets and tests consume THROUGH this
 // module: jiti-based tests importing src/agentdefs.ts directly would get a
@@ -300,13 +304,18 @@ export interface KindCaps {
 	skills: boolean;
 	/** pi-only: `--thinking` exists; explicit thinking pins elsewhere refuse. */
 	thinking: boolean;
+	/** pi-only: the session-file substrate exists — lineage-only/fork (issue
+	 * 09) are enforceable; other kinds have no session file to seed. */
+	session: boolean;
 }
 
 /**
  * What each known kind can honestly enforce at launch (verified flags in
  * wayfinder/research/capability-matrix.md: pi 0.85.1, claude 2.1.263,
- * codex 0.135.0 + survey). Unknown kinds enforce nothing structured — they
- * get `agent_args` only, per ticket 11's passthrough ruling.
+ * codex 0.135.0 + survey). `session` = has the pi session-file substrate
+ * (issue 09's lineage-only/fork seeding rides it) — pi only. Unknown kinds
+ * enforce nothing structured — they get `agent_args` only, per ticket 11's
+ * passthrough ruling.
  */
 export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 	pi: {
@@ -316,6 +325,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		excludeTools: true,
 		skills: true,
 		thinking: true,
+		session: true,
 	},
 	claude: {
 		model: true,
@@ -324,6 +334,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		excludeTools: true,
 		skills: false,
 		thinking: false,
+		session: false,
 	},
 	codex: {
 		model: true,
@@ -332,6 +343,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		excludeTools: false,
 		skills: false,
 		thinking: false,
+		session: false,
 	},
 	gemini: {
 		model: true,
@@ -340,6 +352,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		excludeTools: false,
 		skills: false,
 		thinking: false,
+		session: false,
 	},
 	cursor: {
 		model: true,
@@ -348,6 +361,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		excludeTools: false,
 		skills: false,
 		thinking: false,
+		session: false,
 	},
 	opencode: {
 		model: true,
@@ -356,6 +370,7 @@ export const KIND_CAPABILITIES: Readonly<Record<string, KindCaps>> = {
 		excludeTools: false,
 		skills: false,
 		thinking: false,
+		session: false,
 	},
 };
 
@@ -366,6 +381,7 @@ const NO_CAPS: KindCaps = {
 	excludeTools: false,
 	skills: false,
 	thinking: false,
+	session: false,
 };
 
 export function kindCaps(kind: string): KindCaps {
@@ -417,6 +433,13 @@ export function validateKindEnforcement(spec: SpawnSpec): Err | null {
 		["excludeTools", "exclude_tools", Boolean(spec.exclude_tools?.length)],
 		["skills", "skills", Boolean(spec.skills?.length)],
 		["model", "model", Boolean(spec.model)],
+		// "standalone" is the no-op default; only a meaningful session mode
+		// needs the pi session substrate (issue 09).
+		[
+			"session",
+			"session_mode",
+			Boolean(spec.session_mode && spec.session_mode !== "standalone"),
+		],
 	];
 	for (const [cap, field, isSet] of checks) {
 		if (isSet && !caps[cap]) {
@@ -634,6 +657,15 @@ export interface SpawnDeps {
 	agentDirs?: AgentDirs;
 	/** Session-file seeding — default: seedSessionFile (pi-default sessions dir). */
 	seed?: (cwd: string) => { path: string; dir: string };
+	/** The parent session file (issue 09) — lineage-only/fork read it for the
+	 * header link + fork copy. Threaded from the tool's ctx.sessionManager.
+	 * Absent/unreadable → a requested non-standalone mode degrades to
+	 * standalone (recorded as such). */
+	parentSession?: string;
+	/** Parent-session reader — default: parse the file (injectable in tests). */
+	readParentEntries?: (path: string) => Record<string, unknown>[] | null;
+	/** Mode-content writer — default: newline-join the seed lines. */
+	writeSessionSeed?: (path: string, lines: string[]) => void;
 	/** Injected child-extension path — default: src/child.ts beside this module. */
 	childExtension?: string;
 	/** pi's model registry (exact lookup + auth checks) — threaded from the
@@ -759,17 +791,63 @@ function seedRecordSession(
 	deps: SpawnDeps,
 ): Err | null {
 	if (record.kind.toLowerCase() !== "pi" || record.sessionPath) return null;
+	let seeded: { path: string; dir: string };
 	try {
-		const seeded = (deps.seed ?? seedSessionFile)(cwd);
+		seeded = (deps.seed ?? seedSessionFile)(cwd);
 		record.sessionPath = seeded.path;
 		record.activityPath = `${seeded.path}.activity.json`;
-		return null;
 	} catch (e) {
 		return spawnErr(
 			"AGENT_START_FAILED",
 			`could not seed the child session file in pi's sessions dir: ${e instanceof Error ? e.message : String(e)}`,
 		);
 	}
+	// Session mode (issue 09): standalone leaves the file EMPTY (pi writes its
+	// own header on boot); lineage-only/fork write the child header with the
+	// `parentSession` link (plus, for fork, the parent conversation truncated
+	// just before its last user message). Without a readable parent session
+	// there is nothing to seed — a lineage link or fork copy with no parent
+	// conversation IS standalone on disk (empty file, pi-written header) — so
+	// no content is written; `session_mode` keeps reporting the SELECTED mode
+	// (what the launch plan rode), the file shows what actually happened.
+	const mode = record.session_mode ?? "standalone";
+	if (mode === "standalone") return null;
+	const parentSession = deps.parentSession;
+	const parentEntries = parentSession
+		? ((deps.readParentEntries ?? readParentSessionFile)(parentSession) ?? null)
+		: null;
+	if (!parentSession || !parentEntries) return null;
+	try {
+		const lines = buildSessionSeedLines({
+			cwd,
+			parentSession,
+			mode,
+			parentEntries,
+		});
+		(deps.writeSessionSeed ?? writeSessionSeedFile)(seeded.path, lines);
+	} catch (e) {
+		return spawnErr(
+			"AGENT_START_FAILED",
+			`could not write the ${mode} seed content to ${seeded.path}: ${e instanceof Error ? e.message : String(e)}`,
+		);
+	}
+	return null;
+}
+
+/** Read the parent's own session file into entries (null when unreadable). */
+function readParentSessionFile(
+	path: string,
+): Record<string, unknown>[] | null {
+	try {
+		return parseSessionEntries(readFileSync(path, "utf8")).entries;
+	} catch {
+		return null;
+	}
+}
+
+/** Write the mode's seed lines into the freshly created (empty) file. */
+function writeSessionSeedFile(path: string, lines: string[]): void {
+	writeFileSync(path, lines.join("\n") + "\n", "utf8");
 }
 
 /**
@@ -990,7 +1068,13 @@ export async function waitPhase(
 // ---- the spawn entry point ---------------------------------------------------------------
 
 export interface SpawnParams {
+	/** Task prompt (its first prompt). */
 	prompt: string;
+	/** Force session_mode "fork" (issue 09): the child boots with the parent
+	 * conversation (truncated before the parent's last user message) as
+	 * context — the /iterate-style composition. Overrides the definition's
+	 * `session_mode`. */
+	fork?: boolean;
 	type?: string;
 	agent?: unknown;
 	name?: string;
@@ -1053,6 +1137,20 @@ function routingResultFields(
 	};
 }
 
+/** The routing + session-substrate fields every return path reports: routing
+ * resolution, the (selected) session mode, and the seeded file paths when
+ * they exist — one helper so the four return sites can't drift apart. */
+function substrateResultFields(
+	record: SpawnRecord,
+	routing: RoutingResolution,
+): Partial<SpawnResultData> {
+	return {
+		...routingResultFields(routing, record.session_mode),
+		...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
+		...(record.activityPath ? { activityPath: record.activityPath } : {}),
+	};
+}
+
 /**
  * spawn_agent, end to end. Pure validations first (specifier, merge,
  * enforce-or-error), then the three gates in order, then — and only then —
@@ -1088,6 +1186,11 @@ export async function spawnAgent(
 		{ kind: params.kind, model: params.model, thinking: params.thinking },
 		settings.default_kind,
 	);
+	// Session-mode selection (issue 09): spawn-level `fork: true` forces fork
+	// (the /iterate-style composition) over the definition's `session_mode`;
+	// unset definition → standalone. Seeding itself happens at start time
+	// (seedRecordSession), once the child's final cwd is known.
+	if (params.fork) merged.session_mode = "fork";
 	// Routing chain (issue 08): resolve model/thinking across all five levels
 	// (spawn param > frontmatter > models.agents pin > models.default > parent
 	// model; thinking never inherits from the parent), then enforce-or-error
@@ -1222,9 +1325,7 @@ export async function spawnAgent(
 					depth: record.depth,
 					queued: true,
 					stance: record.stance,
-					...routingResultFields(routing, merged.session_mode),
-					...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
-					...(record.activityPath ? { activityPath: record.activityPath } : {}),
+					...substrateResultFields(record, routing),
 				},
 			};
 		}
@@ -1242,9 +1343,7 @@ export async function spawnAgent(
 				stance: record.stance,
 				worktreePath: record.worktreePath,
 				waited: true,
-				...routingResultFields(routing, merged.session_mode),
-				...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
-				...(record.activityPath ? { activityPath: record.activityPath } : {}),
+				...substrateResultFields(record, routing),
 				...(record.startError ? { startError: record.startError } : {}),
 			},
 		};
@@ -1290,9 +1389,7 @@ export async function spawnAgent(
 				depth: record.depth,
 				stance: record.stance,
 				worktreePath: record.worktreePath,
-				...routingResultFields(routing, merged.session_mode),
-				...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
-				...(record.activityPath ? { activityPath: record.activityPath } : {}),
+				...substrateResultFields(record, routing),
 			},
 		};
 	}
@@ -1309,9 +1406,7 @@ export async function spawnAgent(
 			stance: record.stance,
 			worktreePath: record.worktreePath,
 			waited: true,
-			...routingResultFields(routing, merged.session_mode),
-			...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
-			...(record.activityPath ? { activityPath: record.activityPath } : {}),
+			...substrateResultFields(record, routing),
 		},
 	};
 }

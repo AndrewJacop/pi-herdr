@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Session modes: standalone / lineage-only / fork (v0.6 issue 09).** How a
+  spawned pi child's session begins relative to the parent's conversation.
+  `standalone` (default) is unchanged — an empty seeded file pi initializes
+  itself. `lineage-only` seeds the child header with the `parentSession` link
+  (the parent session file path pi's `/resume` builds lineage trees from) and
+  zero copied turns. `fork` — selected by frontmatter `session-mode:` or
+  forced by the new spawn-level `fork: true` — copies the parent conversation
+  into the child's session file, **truncated just before the parent's last
+  user message**, session-entry noise (model/thinking changes, compaction and
+  branch summaries, custom extension entries) filtered, re-chained into a
+  fresh linear tree so pi's context walk sees every copied turn — the child
+  boots knowing everything discussed and receives its task as the natural
+  next user turn. Honest costs, stated in the docs: fork is a context-copy
+  tax (the child re-processes the whole copied conversation) and a snapshot
+  (freezes at spawn; the pushed result is the only sync-back). A fork with no
+  readable parent session seeds an empty file (standalone on disk) while the
+  mode keeps reporting the selection. A meaningful `session_mode` on a kind
+  without a session substrate refuses (enforce-or-error, naming the field).
+  The registry records the mode alongside the session path. Live-tested: a
+  forked child answers a question about the parent conversation without being
+  told (`tests/modes-live.mjs`).
 - **Launch plan builder + 5-level model/thinking routing chain (v0.6 issue
   08).** One builder (`src/launchplan.ts`) composes the full argv for every
   spawn — parent-owned `--session`, injected `-e` child extension, routing

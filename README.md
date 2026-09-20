@@ -271,14 +271,14 @@ error) — it never kills the rest of the registry. `model`/`thinking` resolve
 through the five-level routing chain (spawn param > frontmatter > settings pin
 > settings default > this session's model — exact `provider/model-id` only,
 enforce-or-error naming the level; see [Concepts](docs/concepts.md));
-`session-mode`, `auto-exit`, and `interactive` ride the spawn (the session-mode
-ticket lands the seeding next).
+`session-mode`, `auto-exit`, and `interactive` ride the spawn; `session-mode`
+selects how the child session begins (see [Session modes](#session-modes)).
 
 ### The spawn entry point
 
 | Tool | What it does |
 | --- | --- |
-| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status, sessionPath, stance, model, thinking}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. `model`/`thinking` resolve down the five-level routing chain — spawn param > frontmatter > `models.agents.<name>` > `models.default` > this session's model — exact authenticated `provider/model-id` only, enforce-or-error naming the offending level. Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. Prompts over 2000 chars ride `<session>.task.md` beside the child's session file, delivered as a one-line reference. Every pi child runs on a parent-owned session file in pi's default sessions dir (`herdr/<name>` in `/resume`) with the injected child extension (`agent_done`, identity strip, typed completion sidecars); stance: autonomous (auto-exit on settle — pane closes, session retained) by default, `interactive: true` keeps the pane open. |
+| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status, sessionPath, stance, model, thinking, session_mode}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. `model`/`thinking` resolve down the five-level routing chain — spawn param > frontmatter > `models.agents.<name>` > `models.default` > this session's model — exact authenticated `provider/model-id` only, enforce-or-error naming the offending level. `fork: true` boots a pi child with this conversation as context, truncated before your last user message (see [Session modes](#session-modes)). Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. Prompts over 2000 chars ride `<session>.task.md` beside the child's session file, delivered as a one-line reference. Every pi child runs on a parent-owned session file in pi's default sessions dir (`herdr/<name>` in `/resume`) with the injected child extension (`agent_done`, identity strip, typed completion sidecars); stance: autonomous (auto-exit on settle — pane closes, session retained) by default, `interactive: true` keeps the pane open. |
 | `herdr_save_agent` | Persist an inline `agent` definition or an existing registry `type` to a `.md` file in the project (`.pi/agents/`, default) or global registry — spawn it by `type` in any session afterwards. Ungated (delete the file to undo); refuses to overwrite an existing file unless `overwrite: true`. |
 
 An inline `agent` definition takes: `name`, `description`, `kind` (default: the
@@ -288,9 +288,34 @@ native `agent start --kind` axis), `model`, `thinking`, `system_prompt`,
 (pi-only), `agent_args` (raw CLI flags, e.g.
 `["-ne","-e","./src/index.ts"]` to load a local extension — spawn-level
 `agent_args` append after the definition's, last-wins), `session_mode`
-(`standalone`\|`lineage-only`\|`fork`), `auto_exit`, `interactive`,
+(`standalone`\|`lineage-only`\|`fork` — see [Session modes](#session-modes)),
+`auto_exit`, `interactive`,
 `spawning`, `cwd`. Honesty rule: a field the chosen kind cannot enforce refuses
 the spawn naming the field — use `agent_args` or another kind.
+
+### Session modes
+
+How a spawned pi child's session begins relative to this conversation — selected
+by frontmatter `session-mode:` or the spawn-level `fork: true` override:
+
+- **`standalone`** (default) — fresh session, no lineage. Today's behavior.
+- **`lineage-only`** — the child's seeded session header carries the
+  `parentSession` link to this session, with zero copied turns; pi's `/resume`
+  shows the relationship (lineage discovery, later forking).
+- **`fork`** — this conversation is copied into the child's session file,
+  **truncated just before your last user message**, session-entry noise
+  (model/thinking changes, compaction and branch summaries, custom extension
+  entries) filtered out — the child boots knowing everything discussed and
+  receives its prompt as the natural next user turn. Honest costs: fork is a
+  **context-copy tax** (the child re-processes the whole copied conversation)
+  and a **snapshot** (it freezes at spawn; the parent keeps moving; the pushed
+  result is the only sync-back). For "you know what we've discussed, now do
+  X" — never a default. A fork requested when this session has no readable
+  session file seeds an empty file (standalone on disk); the mode still
+  reports what was selected.
+
+The registry records the mode alongside the session path; resume replays the
+file whatever its lineage.
 
 ### Results and steering
 

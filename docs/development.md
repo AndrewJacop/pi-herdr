@@ -9,7 +9,7 @@ Two commands, no herdr required, must stay green:
 
 ```bash
 npm run typecheck     # tsc --noEmit — must be clean
-npm test              # node tests/smoke.mjs — offline smoke; 378 checks, all pass
+npm test              # offline suite (tests/smoke.mjs + per-area suites incl. tests/modes.mjs); must pass
 ```
 
 `tests/smoke.mjs` is the offline gate. It does **not** require a running herdr server.

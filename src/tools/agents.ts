@@ -34,6 +34,11 @@ function builtInTypeLines(): string {
 		.join("\n");
 }
 
+/** The honest fork costs (issue 09, wayfinder ticket 05) — one wording shared
+ * by the tool description and the fork param description. */
+const FORK_COSTS =
+	'A context-copy tax (the child re-processes the whole conversation) and a snapshot (freezes at spawn; the delivered result is the only sync-back) — for "you know what we have discussed, now do X", never a default.';
+
 const DESCRIPTION =
 	"Spawn a background AI agent in a herdr pane, submit the task prompt, and return " +
 	"{name, paneId, status}. Address the agent by `name` afterwards. " +
@@ -55,7 +60,11 @@ const DESCRIPTION =
 	"that supplied it. Thinking never inherits from the parent (the child keeps its own default). Every pi child runs on a parent-owned session file in " +
 	"pi's default sessions dir (`--session`, seeded before launch), loads the injected child extension " +
 	"(`agent_done`, identity strip, typed completion sidecars), and is named `herdr/<name>` in /resume — " +
-	"the session file is the source of truth for its result; sessions are never deleted. Prompts over " +
+	"the session file is the source of truth for its result; sessions are never deleted. Session modes (pi children): " +
+	"`standalone` (default — fresh, no lineage); `lineage-only` (the child's header carries the parentSession link to this session, zero copied turns — " +
+	"/resume shows the relationship); `fork` (this conversation is copied into the child's session, truncated just before your last user message — " +
+	"the child boots knowing everything discussed and receives its prompt as the natural next user turn). Honest costs: fork is a " +
+	FORK_COSTS + " Select via frontmatter `session-mode:` or force with the spawn-level `fork: true`. Prompts over " +
 	"2000 chars are written to `<session>.task.md` and delivered as a one-line reference. Raw CLI flags " +
 	"ride `agent_args` (spawn level, appended after the definition's `args:` — last-wins). Stance (v0.6): " +
 	"autonomous by default (auto-exit on settle; pane closes, session retained), `interactive: true` or " +
@@ -179,6 +188,13 @@ export function registerAgents(pi: ExtensionAPI): void {
 						"Thinking-level override (routing level 1): off|minimal|low|medium|high|xhigh|max. Pi children only — other kinds refuse an explicit pin.",
 				}),
 			),
+			fork: Type.Optional(
+				Type.Boolean({
+					description:
+						'Force session_mode "fork" (pi children): the child boots with THIS conversation (truncated just before your last user message) as context, then receives the prompt as its natural next turn. Overrides the definition\'s session_mode. ' +
+						FORK_COSTS,
+				}),
+			),
 			agent_args: Type.Optional(
 				Type.Array(Type.String(), {
 					description:
@@ -212,6 +228,7 @@ export function registerAgents(pi: ExtensionAPI): void {
 			const r = await spawnAgent(
 				{
 					prompt: p.prompt,
+					fork: p.fork,
 					type: p.type,
 					agent: p.agent,
 					name: p.name,
@@ -232,6 +249,9 @@ export function registerAgents(pi: ExtensionAPI): void {
 							? { model: { provider: ctx.model.provider, id: ctx.model.id } }
 							: undefined,
 					registry: ctx?.modelRegistry,
+					// Session modes (issue 09): the parent's own session file is
+					// both the `parentSession` header link and the fork source.
+					parentSession: ctx?.sessionManager?.getSessionFile() ?? undefined,
 				},
 			);
 			if (!r.ok) return fail(r.error.message, r.error.code, r.error.details);
