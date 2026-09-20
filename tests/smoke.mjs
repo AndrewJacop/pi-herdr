@@ -62,10 +62,11 @@ const expected = [
 	// the `.md` registry persistence tool (issue 03; ungated by decision)
 	"herdr_save_agent",
 	// the pull/inspection tool (issue 04) — retired wait_agent + read_agent of
-	// the legacy result trio; send_prompt follows when message_agent lands
+	// the legacy result trio
 	"herdr_get_agent_result",
-	// steering (the last of the legacy trio; absorbed by message_agent in 05)
-	"herdr_send_prompt",
+	// the open message channel (issue 05) — absorbed send_prompt, the last of
+	// the legacy trio
+	"herdr_message_agent",
 	// the fleet's single introspection tool
 	"herdr_list_agents",
 	// the pane-sync quartet
@@ -84,6 +85,7 @@ assert(
 // herdr_delegate. Their machinery still runs internally (isolated worktrees,
 // the poll loop) — but the LLM must stop seeing these names.
 const cut = [
+	"herdr_send_prompt",
 	"herdr_start_agent",
 	"herdr_delegate",
 	"herdr_get_agent",

@@ -539,7 +539,7 @@ function render(view: ResultView): ToolReturn {
 				content: [
 					{
 						type: "text",
-						text: `Agent "${label}" is BLOCKED on a question. Steer it with herdr_send_prompt (freeform) or herdr_send_keys (option lists) — see herdr_list_agents.`,
+						text: `Agent "${label}" is BLOCKED on a question. Answer freeform with herdr_message_agent (the raw text becomes its answer); option lists take herdr_send_keys — see herdr_list_agents.`,
 					},
 				],
 				details: view,

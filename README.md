@@ -13,11 +13,11 @@ session. Each spawned agent is an independent CLI process you can watch, attach
 to, and intervene in while pi coordinates them.
 
 The v0.6 surface is deliberately small: **one surface, nine tools today**
-(spawn, the result trio, list, and the pane quartet), converging to **twelve**
-as the remaining v0.6 tickets land (`get_agent_result`, `message_agent`,
-`interrupt`/`resume`, `run_workflow`). Everything else — layout, tab/workspace
-CRUD, worktrees, fleet introspection — is machinery you never have to switch
-to: the herdr UI stays the human's surface for that.
+(spawn, save, result, message, list, and the pane quartet), converging to
+**twelve** as the remaining v0.6 tickets land (`interrupt`/`resume`,
+`run_workflow`). Everything else — layout, tab/workspace CRUD, worktrees,
+fleet introspection — is machinery you never have to switch to: the herdr UI
+stays the human's surface for that.
 
 > **Complementary to [`pi-subagents`](https://www.npmjs.com/package/pi-subagents):**
 > `pi-subagents` runs children **in-process** (fast, shared context). `pi-herdr`
@@ -201,10 +201,11 @@ Because each agent is a real CLI in its own pane, you can mix models/vendors fre
 While an **interactive** agent (`interactive: true` — the pane stays open) is at
 work you can steer it, and if it asks a question you can answer:
 
-> *Prompt:* `Send "focus only on the auth module" to agent "tests" (herdr_send_prompt), then keep waiting.`
+> *Prompt:* `Send "focus only on the auth module" to agent "tests" (herdr_message_agent), then keep waiting.`
 
 If an agent blocks on an ask-user overlay, `herdr_get_agent_result` reports it
-(`status: blocked`); answer **freeform** questions with `herdr_send_prompt` and
+(`status: blocked`); answer **freeform** questions with `herdr_message_agent`
+— the message is delivered as the raw answer, typed into the overlay — and
 **option-list** questions with `herdr_send_keys` (typed text never reaches an
 option list — bare `Enter` picks option 1, `down` then `Enter` picks option 2).
 
@@ -293,7 +294,7 @@ the spawn naming the field — use `agent_args` or another kind.
 | Tool | What it does |
 | --- | --- |
 | `herdr_get_agent_result` | **The result tool.** For spawned pi children it reads the EXACT final assistant message from the child's parent-owned session file (byte-identical, complete — no screen scraping); mid-flight calls return an interim snapshot. A failing child surfaces as a typed error (`stopReason`/`errorMessage` mined off the session). Panes this session didn't spawn (or non-pi kinds) fall back to pane-tail reading. A gone pane still answers with last-known metadata — its session file stays readable and resumable. `wait: true` blocks until done/failed/blocked/gone (through the queue). |
-| `herdr_send_prompt` | Send a prompt to an agent pane (submits with Enter by default) — steering, follow-ups, answers. (The last of the legacy result trio; absorbed by `herdr_message_agent` in a later ticket.) |
+| `herdr_message_agent` | **The open channel** — anyone ↔ anyone, no broker. Resolves `target` (pane id → herdr name → spawn handle → reserved `orchestrator` role; real names win) and injects text through the send machinery. Physics-adaptive: a blocked target gets the raw text as its answer; everything else is wrapped as `<agent-message from="…" to="…">` — spawner-declared identity, never verified. Fire-and-forget: the receipt reports `{delivery: "message"\|"answer"}`; delivered-to-the-pane ≠ consumed-by-the-model. |
 
 > `herdr_wait_agent` / `herdr_read_agent` are **retired** (v0.6 issue 04):
 > `herdr_get_agent_result` replaces them with exact session-file reads.
@@ -405,7 +406,9 @@ Removed tools and their replacements:
 
 | Removed | Use instead |
 | --- | --- |
-| `herdr_delegate` | `herdr_spawn_agent` + `herdr_wait_agent` + `herdr_read_agent` (spawn + `wait: <ms>` is the one-shot form; push delivery lands with ticket 04 to make the trio unnecessary). |
+| `herdr_send_prompt` | `herdr_message_agent` (v0.6 issue 05) — same delivery path, plus the envelope, the full resolution chain, and the reserved `orchestrator` role. |
+| `herdr_wait_agent` / `herdr_read_agent` | `herdr_get_agent_result` (exact session-file reads; `wait: true` blocks until terminal). |
+| `herdr_delegate` | `herdr_spawn_agent` + `herdr_get_agent_result(wait: true)` (spawn + wait is the one-shot form; push delivery lands with ticket 06 to make even that unnecessary). |
 | `herdr_start_agent` | `herdr_spawn_agent` (same single `agent start --kind` launch path underneath; registry types or inline definitions instead of loose flag bags). |
 | `herdr_get_agent`, `herdr_explain_agent` | `herdr_list_agents`. |
 | `herdr_stop_agent` | The confirmed **Kill all agents** action in `/subagents config`; for one runaway agent, `herdr_send_keys` with `["ctrl+c"]`, or close the pane in the herdr UI. |
@@ -463,12 +466,13 @@ src/
   menu.ts                # the /subagents config menu + Kill-all-agents action
   tools/agents.ts        # herdr_spawn_agent registration (the spawn entry point)
   tools/result.ts        # herdr_get_agent_result (exact JSONL result; pane-tail fallback for unspawned panes)
-  tools/orchestration.ts # send_prompt + list_agents; the launch/wait machinery every spawn uses
+  tools/message.ts       # herdr_message_agent (the open channel: resolution chain, envelope, physics-adaptive delivery)
+  tools/orchestration.ts # list_agents + the send machinery (spawn submit, message delivery, launch/wait paths)
   tools/sync.ts          # pane-sync quartet (run/read/wait_output/send_keys)
   tools/worktrees.ts     # worktree machinery (powers isolated; no model-facing tools)
 tests/
-  smoke.mjs, substrate.mjs, settings.mjs, spawn.mjs   # offline suites (npm test)
-  live.mjs, pong.mjs, selfreport.mjs, blocked.mjs, spawn-live.mjs, dev-load.mjs, …
+  smoke.mjs, substrate.mjs, settings.mjs, spawn.mjs, agentfiles.mjs, message.mjs   # offline suites (npm test)
+  live.mjs, selfreport.mjs, blocked.mjs, spawn-live.mjs, message-live.mjs, dev-load.mjs, …
 ```
 
 ## Contributing

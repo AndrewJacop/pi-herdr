@@ -96,13 +96,13 @@ try {
 		`list includes our pane (${paneId})`,
 	);
 
-	console.log("\n[win-start] 4. herdr_send_prompt");
-	const send = await tool("herdr_send_prompt").execute(
+	console.log("\n[win-start] 4. herdr_message_agent");
+	const send = await tool("herdr_message_agent").execute(
 		"t",
 		{ target: paneId, text: "Reply with exactly one word: ping" },
 		NO_SIGNAL,
 	);
-	check(!send.isError, `send_prompt ok`);
+	check(!send.isError, `message_agent ok (delivery: ${send.details?.delivery})`);
 
 	console.log("\n[win-start] 5-6. herdr_get_agent_result (wait → exact reply)");
 	// v0.6 issue 04: wait_agent/read_agent retired — the result tool polls the

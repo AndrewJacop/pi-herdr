@@ -47,15 +47,15 @@ herdr_spawn_agent
 `herdr_spawn_agent` splits a pane, launches the agent, submits the task prompt,
 and returns `{name, paneId, status}` — address the agent by `name` afterwards.
 With `wait` omitted you keep working; when you want the result:
-`herdr_wait_agent(name, idle)` then `herdr_read_agent(name)`.
+`herdr_get_agent_result(name, wait)` — the exact final assistant message, not
+a screen scrape.
 
 Step by step:
 
 1. `herdr_spawn_agent` — launch a named agent pane with its task (background by default).
 2. `herdr_list_agents` — see what's running and each agent's status.
-3. `herdr_send_prompt` — steer an agent (follow-ups, corrections, answers).
-4. `herdr_wait_agent` — block until `idle` / `blocked`.
-5. `herdr_read_agent` — harvest the output.
+3. `herdr_message_agent` — message an agent (follow-ups, corrections, answers); blocked agents get your text as their answer.
+4. `herdr_get_agent_result` — pull the exact final message (`wait: true` blocks until done/failed/blocked/gone).
 
 Raw panes (a dev server, `heroku logs --tail`, a test suite): `herdr_run_command`
 into an existing pane by id, `herdr_read_pane` / `herdr_wait_output` to watch it,
@@ -69,9 +69,9 @@ heterogeneous review, and the settings menu (`/subagents config`).
 | Tool | What it does |
 |------|--------------|
 | `herdr_spawn_agent` | The spawn entry point: pane + agent + task prompt in one call. Registry `type` or inline definition; gates (kill-switch, depth, parallel cap); `isolated` worktrees; queue over the cap. |
-| `herdr_send_prompt` | Send/submit a prompt to an agent pane — steer it. |
-| `herdr_wait_agent` | Block until a status (`idle`/`working`/`blocked`/`done`). |
-| `herdr_read_agent` | Read an agent pane's output text. |
+| `herdr_save_agent` | Persist an agent definition to the `.md` registry (project or global). |
+| `herdr_get_agent_result` | Pull an agent's result — the exact final assistant message from its session file (pane-tail fallback for unspawned panes); `wait` blocks until terminal. |
+| `herdr_message_agent` | The open message channel: enveloped text to any agent pane; blocked targets get the raw answer; reserved `orchestrator` role. |
 | `herdr_list_agents` | List running agents + statuses — the fleet's single introspection tool. |
 | `herdr_run_command` | Run a shell command in a raw pane (text + Enter). |
 | `herdr_read_pane` | Read a raw pane's terminal output. |

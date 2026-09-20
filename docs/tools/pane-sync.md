@@ -75,7 +75,7 @@ emitted (herdr waits indefinitely without it).
 
 Send logical key presses (e.g. `ctrl+c`, `esc`, `Enter`) to a pane. By default
 targets the raw pane surface (`paneId`); set `agentScope` to target an agent
-by name/label. Use `herdr_run_command` / `herdr_send_prompt` to type TEXT —
+by name/label. Use `herdr_run_command` / `herdr_message_agent` to type TEXT —
 this only sends key NAMES. Labeled ⚠️ because `ctrl+c` interrupts a process.
 
 **Wraps:** `pane send-keys <paneId> <keys…>` or (with `agentScope`)
@@ -90,7 +90,7 @@ this only sends key NAMES. Labeled ⚠️ because `ctrl+c` interrupts a process.
 > **Multi-choice overlays:** typed text does NOT reach a pi ask-user option
 > list — bare `Enter` selects option 1 (preselected), `down`×n then `Enter`
 > selects option n+1. This is the documented way to answer a blocked agent's
-> option question (see [agent tools](orchestration.md#herdr_send_prompt)).
+> option question (see [message](message.md) for the freeform path).
 
 ---
 

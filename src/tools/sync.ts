@@ -9,8 +9,8 @@
 //
 // Each tool is a thin wrapper: build argv -> herdr() -> uniform ToolReturn,
 // mirroring orchestration.ts. `pane send-keys` / `agent send-keys` send
-// LOGICAL key names (ctrl+c, esc, Enter) — use `herdr_run_command` /
-// `herdr_send_prompt` to type text.
+// LOGICAL key names (ctrl+c, esc, Enter) — use `herdr_run_command` to type
+// text into a raw pane, and `herdr_message_agent` for agent panes.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -246,18 +246,19 @@ export function registerPaneSync(pi: ExtensionAPI): void {
 	// 4. send_keys (destructive) ---------------------------------------------
 	// `pane send-keys` / `agent send-keys` send LOGICAL key names only
 	// (ctrl+c, esc, Enter). To type text use herdr_run_command (raw pane) or
-	// herdr_send_prompt (agent). Labeled ⚠️ because ctrl+c interrupts a process.
+	// herdr_message_agent (agent). Labeled ⚠️ because ctrl+c interrupts a
+	// process.
 	pi.registerTool({
 		name: "herdr_send_keys",
 		label: "Send keys to herdr pane",
 		description:
 			"⚠️ Destructive. Send logical key presses (e.g. 'ctrl+c', 'esc', 'Enter') to a pane. " +
 			"By default targets the raw pane surface (paneId); set agentScope to target an agent by name/label. " +
-			"Use herdr_run_command / herdr_send_prompt to type TEXT — this only sends key NAMES.",
+			"Use herdr_run_command / herdr_message_agent to type TEXT — this only sends key NAMES.",
 		promptSnippet:
 			"Send logical key presses (ctrl+c/esc/Enter) to a pane (destructive)",
 		promptGuidelines: [
-			"Use herdr_send_keys to interrupt (ctrl+c) or dismiss (esc) a pane; it sends key NAMES only — use herdr_run_command for text.",
+			"Use herdr_send_keys to interrupt (ctrl+c) or dismiss (esc) a pane; it sends key NAMES only — use herdr_run_command / herdr_message_agent for text.",
 		],
 		parameters: Type.Object({
 			target: Type.String({

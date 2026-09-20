@@ -1,8 +1,9 @@
 // Orchestration tools — the model-facing keepers after the v0.6 surface cut
-// (wayfinder ticket 09): `herdr_send_prompt` (steering — absorbed by
-// herdr_message_agent in issue 05) and `herdr_list_agents` (the fleet's single
-// introspection tool). The result-retrieval pair (herdr_wait_agent /
-// herdr_read_agent) was retired here by herdr_get_agent_result (v0.6 issue 04:
+// (wayfinder ticket 09): `herdr_list_agents` (the fleet's single introspection
+// tool). The steering tool herdr_send_prompt was absorbed by
+// herdr_message_agent (v0.6 issue 05, src/tools/message.ts), which reuses
+// sendAgentPrompt; the result-retrieval pair (herdr_wait_agent /
+// herdr_read_agent) was retired by herdr_get_agent_result (v0.6 issue 04:
 // JSONL result + pane-tail fallback for panes we didn't spawn). Everything
 // else this module grew (start/get/stop/rename/focus/explain + the delegate
 // composite) is OFF the model surface — deleted registrations, kept machinery:
@@ -14,7 +15,6 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { herdr } from "../herdr.js";
 import { getAgentKinds } from "../config.js";
 import {
@@ -197,10 +197,11 @@ export async function startHerdrAgent(
 }
 
 /**
- * Type (and optionally submit) a prompt into an agent pane: `agent prompt`
- * (type + submit in one call), or pane-level `send-text` (type only).
+ * Inject text into an agent pane — the ONE send path (spawn prompts, message
+ * delivery; herdr_message_agent lands here). submit=true types + presses
+ * Enter (`agent prompt`); false types only (`pane send-text`).
  */
-async function sendAgentPrompt(
+export async function sendAgentPrompt(
 	paneId: string,
 	text: string,
 	opts: { submit?: boolean; signal?: AbortSignal } = {},
@@ -217,33 +218,6 @@ async function sendAgentPrompt(
 		signal: opts.signal,
 	});
 	return r.ok ? { ok: true, data: true } : r;
-}
-
-/** Resolve a flexible target (name/label/paneId) to a concrete pane id. */
-async function resolvePaneId(
-	target: string,
-	signal?: AbortSignal,
-): Promise<Result<string>> {
-	const r = await herdr<unknown>(["agent", "get", target], {
-		timeoutMs: 10_000,
-		signal,
-	});
-	if (!r.ok) return r as Result<string>;
-	const a =
-		(r.data as { agent?: Record<string, unknown> })?.agent ??
-		(r.data as Record<string, unknown>);
-	const pid = (a?.pane_id as string) ?? (a?.paneId as string);
-	if (!pid) {
-		return {
-			ok: false,
-			error: {
-				code: "NOT_FOUND",
-				message: `No pane found for target "${target}"`,
-				details: r.data,
-			},
-		};
-	}
-	return { ok: true, data: pid };
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -481,52 +455,21 @@ export async function submitAndWait(
 // ---- registration ----------------------------------------------------------
 
 export function registerOrchestration(pi: ExtensionAPI): void {
-	// 1. send_prompt ----------------------------------------------------------
-	pi.registerTool({
-		name: "herdr_send_prompt",
-		label: "Send prompt to herdr agent",
-		description:
-			"Send a prompt to an agent pane. With submit=true (default) the text is also submitted (Enter). " +
-			"Use to steer an agent you spawned with herdr_spawn_agent (e.g. answering its questions, follow-up work).",
-		promptSnippet: "Send/submit a prompt to a running herdr agent pane",
-		promptGuidelines: [
-			"Use herdr_send_prompt to send a prompt to an agent pane, then herdr_wait_agent + herdr_read_agent to get the reply.",
-			"Multi-choice overlays: typed text does NOT reach a pi ask-user option list — select with herdr_send_keys instead (bare 'Enter' picks option 1, 'down' then 'Enter' picks option 2). Typed text only lands in a focused freeform row.",
-		],
-		parameters: Type.Object({
-			target: Type.String({
-				description: "Pane id (w1:p3), agent name, or label.",
-			}),
-			text: Type.String({ description: "Prompt text to type." }),
-			submit: Type.Optional(
-				Type.Boolean({ description: "Press Enter to submit (default true)." }),
-			),
-		}),
-		async execute(_id, p, signal) {
-			const pid = await resolvePaneId(p.target, signal);
-			if (!pid.ok) return fail(pid);
-			const submitted = p.submit !== false;
-			const sendR = await sendAgentPrompt(pid.data, p.text, {
-				submit: submitted,
-				signal,
-			});
-			if (!sendR.ok) return fail(sendR);
-			return okText(
-				`Sent prompt to "${p.target}" (pane ${pid.data})${submitted ? " and submitted" : " (text only, not submitted)"}.`,
-				{ paneId: pid.data, submitted },
-			);
-		},
-	});
+// 2. read_agent — RETIRED (v0.6 issue 04): result reads moved to
+//    herdr_get_agent_result (session JSONL for spawned pi children,
+//    pane-tail fallback only for panes we didn't spawn). Raw pane reads
+//    remain on the pane-sync surface (herdr_read_pane).
 
-	// 2. read_agent — RETIRED (v0.6 issue 04): result reads moved to
-	//    herdr_get_agent_result (session JSONL for spawned pi children,
-	//    pane-tail fallback only for panes we didn't spawn). Raw pane reads
-	//    remain on the pane-sync surface (herdr_read_pane).
+// 3. wait_agent — RETIRED (v0.6 issue 04): waiting for a result moved to
+//    herdr_get_agent_result's `wait` (sidecar-aware, queue-aware).
 
-	// 3. wait_agent — RETIRED (v0.6 issue 04): waiting for a result moved to
-	//    herdr_get_agent_result's `wait` (sidecar-aware, queue-aware).
+// 4. send_prompt — ABSORBED (v0.6 issue 05): steering/answers moved to
+//    herdr_message_agent (src/tools/message.ts), the open channel with the
+//    envelope + resolution chain. sendAgentPrompt survives as the shared
+//    delivery path; resolvePaneId died with it (message resolves via its own
+//    `agent get`, which also carries the state the physics branch needs).
 
-	// 4. list_agents ----------------------------------------------------------
+// 5. list_agents ----------------------------------------------------------
 	pi.registerTool({
 		name: "herdr_list_agents",
 		label: "List herdr agents",

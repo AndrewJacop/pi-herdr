@@ -87,7 +87,7 @@ export async function waitStatus(paneId, statuses, timeoutMs) {
  * Submit a prompt pane-level: `send-text` + settled Enter — the same bytes
  * `agent prompt` delivers, one layer down. A test utility for driving a
  * spawned pane WITHOUT exercising the orchestration tools (e.g. testing
- * herdr_send_prompt against a known-good submission path).
+ * herdr_message_agent against a known-good submission path).
  */
 export async function panePrompt(paneId, text) {
 	const tx = await herdr(["pane", "send-text", paneId, text], {

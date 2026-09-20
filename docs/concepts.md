@@ -78,8 +78,13 @@ The commands the tools use (all current-surface, no legacy fallbacks):
   child's argv leads with the parent-owned session file (`--session <path>`
   under pi's default sessions dir) and the injected child extension
   (`-e <pkg>/src/child.ts`).
-- **`herdr_send_prompt`** — `agent prompt <target> <text>` (submit) or
-  `pane send-text <pane> <text>` (text only).
+- **`herdr_message_agent`** — delivery rides the same commands:
+  `agent prompt <target> <text>` (submit) or `pane send-text <pane> <text>`
+  (text only). A blocked target gets the raw text (the message IS the
+  answer); everything else is enveloped
+  `<agent-message from="…" to="…">…</agent-message>` (spawner-declared
+  identity, never verified; no child-side parsing — the receiving model
+  recognizes the tag).
 - **`herdr_get_agent_result`** — reads the child's session JSONL (the exact
   last assistant message) and `<session>.exit` (the typed completion sidecar)
   directly; `agent read` only as the pane-tail fallback for panes this session
@@ -113,9 +118,12 @@ A tool's `target` (or `paneId`) identifies a pane. For agent-surface tools,
 - an **agent name** — the handle `herdr_spawn_agent` returned (`name`);
 - a **label**.
 
-`herdr_send_prompt` resolves a flexible `target` to a concrete pane id with
-`agent get` before acting. `herdr_get_agent_result` resolves `target` against
-the spawn registry first (handle, then pane id) and only falls back to herdr's
+`herdr_message_agent` resolves a flexible `target` down the shared chain:
+exact pane-id → herdr name → spawn-registry handle → the reserved role
+`orchestrator` (via `PI_HERDR_ORCHESTRATOR_PANE`; real names win over the
+reserved role, and a session no agent spawned gets the honest "no orchestrator
+above you" error). `herdr_get_agent_result` resolves `target` against the
+spawn registry first (handle, then pane id) and only falls back to herdr's
 own resolution for panes this session did not spawn.
 
 **Names are lowercase `[a-z0-9-_]`.** herdr rejects uppercase characters in pane

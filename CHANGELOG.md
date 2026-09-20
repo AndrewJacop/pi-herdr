@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The open message channel: `herdr_message_agent` (v0.6 issue 05).** One
+  tool, anyone ↔ anyone, no broker: any session (orchestrator, child, or peer)
+  delivers text to any agent pane. The `target` is always explicit and
+  resolves down the shared chain — exact pane-id → herdr name →
+  spawn-registry handle → the reserved role `orchestrator` (via
+  `PI_HERDR_ORCHESTRATOR_PANE`, stamped when a pi-herdr agent spawned this
+  session; a session no agent spawned gets the honest "no orchestrator above
+  you, answer in-conversation" error) — real names winning over reserved.
+  Delivery is physics-adaptive: a **blocked** target gets the raw text typed
+  into its question overlay (the message IS the answer; option lists still
+  take `herdr_send_keys`), everything else is enveloped as
+  `<agent-message from="…" to="…">…</agent-message>` — identity is
+  spawner-declared (`PI_HERDR_AGENT_LABEL` → `PI_HERDR_NAME` → pane name →
+  pane id → `"session"`), never verified, and there is no child-side parsing:
+  the receiving *model* recognizes the tag. No state gates (text to a working
+  child queues natively); fire-and-forget — the receipt
+  `{delivered, target, to, from, state, delivery: "message"|"answer", name?,
+  submit}` reports which path ran, but delivered-to-the-pane ≠
+  consumed-by-the-model. A `gone` target errors naming the handle and
+  pointing at `herdr_list_agents`; a queued (not-yet-started) spawn has no
+  pane and errors the same way.
+
 - **The session substrate + `herdr_get_agent_result` (v0.6 issue 04).** Every
   spawned pi child now runs on a **parent-owned session file** in pi's default
   sessions dir (`~/.pi/agent/sessions/--<child-cwd>--/<timestamp>_<uuid>.jsonl`
@@ -41,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remains until `herdr_message_agent` absorbs it).
 
 ### Removed
+
+- **`herdr_send_prompt` (breaking, v0.6 issue 05).** Absorbed by
+  `herdr_message_agent` — same send machinery underneath (`agent prompt` /
+  `pane send-text`), plus the envelope, the full resolution chain, and the
+  reserved `orchestrator` role. `herdr_get_agent_result`'s blocked-answer
+  text now points there. Surface stays at 9 tools; the count converges to 12
+  as tickets 10/12 land.
 
 - **`herdr_wait_agent` and `herdr_read_agent` (breaking, v0.6 issue 04).**
   Replaced by `herdr_get_agent_result` — `wait: true` blocks until
