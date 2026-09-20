@@ -31,6 +31,8 @@ import { herdr } from "./herdr.js";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { seedSessionFile } from "./sessionfile.js";
 import {
 	type Err,
 	type HerdrErrorCode,
@@ -167,6 +169,25 @@ export function uniqueHandle(base: string, taken: ReadonlySet<string>): string {
 	let i = 2;
 	while (taken.has(handle)) handle = `${base}-${i++}`;
 	return handle;
+}
+
+// ---- stance (v0.6 issue 03 fields, issue 04 semantics) -----------------------
+
+/** Whether a child pane closes itself when its work settles. */
+export type Stance = "autonomous" | "interactive";
+
+/**
+ * Derive the stance from the definition's `auto_exit` / `interactive` fields:
+ * autonomous is the default (auto-exit on settle); `interactive: true` is the
+ * explicit override; `auto_exit: false` downgrades to interactive.
+ */
+export function deriveStance(def: {
+	auto_exit?: boolean;
+	interactive?: boolean;
+}): Stance {
+	if (def.interactive === true) return "interactive";
+	if (def.auto_exit === false) return "interactive";
+	return "autonomous";
 }
 
 // ---- multiline arg materialization --------------------------------------------
@@ -385,7 +406,9 @@ export function validateKindEnforcement(spec: SpawnSpec): Err | null {
  * Compile the merged spec into agent-CLI flags (appended after herdr's
  * `agent start --kind` / the preset argv). Only fields the capability table
  * marked enforceable reach here (validateKindEnforcement ran first), so the
- * switch below mirrors the table exactly.
+ * switch below mirrors the table exactly. The v0.6 substrate flags for pi
+ * children (parent-owned `--session` + injected `-e child.ts`) are composed
+ * onto this plan at start time — see startRecordNow.
  */
 export function buildAgentArgs(spec: SpawnSpec): string[] {
 	const args: string[] = [];
@@ -437,7 +460,12 @@ export function buildAgentArgs(spec: SpawnSpec): string[] {
 
 // ---- session spawn registry ----------------------------------------------------
 // name (pane handle) → live record. Consulted by the queue drain here, and by
-// later v0.5 tickets (notifications watcher, get_agent_result six-state).
+// the substrate consumers: get_agent_result (v0.6 issue 04), push delivery
+// (06), the status projection (07), resume (10), the workflow host (08).
+// v0.6 issue 04 grows it with the session substrate: sessionPath (the
+// parent-owned pi session file), activityPath (sidecar path, reserved for 07),
+// launchPlan (the exact composed agent argv handed to `agent start`), stance,
+// and the denied-tools list the child strip reports.
 
 export interface SpawnRecord {
 	/** Pane handle (unique-ified at accept). */
@@ -464,6 +492,16 @@ export interface SpawnRecord {
 	/** Set when a deferred (queued) start failed — status reads "gone". */
 	startError?: string;
 	worktreePath?: string;
+	/** Parent-owned pi session file (pi children only; seeded before launch). */
+	sessionPath?: string;
+	/** Activity sidecar path — reserved for the status projection (07). */
+	activityPath?: string;
+	/** The exact composed agent argv handed to `agent start --` (post-injection). */
+	launchPlan?: string[];
+	/** Whether the pane closes itself on settle. */
+	stance: Stance;
+	/** Denied tool names (pi children; stamped to the child for its strip). */
+	deniedTools?: string[];
 }
 
 const spawnRegistry = new Map<string, SpawnRecord>();
@@ -516,6 +554,10 @@ export interface SpawnDeps {
 	env?: Record<string, string | undefined>;
 	/** `.md` registry folders — default: `<cwd>/.pi/agents` + global agents dir. */
 	agentDirs?: AgentDirs;
+	/** Session-file seeding — default: seedSessionFile (pi-default sessions dir). */
+	seed?: (cwd: string) => { path: string; dir: string };
+	/** Injected child-extension path — default: src/child.ts beside this module. */
+	childExtension?: string;
 	/** Disable the background queue-drain timer (tests drive drains explicitly). */
 	autodrain?: boolean;
 	signal?: AbortSignal;
@@ -611,8 +653,46 @@ const SETTLE_MS = 1_500; // TUI input readiness (PRD §2.2)
 const SUBMIT_CHUNK_MS = 120_000; // per-attempt turn budget for wait:true
 
 /**
- * Start the pane for an accepted record: (worktree →) pane → boot gate →
- * prompt submission. Sets paneId/submitted/worktreePath on the record.
+ * Absolute path of the injected child extension (src/child.ts, beside this
+ * module) — resolvable from the child's pi process in dev trees and packaged
+ * installs alike, since the file ships inside the package.
+ */
+export function childExtensionPath(): string {
+	return fileURLToPath(new URL("./child.ts", import.meta.url));
+}
+
+/**
+ * Seed the parent-owned session substrate for a pi child (v0.6 issue 04):
+ * the session file in pi's DEFAULT sessions dir for the child's (final) cwd —
+ * the worktree path for isolated spawns, so isolated sessions file under
+ * their own cwd — plus the reserved activity-sidecar path beside it.
+ * Idempotent per record — the queue drain may start a record after prior
+ * attempts seeded it. Returns a clean error instead of throwing: a seeding
+ * failure (permissions, collision) must surface as a normal spawn error.
+ */
+function seedRecordSession(
+	record: SpawnRecord,
+	cwd: string,
+	deps: SpawnDeps,
+): Err | null {
+	if (record.kind.toLowerCase() !== "pi" || record.sessionPath) return null;
+	try {
+		const seeded = (deps.seed ?? seedSessionFile)(cwd);
+		record.sessionPath = seeded.path;
+		record.activityPath = `${seeded.path}.activity.json`;
+		return null;
+	} catch (e) {
+		return spawnErr(
+			"AGENT_START_FAILED",
+			`could not seed the child session file in pi's sessions dir: ${e instanceof Error ? e.message : String(e)}`,
+		);
+	}
+}
+
+/**
+ * Start the pane for an accepted record: (worktree →) session seed → pane →
+ * boot gate → prompt submission. Sets paneId/submitted/worktreePath and the
+ * session substrate (sessionPath/activityPath/launchPlan) on the record.
  */
 export async function startRecordNow(
 	record: SpawnRecord,
@@ -632,18 +712,46 @@ export async function startRecordNow(
 		cwd = wt.data;
 	}
 
-	// 2. pane (herdr's native kind axis; version-branched launcher)
+	// 2. session substrate (pi children): seed the parent-owned session file
+	//    under pi's default sessions dir for the FINAL cwd (the worktree for
+	//    isolated spawns), then compose the launch plan: the parent-owned
+	//    --session and the injected child extension -e, ahead of the spec's own
+	//    flags. Non-pi kinds keep their plain argv — no substrate for them.
+	if (record.kind.toLowerCase() === "pi") {
+		const seedErr = seedRecordSession(record, cwd ?? process.cwd(), deps);
+		if (seedErr) return seedErr;
+		record.launchPlan = [
+			"--session",
+			record.sessionPath!,
+			"-e",
+			deps.childExtension ?? childExtensionPath(),
+			...record.agentArgs,
+		];
+	} else {
+		record.launchPlan = [...record.agentArgs];
+	}
+
+	// 3. pane (herdr's native kind axis; version-branched launcher)
 	const childEnv: Record<string, string> = {
 		PI_HERDR_SPAWN_DEPTH: String(record.depth),
 	};
 	if (record.orchestratorPane) {
 		childEnv.PI_HERDR_ORCHESTRATOR_PANE = record.orchestratorPane;
 	}
+	if (record.sessionPath) {
+		childEnv.PI_HERDR_SESSION = record.sessionPath;
+		childEnv.PI_HERDR_NAME = record.name;
+		childEnv.PI_HERDR_AGENT = record.type ?? "";
+		childEnv.PI_HERDR_AUTO_EXIT = record.stance === "autonomous" ? "1" : "0";
+		childEnv.PI_HERDR_DENIED_TOOLS = (record.deniedTools ?? []).join(",");
+		if (record.activityPath)
+			childEnv.PI_HERDR_ACTIVITY_FILE = record.activityPath;
+	}
 	const start = deps.start ?? startHerdrAgent;
 	const startR = await start({
 		name: record.name,
 		agent: record.kind,
-		agentArgs: record.agentArgs,
+		agentArgs: record.launchPlan,
 		cwd,
 		env: childEnv,
 		signal,
@@ -808,6 +916,13 @@ export interface SpawnResultData {
 	queued?: boolean;
 	worktreePath?: string;
 	waited?: boolean;
+	/** Parent-owned pi session file (pi children; seeded before launch — an
+	 * isolated+queued spawn fills it when its worktree resolves at start). */
+	sessionPath?: string;
+	/** Activity sidecar path — reserved for the status projection (07). */
+	activityPath?: string;
+	/** Whether the pane closes itself on settle. */
+	stance: Stance;
 	/** Set when a queued record's deferred start failed (status reads "gone" —
 	 * the closest terminal in the six-state vocabulary; no pane ever existed). */
 	startError?: string;
@@ -914,6 +1029,8 @@ export async function spawnAgent(
 		spawnedAt: Date.now(),
 		submitted: false,
 		sawWorking: false,
+		stance: deriveStance(merged),
+		deniedTools: merged.exclude_tools,
 	};
 	spawnRegistry.set(handle, record);
 
@@ -932,6 +1049,9 @@ export async function spawnAgent(
 					type: record.type,
 					depth: record.depth,
 					queued: true,
+					stance: record.stance,
+					...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
+					...(record.activityPath ? { activityPath: record.activityPath } : {}),
 				},
 			};
 		}
@@ -946,8 +1066,11 @@ export async function spawnAgent(
 				type: record.type,
 				depth: record.depth,
 				queued: true,
+				stance: record.stance,
 				worktreePath: record.worktreePath,
 				waited: true,
+				...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
+				...(record.activityPath ? { activityPath: record.activityPath } : {}),
 				...(record.startError ? { startError: record.startError } : {}),
 			},
 		};
@@ -988,7 +1111,10 @@ export async function spawnAgent(
 				kind: merged.kind,
 				type: record.type,
 				depth: record.depth,
+				stance: record.stance,
 				worktreePath: record.worktreePath,
+				...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
+				...(record.activityPath ? { activityPath: record.activityPath } : {}),
 			},
 		};
 	}
@@ -1002,8 +1128,11 @@ export async function spawnAgent(
 			kind: merged.kind,
 			type: record.type,
 			depth: record.depth,
+			stance: record.stance,
 			worktreePath: record.worktreePath,
 			waited: true,
+			...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
+			...(record.activityPath ? { activityPath: record.activityPath } : {}),
 		},
 	};
 }

@@ -104,22 +104,20 @@ try {
 	);
 	check(!send.isError, `send_prompt ok`);
 
-	console.log("\n[win-start] 5. herdr_wait_agent (turn -> idle)");
-	const turn = await tool("herdr_wait_agent").execute(
-		"t",
-		{ target: paneId, status: "idle", timeoutMs: 120_000 },
-		NO_SIGNAL,
-	);
-	check(!turn.isError, `turn -> idle`);
-
-	console.log("\n[win-start] 6. herdr_read_agent (expect 'ping')");
-	await new Promise((r) => setTimeout(r, 1500)); // let the response render before reading
-	const read = await tool("herdr_read_agent").execute(
-		"t",
-		{ target: paneId, source: "recent", lines: 60 },
-		NO_SIGNAL,
-	);
-	const text = read.content?.[0]?.text ?? "";
+	console.log("\n[win-start] 5-6. herdr_get_agent_result (wait → exact reply)");
+	// v0.6 issue 04: wait_agent/read_agent retired — the result tool polls the
+	// pane (this pane was not spawned by the spawn engine, so it takes the
+	// pane-tail fallback) and returns the tail text each call.
+	let text = "";
+	for (let i = 0; i < 60 && !/ping/i.test(text); i++) {
+		await new Promise((r) => setTimeout(r, 2_000));
+		const read = await tool("herdr_get_agent_result").execute(
+			"t",
+			{ target: paneId },
+			NO_SIGNAL,
+		);
+		text = read.content?.[0]?.text ?? "";
+	}
 	console.log(
 		"    --- tail of response ---\n" +
 			text
@@ -129,7 +127,6 @@ try {
 				.map((l) => "    " + l)
 				.join("\n"),
 	);
-	check(!read.isError, `read_agent ok`);
 	check(/ping/i.test(text), `response contains 'ping'`);
 } finally {
 	if (paneId) {

@@ -1,15 +1,55 @@
 # Agent tools
 
 **The kept agent surface.** These target herdr's **agent surface**
-(`agent …`). Four tools after the v0.6 surface cut: the result trio
-(`herdr_send_prompt`, `herdr_wait_agent`, `herdr_read_agent` — retired by
-`herdr_get_agent_result` when the substrate lands) plus `herdr_list_agents`
-(the fleet's single introspection tool). The spawn entry point is
-[`herdr_spawn_agent`](../README.md#tools), documented in the project README.
+(`agent …`). Three tools after the v0.6 substrate (issue 04):
+`herdr_get_agent_result` (the result tool — exact session-file reads),
+`herdr_send_prompt` (steering; absorbed by `herdr_message_agent` in a later
+ticket), and `herdr_list_agents` (the fleet's single introspection tool). The
+spawn entry point is [`herdr_spawn_agent`](../README.md#tools), documented in
+the project README.
 
-> Count: **4 of the 9 registered tools.** Cross-cutting behavior (envelope,
+> Count: **3 of the 9 registered tools.** Cross-cutting behavior (envelope,
 > version floor, targeting, ⚠️ markers) lives in [concepts](../concepts.md).
 > Raw pane control is in [pane-sync](pane-sync.md).
+
+---
+
+### `herdr_get_agent_result`
+
+Pull an agent's result. For **pi children this session spawned**, the source is
+the child's parent-owned session file: the exact last assistant message object
+— no screen scraping, no tail heuristics, no truncation ambiguity. Mid-flight
+calls return an interim snapshot of the message-so-far. A failing child
+surfaces as a **typed error** (`stopReason` / `errorMessage`, mined from the
+child's completion sidecar or its session). Panes this session did not spawn
+(adopted) and non-pi kinds fall back to **pane-tail reading**.
+
+The completion sidecar (`<session>.exit`, written by the injected child
+extension) is checked BEFORE pane status: an auto-exited autonomous child is
+already gone from the fleet when its typed sidecar lands, and `gone` must not
+swallow a finished result. A `gone` answer carries last-known registry
+metadata; sessions are never deleted by pi-herdr, so the session file remains
+readable and resumable.
+
+**Reads:** the session JSONL directly; sidecar `<session>.exit`;
+`agent read` (fallback only).
+
+| Param | Type | Required | Notes |
+|-------|------|----------|-------|
+| `target` | string | yes | Spawn handle (the name `herdr_spawn_agent` returned) or pane id. |
+| `wait` | bool \| int | no | `true` = block until done/failed/blocked/gone (through the queue); a number = bounded wait, current state on expiry. |
+| `lines` | int | no | Pane-tail line budget for the unspawned fallback (default 80). |
+
+**Statuses (coarse until the 07 projection):** `queued` · `working` · `idle` ·
+`done` · `blocked` · `error` · `gone`. `details` carries the full envelope:
+`result` (exact text), `message` (the verbatim message object), `source`
+(`session-jsonl` / `pane-tail`), `sessionPath`, `exitPath`, `error`, and
+`lastKnown` for `gone`.
+
+> **Retry semantics:** a failed attempt on a live pane is not yet exhaustion —
+> the child's grace window lets pi's retry machine run. The tool keeps polling
+> (status `working`, typed payload attached) until a sidecar lands or the pane
+> exits; only then does it report the terminal `error`.
 
 ---
 
@@ -35,46 +75,6 @@ or answering its questions (freeform overlays only; see the note below).
 
 ---
 
-### `herdr_wait_agent`
-
-Block until an agent pane reaches a status (`idle`/`working`/`blocked`/`done`).
-Tolerates the brief `unknown` window right after spawn. Returns `TIMEOUT` on
-expiry.
-
-**Wraps:** `agent wait <target> --until <s>… --timeout <ms>` for
-working/blocked/unknown; for idle/done the engine races the transition waits
-against a polling `agent get` fallback (an already-settled pane has no
-transition to fire — the poll catches it).
-
-| Param | Type | Required | Notes |
-|-------|------|----------|-------|
-| `target` | string | yes | Pane id, agent name, or label. |
-| `status` | enum | yes | `idle` \| `working` \| `blocked` \| `done` \| `unknown`. |
-| `timeoutMs` | int | no | Max wait in ms (default 60000). |
-
----
-
-### `herdr_read_agent`
-
-Read recent/visible output text from an agent pane. Returns the text and
-whether it was truncated.
-
-**Wraps:** `agent read <target> --source <s> --lines <n> --format <f>`.
-
-| Param | Type | Required | Notes |
-|-------|------|----------|-------|
-| `target` | string | yes | Pane id, agent name, or label. |
-| `source` | enum | no | `recent` (default) \| `visible` \| `recent-unwrapped`. |
-| `lines` | int | no | Max lines to read (default 50). |
-| `format` | enum | no | `text` (default) \| `ansi`. |
-
-> **Alternate-screen scrollback limit:** alternate-screen TUIs (pi, claude, …)
-> keep long answers off the host scrollback. If `truncated: true` and raising
-> `lines` doesn't help, ask the agent to write its full response to a file and
-> reply with the path, then read the file.
-
----
-
 ### `herdr_list_agents`
 
 List every agent currently running in herdr with its status — the fleet's
@@ -91,11 +91,13 @@ plus the normalized list in `details.agents`.
 ## What was cut (v0.6)
 
 `herdr_start_agent`, `herdr_get_agent`, `herdr_stop_agent`,
-`herdr_rename_agent`, `herdr_focus_agent`, `herdr_explain_agent`, and the
-`herdr_delegate` composite are **off the model surface**. Their replacements:
+`herdr_rename_agent`, `herdr_focus_agent`, `herdr_explain_agent`, the
+`herdr_delegate` composite, and — with the substrate (issue 04) —
+`herdr_wait_agent` + `herdr_read_agent` are **off the model surface**. Their
+replacements:
 
 - `herdr_start_agent` / `herdr_delegate` → `herdr_spawn_agent`
-  (spawn + submit in one call) + `herdr_wait_agent` + `herdr_read_agent`.
+  (spawn + submit in one call) + `herdr_get_agent_result`.
 - `herdr_get_agent` / `herdr_explain_agent` → `herdr_list_agents`.
 - `herdr_stop_agent` → the confirmed **Kill all agents** action in
   `/subagents config` (or close the pane yourself in the herdr UI); for a

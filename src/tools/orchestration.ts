@@ -1,15 +1,16 @@
 // Orchestration tools — the model-facing keepers after the v0.6 surface cut
-// (wayfinder ticket 09): `herdr_send_prompt` / `herdr_wait_agent` /
-// `herdr_read_agent` (the legacy result trio — retired by get_agent_result in
-// a later ticket) and `herdr_list_agents` (the fleet's single introspection
-// tool). Everything else this module grew (start/get/stop/rename/focus/explain
-// + the delegate composite) is OFF the model surface — deleted registrations,
-// kept machinery: `startHerdrAgent` is the one launch path every spawn uses
-// (src/spawn.ts), `waitForStatus`/`submitAndWait` power the poll loop, and
-// `agent get`/`pane close` remain reachable internally (kill-all, pane
-// lifecycle). Code deletion ≠ capability deletion; the LLM just stops seeing
-// it. Each tool is a thin wrapper: build argv -> herdr() -> a uniform
-// ToolReturn.
+// (wayfinder ticket 09): `herdr_send_prompt` (steering — absorbed by
+// herdr_message_agent in issue 05) and `herdr_list_agents` (the fleet's single
+// introspection tool). The result-retrieval pair (herdr_wait_agent /
+// herdr_read_agent) was retired here by herdr_get_agent_result (v0.6 issue 04:
+// JSONL result + pane-tail fallback for panes we didn't spawn). Everything
+// else this module grew (start/get/stop/rename/focus/explain + the delegate
+// composite) is OFF the model surface — deleted registrations, kept machinery:
+// `startHerdrAgent` is the one launch path every spawn uses (src/spawn.ts),
+// `waitForStatus`/`submitAndWait` power the poll loop, and `agent
+// get`/`pane close` remain reachable internally (kill-all, pane lifecycle).
+// Code deletion ≠ capability deletion; the LLM just stops seeing it. Each
+// tool is a thin wrapper: build argv -> herdr() -> a uniform ToolReturn.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -17,7 +18,6 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { herdr } from "../herdr.js";
 import { getAgentKinds } from "../config.js";
 import {
-	extractText,
 	normalizeAgent,
 	type Err,
 	type HerdrErrorCode,
@@ -518,112 +518,13 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 		},
 	});
 
-	// 2. read_agent -----------------------------------------------------------
-	pi.registerTool({
-		name: "herdr_read_agent",
-		label: "Read herdr agent output",
-		description:
-			"Read recent/visible output text from an agent pane. Returns the text and whether it was truncated. " +
-			"Alternate-screen TUIs (pi, claude, …) keep long answers off the host scrollback: if truncated=true and raising 'lines' doesn't help, " +
-			"ask the agent to write its full response to a file and reply with the path, then read the file.",
-		promptSnippet: "Read an agent pane's output text",
-		promptGuidelines: [
-			"Use herdr_read_agent to fetch an agent's response after herdr_wait_agent reports idle.",
-		],
-		parameters: Type.Object({
-			target: Type.String({ description: "Pane id, agent name, or label." }),
-			source: Type.Optional(
-				StringEnum(["recent", "visible", "recent-unwrapped"] as const, {
-					description: "Output source (default 'recent').",
-				}),
-			),
-			lines: Type.Optional(
-				Type.Integer({ description: "Max lines to read (default 50)." }),
-			),
-			format: Type.Optional(
-				StringEnum(["text", "ansi"] as const, {
-					description: "Output format (default 'text').",
-				}),
-			),
-		}),
-		async execute(_id, p, signal) {
-			const source = p.source ?? "recent";
-			const lines = p.lines ?? 50;
-			const format = p.format ?? "text";
-			const r = await herdr<unknown>(
-				[
-					"agent",
-					"read",
-					p.target,
-					"--source",
-					source,
-					"--lines",
-					String(lines),
-					"--format",
-					format,
-				],
-				{ timeoutMs: 15_000, signal, textOk: true },
-			);
-			if (!r.ok) return fail(r);
-			const text = extractText(r.data);
-			const truncated = Boolean((r.data as { truncated?: boolean })?.truncated);
-			return okText(text || "(no output)", {
-				paneId: p.target,
-				text,
-				truncated,
-			});
-		},
-	});
+	// 2. read_agent — RETIRED (v0.6 issue 04): result reads moved to
+	//    herdr_get_agent_result (session JSONL for spawned pi children,
+	//    pane-tail fallback only for panes we didn't spawn). Raw pane reads
+	//    remain on the pane-sync surface (herdr_read_pane).
 
-	// 3. wait_agent -----------------------------------------------------------
-	pi.registerTool({
-		name: "herdr_wait_agent",
-		label: "Wait for herdr agent status",
-		description:
-			"Block until an agent pane reaches a given status (idle/working/blocked/done). " +
-			"Tolerates the brief 'unknown' window right after spawn. Returns TIMEOUT on expiry.",
-		promptSnippet: "Wait for an agent pane to reach idle/working/blocked",
-		promptGuidelines: [
-			"Use herdr_wait_agent to block until an agent finishes a turn (status idle), then read its output.",
-		],
-		parameters: Type.Object({
-			target: Type.String({ description: "Pane id, agent name, or label." }),
-			status: StringEnum(
-				["idle", "working", "blocked", "done", "unknown"] as const,
-				{
-					description: "Status to wait for.",
-				},
-			),
-			timeoutMs: Type.Optional(
-				Type.Integer({ description: "Max wait in ms (default 60000)." }),
-			),
-		}),
-		async execute(_id, p, signal) {
-			const timeoutMs = p.timeoutMs ?? 60_000;
-			const reached = (msg: string, agentStatus: string): ToolReturn =>
-				okText(msg, { paneId: p.target, agentStatus });
-			// idle/done: race the transition waits. Self-report yields `done`, auto-
-			// detect yields `idle`; we wait for whichever fires first.
-			if (p.status === "idle" || p.status === "done") {
-				const r = await raceIdleDone(p.target, Date.now() + timeoutMs, signal);
-				if (!r.ok) return fail(r);
-				return reached(
-					`Agent "${p.target}" reached status "${p.status}".`,
-					p.status,
-				);
-			}
-			// working/blocked/unknown: one `agent wait --until` call.
-			const r = await herdr<unknown>(
-				transitionWaitArgs(p.target, [p.status], timeoutMs),
-				{ timeoutMs: timeoutMs + 8_000, signal },
-			);
-			if (!r.ok) return fail(r);
-			return reached(
-				`Agent "${p.target}" reached status "${p.status}".`,
-				p.status,
-			);
-		},
-	});
+	// 3. wait_agent — RETIRED (v0.6 issue 04): waiting for a result moved to
+	//    herdr_get_agent_result's `wait` (sidecar-aware, queue-aware).
 
 	// 4. list_agents ----------------------------------------------------------
 	pi.registerTool({

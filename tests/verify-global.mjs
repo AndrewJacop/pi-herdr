@@ -8,7 +8,7 @@
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { piArgv } from "./_platform.mjs";
+import { startPlainPi } from "./_platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
@@ -51,15 +51,14 @@ const check = (c, m) => {
 	if (!c) process.exitCode = 1;
 };
 
-// 1. spawn a PLAIN pi (no -e) via Node so argv is passed literally (platform preset).
-const start = await herdr(
-	["agent", "start", "verify-global", "--no-focus", "--", ...piArgv()],
-	{
-		timeoutMs: 20_000,
-	},
+// 1. spawn a PLAIN pi (no -e) via the 0.9.0 launch path (pane split + agent
+//    start --kind) so argv is literal and the global install auto-loads.
+const started = await startPlainPi("verify-global");
+const pane = started.ok ? started.paneId : undefined;
+check(
+	!!pane,
+	`plain pi spawned (no -e): ${pane}${started.ok ? "" : ` — ${started.error?.message}`}`,
 );
-const pane = start.data?.agent?.pane_id;
-check(!!pane, `plain pi spawned (no -e): ${pane}`);
 if (!pane) process.exit(1);
 
 try {
@@ -75,18 +74,7 @@ try {
 	}
 	check(booted, "booted to idle/done");
 
-	// 2. Does the footer show "herdr:" => the global extension loaded?
-	const tail = await visibleTail(pane);
-	console.log(
-		"    footer tail:",
-		JSON.stringify(tail.replace(/\s+/g, " ").trim()),
-	);
-	check(
-		/herdr:/i.test(tail),
-		'pane footer shows "herdr:" => global extension auto-loaded',
-	);
-
-	// 3. Send a short task and confirm working -> done (not stuck).
+	// 2. Send a short task and confirm working -> done (not stuck).
 	await herdr(["agent", "prompt", pane, "Reply with one word: ready"], {
 		timeoutMs: 15_000,
 	});
@@ -105,6 +93,18 @@ try {
 	}
 	check(sawWorking, "self-reported WORKING during the turn");
 	check(settled, "self-reported DONE after the turn (NOT stuck on working)");
+
+	// 3. The footer's "herdr:" segment renders from the agent_start/turn_end
+	// hooks — only after a first turn, so this check runs post-turn.
+	const tail = await visibleTail(pane);
+	console.log(
+		"    footer tail:",
+		JSON.stringify(tail.replace(/\s+/g, " ").trim()),
+	);
+	check(
+		/herdr:/i.test(tail),
+		'pane footer shows "herdr:" => global extension auto-loaded',
+	);
 } finally {
 	await herdr(["pane", "close", pane], { timeoutMs: 10_000 });
 	console.log("cleanup done");

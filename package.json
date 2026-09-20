@@ -1,7 +1,7 @@
 {
   "name": "@andrewjacop/pi-herdr",
   "version": "0.5.0",
-  "description": "herdr integration for the pi coding agent — spawn, drive, wait for, and harvest AI agent panes running in herdr.",
+  "description": "herdr integration for the pi coding agent \u2014 spawn, drive, wait for, and harvest AI agent panes running in herdr.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -41,9 +41,9 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "test": "node tests/smoke.mjs && node tests/settings.mjs && node tests/spawn.mjs && node tests/agentfiles.mjs",
-    "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/pong.mjs && node tests/fallback.mjs && node tests/blocked.mjs && node tests/spawn-live.mjs && node tests/dev-load.mjs",
-  "test:win": "node tests/win-start.mjs",
+    "test": "node tests/smoke.mjs && node tests/substrate.mjs && node tests/settings.mjs && node tests/spawn.mjs && node tests/agentfiles.mjs",
+    "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/pong.mjs && node tests/blocked.mjs && node tests/spawn-live.mjs && node tests/dev-load.mjs",
+    "test:win": "node tests/win-start.mjs",
     "test:multi": "node tests/multi.mjs",
     "test:stress": "node tests/stress.mjs",
     "typecheck": "tsc --noEmit"

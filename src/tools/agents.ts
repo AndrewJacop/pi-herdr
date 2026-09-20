@@ -46,8 +46,13 @@ const DESCRIPTION =
 	"naming the field — use agent_args or another kind. `kind` (default: settings default_kind, " +
 	"'pi') is an unopinionated passthrough onto herdr's native `agent start --kind` axis: a non-pi " +
 	"child is text in a pane with a TUI-detected lifecycle, nothing else. " +
-	"`kind`/`model` override the definition's. Background by default; `wait: true` blocks until " +
-	"done-or-blocked, `wait: <ms>` returns the current state on expiry. At max_parallel_agents the " +
+	"`kind`/`model` override the definition's. Every pi child runs on a parent-owned session file in " +
+	"pi's default sessions dir (`--session`, seeded before launch), loads the injected child extension " +
+	"(`agent_done`, identity strip, typed completion sidecars), and is named `herdr/<name>` in /resume — " +
+	"the session file is the source of truth for its result; sessions are never deleted. Stance (v0.6): " +
+	"autonomous by default (auto-exit on settle; pane closes, session retained), `interactive: true` or " +
+	"`auto_exit: false` keeps the pane open. Background by default; `wait: true` blocks until " +
+	+"done-or-blocked, `wait: <ms>` returns the current state on expiry. At max_parallel_agents the " +
 	"spawn is accepted queued (no pane until a slot frees; wait waits through the queue). " +
 	"`isolated: true` runs the agent in a fresh auto-created herdr-side git worktree " +
 	"(worktree stays after the agent — remove it yourself with `herdr worktree remove` or git). " +
@@ -196,9 +201,14 @@ export function registerAgents(pi: ExtensionAPI): void {
 			const d = r.data;
 			const where = d.paneId ? `pane ${d.paneId}` : "no pane yet (queued)";
 			const type = d.type ? ` (type ${d.type})` : "";
+			const session = d.sessionPath ? ` Session file: ${d.sessionPath}.` : "";
+			const stance = ` Stance: ${d.stance}.`;
+			const worktree = d.worktreePath
+				? ` Isolated worktree: ${d.worktreePath}`
+				: "";
 			const text = d.queued
-				? `Spawn accepted as QUEUED: "${d.name}"${type} — fleet is at max_parallel_agents; the pane starts when a slot frees.`
-				: `Spawned ${d.kind} agent "${d.name}"${type} in ${where}; status: ${d.status}.${d.worktreePath ? ` Isolated worktree: ${d.worktreePath}` : ""}`;
+				? `Spawn accepted as QUEUED: "${d.name}"${type} — fleet is at max_parallel_agents; the pane starts when a slot frees.${stance}`
+				: `Spawned ${d.kind} agent "${d.name}"${type} in ${where}; status: ${d.status}.${stance}${session}${worktree}`;
 			return {
 				content: [{ type: "text", text }],
 				details: d,

@@ -55,17 +55,17 @@ await ext.default(mockPi);
 
 const names = tools.map((t) => t.name);
 const expected = [
-	// the v0.6 surface cut (issue 02): ONE surface — the keepers that exist
-	// today. Later tickets register theirs (04 → get_agent_result,
-	// 05 → message_agent, 10 → interrupt/resume, 12 → run_workflow) and the
-	// count converges to 12.
+	// the v0.6 surface (issue 02 cut + issue 04 substrate): ONE surface.
+	// Later tickets register theirs (05 → message_agent, 10 → interrupt/resume,
+	// 12 → run_workflow) and the count converges to 12.
 	"herdr_spawn_agent",
 	// the `.md` registry persistence tool (issue 03; ungated by decision)
 	"herdr_save_agent",
-	// the legacy result trio (retired by get_agent_result in ticket 04)
+	// the pull/inspection tool (issue 04) — retired wait_agent + read_agent of
+	// the legacy result trio; send_prompt follows when message_agent lands
+	"herdr_get_agent_result",
+	// steering (the last of the legacy trio; absorbed by message_agent in 05)
 	"herdr_send_prompt",
-	"herdr_wait_agent",
-	"herdr_read_agent",
 	// the fleet's single introspection tool
 	"herdr_list_agents",
 	// the pane-sync quartet

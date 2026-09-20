@@ -169,8 +169,7 @@ answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents 
 Hand a self-contained task to a fresh agent and collect the result.
 
 > 1. `Spawn an agent named "summ" with the task "Summarize README.md in 3 bullets" (herdr_spawn_agent).`
-> 2. `Wait for "summ" to finish (herdr_wait_agent, idle).`
-> 3. `Read "summ"'s output and give me the summary (herdr_read_agent).`
+> 2. `Pull the result (herdr_get_agent_result, wait: true) and give me the summary.`
 
 **What happens:** `herdr_spawn_agent` splits a pane, launches the agent, submits
 the task, and returns a handle. The pane stays alive afterwards — you can send
@@ -182,7 +181,7 @@ terminal status.
 
 Background spawns run concurrently, so you can fan work out:
 
-> *Prompt:* `In parallel, spawn three background agents — one to write tests for auth.ts, one for payment.ts, one for user.ts (herdr_spawn_agent ×3). Wait for all three (herdr_list_agents + herdr_wait_agent), then give me a combined summary and any failures.`
+> *Prompt:* `In parallel, spawn three background agents — one to write tests for auth.ts, one for payment.ts, one for user.ts (herdr_spawn_agent ×3). Pull all three results (herdr_get_agent_result, wait: true), then give me a combined summary and any failures.`
 
 **What happens:** Three panes spawn at once, each works its task concurrently.
 At `max_parallel_agents` the extra spawns are accepted **queued** — they start
@@ -202,8 +201,8 @@ While an agent works you can steer it, and if it asks a question you can answer:
 
 > *Prompt:* `Send "focus only on the auth module" to agent "tests" (herdr_send_prompt), then keep waiting.`
 
-If an agent blocks on an ask-user overlay, `herdr_wait_agent(target, blocked)`
-reports it; answer **freeform** questions with `herdr_send_prompt` and
+If an agent blocks on an ask-user overlay, `herdr_get_agent_result` reports it
+(`status: blocked`); answer **freeform** questions with `herdr_send_prompt` and
 **option-list** questions with `herdr_send_keys` (typed text never reaches an
 option list — bare `Enter` picks option 1, `down` then `Enter` picks option 2).
 
@@ -274,7 +273,7 @@ them into the child argv.
 
 | Tool | What it does |
 | --- | --- |
-| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. |
+| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status, sessionPath, stance}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. Every pi child runs on a parent-owned session file in pi's default sessions dir (`herdr/<name>` in `/resume`) with the injected child extension (`agent_done`, identity strip, typed completion sidecars); stance: autonomous (auto-exit on settle — pane closes, session retained) by default, `interactive: true` keeps the pane open. |
 | `herdr_save_agent` | Persist an inline `agent` definition or an existing registry `type` to a `.md` file in the project (`.pi/agents/`, default) or global registry — spawn it by `type` in any session afterwards. Ungated (delete the file to undo); refuses to overwrite an existing file unless `overwrite: true`. |
 
 An inline `agent` definition takes: `name`, `description`, `kind` (default: the
@@ -287,16 +286,16 @@ native `agent start --kind` axis), `model`, `thinking`, `system_prompt`,
 `spawning`, `cwd`. Honesty rule: a field the chosen kind cannot enforce refuses
 the spawn naming the field — use `agent_args` or another kind.
 
-### The result trio (the interim result path)
+### Results and steering
 
 | Tool | What it does |
 | --- | --- |
-| `herdr_send_prompt` | Send a prompt to an agent pane (submits with Enter by default) — steering, follow-ups, answers. |
-| `herdr_wait_agent` | Block until a pane reaches `idle`/`working`/`blocked`/`done`. |
-| `herdr_read_agent` | Read recent/visible output text from a pane. |
+| `herdr_get_agent_result` | **The result tool.** For spawned pi children it reads the EXACT final assistant message from the child's parent-owned session file (byte-identical, complete — no screen scraping); mid-flight calls return an interim snapshot. A failing child surfaces as a typed error (`stopReason`/`errorMessage` mined off the session). Panes this session didn't spawn (or non-pi kinds) fall back to pane-tail reading. A gone pane still answers with last-known metadata — its session file stays readable and resumable. `wait: true` blocks until done/failed/blocked/gone (through the queue). |
+| `herdr_send_prompt` | Send a prompt to an agent pane (submits with Enter by default) — steering, follow-ups, answers. (The last of the legacy result trio; absorbed by `herdr_message_agent` in a later ticket.) |
 
-> These three are the **legacy** result path — `herdr_get_agent_result` (v0.6
-> ticket 04) retires them with exact session-file reads and push delivery.
+> `herdr_wait_agent` / `herdr_read_agent` are **retired** (v0.6 issue 04):
+> `herdr_get_agent_result` replaces them with exact session-file reads.
+> Raw pane reads remain on the pane-sync quartet (`herdr_read_pane`).
 
 ### Fleet introspection
 
@@ -340,11 +339,10 @@ including spawned ones — so all pi agents report reliably.
 Completion is read from herdr's state events — never inferred from the
 rendered `Working…` spinner (tool-call output replaces that spinner mid-work, which
 would otherwise cause false "idle" reports). The spawn submits its task with one
-atomic `agent prompt <pane> <text> --wait` call, and `herdr_wait_agent`
-blocks on the repeatable `agent wait <target> --until <status>` (`idle` / `done` /
-`blocked` can be raced in a single call). Both also **race a polling `agent get`
-fallback** alongside the event wait: if the event never fires (e.g. a `done`/`idle`
-state herdr doesn't derive), the poll still detects the settled state promptly —
+atomic `agent prompt <pane> <text> --wait` call; its wait vocabulary races a
+polling `agent get` fallback alongside the event wait: if the event never fires
+(e.g. a `done`/`idle` state herdr doesn't derive), the poll still detects the
+settled state promptly —
 instead of hanging on the event or timing out the budget. For an agent that can't
 self-report (e.g. `claude`/`codex`), the poll catches the settled state too.
 
@@ -455,16 +453,19 @@ src/
   config.ts              # binary resolution + live agent-kind list (env + PATH)
   env.ts                 # shared types + unwrap/normalize/extractText helpers
   selfreport.ts          # push this pi's state to herdr (reliable completion)
-  spawn.ts               # the herdr_spawn_agent engine (gates, spec merge, queue, wait)
+  child.ts               # the injected child extension (agent_done, session naming, sidecars, auto-exit, identity strip)
+  sessionfile.ts         # parent-owned session files (pi-default dir, seeding, JSONL result extraction, .exit sidecars)
+  spawn.ts               # the herdr_spawn_agent engine (gates, spec merge, queue, wait, launch plan, stance)
   agentdefs.ts           # agent-definition registry (built-in + session + .md file layers)
   settings.ts            # effective-settings resolution (global + project JSON, models.* routing keys)
   menu.ts                # the /subagents config menu + Kill-all-agents action
   tools/agents.ts        # herdr_spawn_agent registration (the spawn entry point)
-  tools/orchestration.ts # result trio + list_agents; the launch/wait machinery every spawn uses
+  tools/result.ts        # herdr_get_agent_result (exact JSONL result; pane-tail fallback for unspawned panes)
+  tools/orchestration.ts # send_prompt + list_agents; the launch/wait machinery every spawn uses
   tools/sync.ts          # pane-sync quartet (run/read/wait_output/send_keys)
   tools/worktrees.ts     # worktree machinery (powers isolated; no model-facing tools)
 tests/
-  smoke.mjs, settings.mjs, spawn.mjs   # offline suites (npm test)
+  smoke.mjs, substrate.mjs, settings.mjs, spawn.mjs   # offline suites (npm test)
   live.mjs, pong.mjs, selfreport.mjs, blocked.mjs, spawn-live.mjs, dev-load.mjs, …
 ```
 
@@ -491,13 +492,14 @@ pi-herdr keeps the thin slices it needs internally:
 
 ## Limitations / roadmap
 
-- **v0.6 in flight** (the subagent experience layer): session-file substrate +
-  `get_agent_result` (exact results, no tail heuristics), push delivery with
-  user-takeover and idle re-arm, a 10-state projected lifecycle with watchdog,
-  fork/lineage/standalone session modes, model/thinking routing
-  (`models.default` / `models.agents.<name>`), interrupt + resume, a fleet
-  widget, and scripted workflows (`run_workflow`). See
-  [wayfinder/map.md](wayfinder/map.md).
+- **v0.6 in flight** (the subagent experience layer): the session substrate
+  (parent-owned session files + injected child extension) and
+  `herdr_get_agent_result` landed; still coming: push delivery with
+  user-takeover and idle re-arm, a 10-state projected lifecycle with watchdog
+  and activity sidecars, fork/lineage/standalone session modes,
+  model/thinking routing (`models.default` / `models.agents.<name>`),
+  interrupt + resume, a fleet widget, and scripted workflows
+  (`run_workflow`). See [wayfinder/map.md](wayfinder/map.md).
 - **Tested on Windows and macOS** (see [Platform support](#platform-support)).
 - Self-report is pi-only; heterogeneous (claude/codex) completion relies on herdr's
   auto-detect (also caught by the `agent get` polling fallback).

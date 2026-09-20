@@ -74,12 +74,17 @@ The commands the tools use (all current-surface, no legacy fallbacks):
   [-- <argv>]` (the pane must already exist). `agent_pane_busy` races the
   freshly-split shell's prompt, so the start retries briefly; the turn itself
   is submitted with one atomic `agent prompt <pane> <text> --wait --timeout
-  <ms>` (`agent_prompt_stalled` falls back to the wait/poll dance).
+  <ms>` (`agent_prompt_stalled` falls back to the wait/poll dance). Every pi
+  child's argv leads with the parent-owned session file (`--session <path>`
+  under pi's default sessions dir) and the injected child extension
+  (`-e <pkg>/src/child.ts`).
 - **`herdr_send_prompt`** — `agent prompt <target> <text>` (submit) or
   `pane send-text <pane> <text>` (text only).
-- **`herdr_wait_agent`** — `agent wait <target> --until <s> [--until <s>…] --timeout <ms>`
-  (`--until` is repeatable, so one call can race `idle`+`done`); `idle`/`done`
-  always race a polling `agent get` fallback too.
+- **`herdr_get_agent_result`** — reads the child's session JSONL (the exact
+  last assistant message) and `<session>.exit` (the typed completion sidecar)
+  directly; `agent read` only as the pane-tail fallback for panes this session
+  did not spawn. `wait` races nothing: it polls sidecar → pane status until a
+  terminal state.
 
 ## Pane surface vs agent surface
 
@@ -109,8 +114,9 @@ A tool's `target` (or `paneId`) identifies a pane. For agent-surface tools,
 - a **label**.
 
 `herdr_send_prompt` resolves a flexible `target` to a concrete pane id with
-`agent get` before acting. Read-only tools (`herdr_read_agent`,
-`herdr_wait_agent`) pass `target` straight to herdr, which resolves it itself.
+`agent get` before acting. `herdr_get_agent_result` resolves `target` against
+the spawn registry first (handle, then pane id) and only falls back to herdr's
+own resolution for panes this session did not spawn.
 
 **Names are lowercase `[a-z0-9-_]`.** herdr rejects uppercase characters in pane
 names, so always name agents in lowercase. A name `herdr_spawn_agent` returns
@@ -135,8 +141,8 @@ each tool sets its own — e.g. reads 15 s, snapshot 15 s, worktree create 60 s)
 honors an `AbortSignal` (the pi tool `signal`). On timeout or abort the child process
 is killed and the call resolves `{ ok:false, error:{ code:"TIMEOUT", … } }` rather
 than hanging — "Timeouts everywhere" per [`CONTRIBUTING.md`](../CONTRIBUTING.md).
-Several tools also expose their own `timeoutMs` parameter (`herdr_wait_agent`,
-`herdr_wait_output`).
+Several tools also expose their own timeout parameter (`herdr_get_agent_result`'s
+`wait` ms form, `herdr_wait_output`'s `timeoutMs`).
 
 ## Agent kinds
 

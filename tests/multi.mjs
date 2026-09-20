@@ -37,8 +37,11 @@ if (!spawn) {
 }
 
 // Spawned pis load this extension so they self-report (reliable completion).
+// `-ne` is REQUIRED here (CONTRIBUTING dev-load rule): without it the child
+// also discovers the globally-installed @andrewjacop/pi-herdr package and the
+// two copies collide on every herdr_* tool name — pi aborts the child.
 const EXT = join(ROOT, "src", "index.ts");
-const AGENT_ARGS = ["-e", EXT]; // load this extension so spawned pis self-report
+const AGENT_ARGS = ["-ne", "-e", EXT];
 const TIMEOUT = 300_000; // 5 min per agent
 
 const tmp = mkdtempSync(join(tmpdir(), "pi-herdr-multi-"));

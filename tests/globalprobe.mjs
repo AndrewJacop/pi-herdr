@@ -7,7 +7,7 @@
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { piArgv } from "./_platform.mjs";
+import { startPlainPi } from "./_platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
@@ -51,13 +51,16 @@ const check = (c, m) => {
 	console.log((c ? "  ✓ " : "  ✗ ") + m);
 };
 
-// PLAIN pi — NO -e. Relies entirely on the global install.
-const start = await herdr(
-	["agent", "start", "global-probe", "--no-focus", "--", ...piArgv()],
-	{ timeoutMs: 20_000 },
+// PLAIN pi — NO -e. Relies entirely on the global install (0.9.0 launch path).
+const start = await startPlainPi("global-probe");
+const pane = start.ok ? start.paneId : undefined;
+console.log(
+	"spawned plain pi:",
+	pane,
+	"ok:",
+	start.ok,
+	start.ok ? "" : start.error?.message,
 );
-const pane = start.data?.agent?.pane_id;
-console.log("spawned plain pi:", pane, "ok:", start.ok);
 if (!pane) process.exit(1);
 
 try {
@@ -71,14 +74,6 @@ try {
 		await new Promise((r) => setTimeout(r, 2_000));
 	}
 	check(booted, "booted to idle");
-
-	// (a) Did it load pi-herdr globally? Footer should show "herdr:".
-	const footer = await visibleTail(pane, 8);
-	const loaded = /herdr:/i.test(footer);
-	check(
-		loaded,
-		`global pi-herdr loaded (footer shows herdr:)\n      footer: ${footer.replace(/\n/g, " | ").slice(-160)}`,
-	);
 
 	console.log("--- send prompt ---");
 	await herdr(["agent", "prompt", pane, "Reply with exactly one word: pong"], {
@@ -101,6 +96,15 @@ try {
 	}
 	check(sawWorking, "reported WORKING during the turn");
 	check(reachedDone, "reported DONE after the turn (NOT stuck on working)");
+
+	// (a) Did it load pi-herdr globally? The footer's "herdr:" segment renders
+	// from the agent_start/turn_end hooks — i.e. only after a first turn, so
+	// this check runs post-turn, not at boot.
+	const footer = await visibleTail(pane, 8);
+	check(
+		/herdr:/i.test(footer),
+		`global pi-herdr loaded (footer shows herdr:)\n      footer: ${footer.replace(/\n/g, " | ").slice(-160)}`,
+	);
 } finally {
 	await herdr(["pane", "close", pane], { timeoutMs: 10_000 });
 }

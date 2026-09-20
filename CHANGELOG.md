@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The session substrate + `herdr_get_agent_result` (v0.6 issue 04).** Every
+  spawned pi child now runs on a **parent-owned session file** in pi's default
+  sessions dir (`~/.pi/agent/sessions/--<child-cwd>--/<timestamp>_<uuid>.jsonl`
+  — seeded by the parent before launch, no `--session-dir`), so any spawned
+  session is resumable and perusable from plain pi (`/resume`,
+  `pi --session <path>`); the injected child extension names it
+  `herdr/<spawn-name>` at boot so fleet sessions never masquerade as the
+  user's own. The extension (loaded via `-e`, beside this package) provides:
+  the `agent_done` completion declaration (writes the sidecar, exits), typed
+  completion sidecars `<session>.exit` (`{type:"done"}` / `{type:"error",
+  errorMessage, stopReason}` — provider-overload retry-exhaustion reaches the
+  parent as a typed failure), auto-exit on `agent_settled` for
+  **autonomous-stance** children (interactive ones never auto-close; an error
+  settle waits a quiet 30 s grace window first so pi's retry machine isn't
+  killed mid-backoff), and the identity/tools strip
+  (`[scout] — 12 tools · 4 denied (Ctrl+H)`) above the child's editor. The
+  spawn registry grows `sessionPath`, `activityPath` (reserved for the status
+  projection), `launchPlan` (the exact composed argv), `stance`, and
+  `deniedTools`; spawn responses report `sessionPath` + `stance`.
+  **`herdr_get_agent_result`** is the new pull/inspection tool: it reads the
+  EXACT last assistant message from the session JSONL (byte-identical, no tail
+  heuristics), checks the sidecar before pane status (an auto-exited child is
+  fleet-`gone` but `done`/`error` here), returns interim snapshots while the
+  child works, and treats a failed attempt on a live pane as non-terminal
+  (the child may still retry). Pane-tail reading survives only as the
+  fallback for panes pi-herdr did not spawn and non-pi kinds; `gone` answers
+  carry last-known registry metadata, and sessions are never deleted —
+  closing a pane loses nothing. Surface: 10 → 9 tools (the legacy trio's
+  `herdr_wait_agent` / `herdr_read_agent` are retired; `herdr_send_prompt`
+  remains until `herdr_message_agent` absorbs it).
+
+### Removed
+
+- **`herdr_wait_agent` and `herdr_read_agent` (breaking, v0.6 issue 04).**
+  Replaced by `herdr_get_agent_result` — `wait: true` blocks until
+  done/failed/blocked/gone, and the result is the exact final assistant
+  message rather than a screen scrape. Raw pane reads remain on
+  `herdr_read_pane` (pane-sync quartet).
+
 - **The `.md` agent registry + `herdr_save_agent` (v0.6 issue 03).** Agent
   definitions now load from YAML-frontmatter `.md` files: `.pi/agents/`
   (project) > `~/.pi/agent/agents/` (global) > bundled — first-hit-wins per

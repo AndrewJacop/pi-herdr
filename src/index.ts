@@ -1,18 +1,20 @@
 // pi-herdr extension entry point.
 // Registers the herdr tool surface and surfaces fleet status in the pi footer.
 //
-// The v0.6 surface cut (wayfinder ticket 09): ONE surface, ten tools today —
-// herdr_spawn_agent, herdr_save_agent (the `.md` registry, v0.6 issue 03),
-// the legacy result trio (send_prompt / wait_agent /
-// read_agent, retired by get_agent_result in a later ticket), list_agents,
-// and the pane-sync quartet — converging to twelve as later tickets register
-// theirs. Layout, tab/workspace, worktree, and introspection tools are OFF
-// the model surface; their machinery survives internally (spawn's isolated
-// worktrees, the poll loop, kill-all's pane closes). The /subagents command
-// is the only command.
+// The v0.6 surface (issue 02 cut + issue 04 substrate): ONE surface, ten tools —
+// herdr_spawn_agent, herdr_save_agent (the `.md` registry), herdr_get_agent_result
+// (the pull/inspection tool: exact JSONL result for spawned pi children,
+// pane-tail fallback for panes we didn't spawn; retired the wait/read pair of
+// the legacy result trio — send_prompt follows when message_agent lands in
+// issue 05), herdr_list_agents, and the pane-sync quartet — converging to
+// twelve as later tickets register theirs. Layout, tab/workspace, worktree,
+// and introspection tools are OFF the model surface; their machinery survives
+// internally (spawn's isolated worktrees, the poll loop, kill-all's pane
+// closes). The /subagents command is the only command.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerOrchestration } from "./tools/orchestration.js";
+import { registerResultTool } from "./tools/result.js";
 import { registerAgents } from "./tools/agents.js";
 import { registerPaneSync } from "./tools/sync.js";
 import { registerSelfReport } from "./selfreport.js";
@@ -26,6 +28,7 @@ export default function (pi: ExtensionAPI): void {
 	registerSelfReport(pi);
 
 	registerOrchestration(pi);
+	registerResultTool(pi);
 	registerAgents(pi);
 	registerPaneSync(pi);
 

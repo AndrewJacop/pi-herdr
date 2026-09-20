@@ -492,6 +492,15 @@ function makeDeps(opts = {}) {
 				calls.worktree.push(cwd);
 				return { ok: true, data: "D:/wt/auto-branch" };
 			},
+			seed: (cwd) => {
+				calls.seed = calls.seed ?? [];
+				calls.seed.push(cwd);
+				return {
+					path: `D:/tmp/sessions/${calls.seed.length}.jsonl`,
+					dir: "D:/tmp/sessions",
+				};
+			},
+			childExtension: "D:/ext/child.ts",
 			env: opts.env ?? {},
 			autodrain: false,
 		},
@@ -520,8 +529,10 @@ console.log("\n[9] Engine — background spawn end to end, child env stamped");
 		"child env: orchestrator pane from HERDR_PANE_ID",
 	);
 	assert(
-		start.agentArgs[0] === "--system-prompt",
-		"Explore's read-only prompt passed to the child CLI",
+		start.agentArgs[0] === "--session" &&
+			start.agentArgs[2] === "-e" &&
+			start.agentArgs.includes("--system-prompt"),
+		"launch plan leads with the parent-owned --session + injected child extension; Explore's prompt follows",
 	);
 	assert(
 		h.calls.submit[0].text === "find the entry point",

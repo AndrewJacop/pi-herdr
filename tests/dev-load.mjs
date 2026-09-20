@@ -29,10 +29,15 @@ const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
 // Forward slashes — `pane run` types the line into a shell; backslashes escape
 // badly in the typed command line.
 const LOCAL_SRC = join(ROOT, "src/index.ts").replace(/\\/g, "/");
-const ASK_USER = join(
-	homedir(),
-	".pi/agent/npm/node_modules/pi-ask-user/index.ts",
-).replace(/\\/g, "/");
+// the installed package is the scoped @juicesharp/rpiv-ask-user-question (the
+// old unscoped pi-ask-user folder name predates the rename — accept either)
+const AGENT_NPM = join(homedir(), ".pi/agent/npm/node_modules");
+const ASK_USER = [
+	join(AGENT_NPM, "@juicesharp/rpiv-ask-user-question/index.ts"),
+	join(AGENT_NPM, "pi-ask-user/index.ts"),
+]
+	.map((p) => p.replace(/\\/g, "/"))
+	.find(existsSync);
 
 let pass = 0;
 let fail = 0;
@@ -58,6 +63,10 @@ async function getStatus(target) {
 
 try {
 	console.log("=== dev-load: pi -ne -e <local pi-herdr> -e <pi-ask-user> ===");
+if (!ASK_USER) {
+	console.log("  ✗ pi-ask-user is not installed under the agent npm dir");
+	process.exit(1);
+}
 	console.log("    local:", LOCAL_SRC);
 	console.log("    ask-user:", ASK_USER);
 	check(existsSync(LOCAL_SRC), "local src/index.ts exists");
@@ -126,7 +135,10 @@ try {
 		"no 'Failed to load extension' errors",
 	);
 	check(!/conflicts with/i.test(text), "no tool-name conflicts");
-	check(/pi-ask-user/i.test(text), "[Extensions] lists pi-ask-user");
+	check(
+		/(pi-ask-user|rpiv-ask-user-question)/i.test(text),
+		"[Extensions] lists pi-ask-user",
+	);
 	check(
 		/(^|\s)src(\s|$)/i.test(text),
 		"[Extensions] lists the local pi-herdr (as 'src')",

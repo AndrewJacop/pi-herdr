@@ -5,7 +5,7 @@
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { piArgv } from "./_platform.mjs";
+import { startPlainPi } from "./_platform.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
@@ -22,14 +22,16 @@ const statusOf = async (pane) => {
 	return a?.agent_status ?? "?";
 };
 
-const start = await herdr(
-	["agent", "start", "bootdiag", "--no-focus", "--", ...piArgv()],
-	{
-		timeoutMs: 20_000,
-	},
+const start = await startPlainPi("bootdiag");
+const pane = start.ok ? start.paneId : undefined;
+console.log(
+	"pane=",
+	pane,
+	"start ok=",
+	start.ok,
+	start.ok ? "" : start.error?.message,
 );
-const pane = start.data?.agent?.pane_id;
-console.log("pane=", pane, "start ok=", start.ok);
+if (!pane) process.exit(1);
 
 const t0 = Date.now();
 console.log("--- boot poll (agent get, current status) ---");
