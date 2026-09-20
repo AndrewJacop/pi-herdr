@@ -1,7 +1,7 @@
 // pi-herdr extension entry point.
 // Registers the herdr tool surface and surfaces fleet status in the pi footer.
 //
-// The v0.6 surface (issue 02 cut + issue 04 substrate): ONE surface, ten tools —
+// The v0.6 surface (issue 02 cut + issue 04 substrate): ONE surface, nine tools —
 // herdr_spawn_agent, herdr_save_agent (the `.md` registry), herdr_get_agent_result
 // (the pull/inspection tool: exact JSONL result for spawned pi children,
 // pane-tail fallback for panes we didn't spawn; retired the wait/read pair of

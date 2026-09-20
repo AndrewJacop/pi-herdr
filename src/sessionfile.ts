@@ -23,10 +23,12 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 // ---- the pi-default sessions dir -------------------------------------------
 // Mirrors pi's SessionManager.getDefaultSessionDirPath encoding exactly
-// (dist/core/session-manager.js): `--<resolvedCwd with /,\,: → ->>--` under
-// `<agentDir>/sessions/`. Keeping the encoding here (instead of importing
-// pi's internal) is deliberate: the two MUST agree, and the offline tests pin
-// ours against observed pi output.
+// (dist/core/session-manager.js): take the resolved cwd, strip one leading
+// slash/backslash, replace every /, backslash and : with '-', and wrap in
+// double dashes — e.g. C:\Users\me becomes --C--Users-me-- under
+// <agentDir>/sessions/. Keeping the encoding here (instead of importing pi's
+// internal) is deliberate: the two MUST agree, and the offline tests pin ours
+// against observed pi output.
 
 /** The encoded directory name pi uses for a cwd (`--C--Users-me--` style). */
 export function sessionsDirName(cwd: string): string {
@@ -171,6 +173,9 @@ export function extractLastAssistant(
 	return null;
 }
 
+// ponytail: extractSessionResult re-reads and re-parses the whole JSONL on
+// every poll tick per child — fine at the fleet sizes this tool targets; the
+// 07 poll loop should cache by (path, size, mtime) if that ever shows up.
 /** Read a session file from disk and extract the last assistant message. */
 export function extractSessionResult(
 	sessionPath: string,

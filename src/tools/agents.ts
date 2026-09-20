@@ -52,7 +52,7 @@ const DESCRIPTION =
 	"the session file is the source of truth for its result; sessions are never deleted. Stance (v0.6): " +
 	"autonomous by default (auto-exit on settle; pane closes, session retained), `interactive: true` or " +
 	"`auto_exit: false` keeps the pane open. Background by default; `wait: true` blocks until " +
-	+"done-or-blocked, `wait: <ms>` returns the current state on expiry. At max_parallel_agents the " +
+	"done-or-blocked, `wait: <ms>` returns the current state on expiry. At max_parallel_agents the " +
 	"spawn is accepted queued (no pane until a slot frees; wait waits through the queue). " +
 	"`isolated: true` runs the agent in a fresh auto-created herdr-side git worktree " +
 	"(worktree stays after the agent — remove it yourself with `herdr worktree remove` or git). " +

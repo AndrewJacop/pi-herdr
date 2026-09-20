@@ -148,7 +148,7 @@ export function identityStripLines(opts: {
  * must hear the typed failure.
  *
  * Default 30s; PI_HERDR_ERROR_EXIT_GRACE_MS overrides (tests, long-backoff
- * fleets). Read at registration time so late env stamps still apply.
+ * fleets). Read per settle, so a late env change still applies.
  */
 export function errorExitGraceMs(): number {
 	const raw = Number(process.env.PI_HERDR_ERROR_EXIT_GRACE_MS);

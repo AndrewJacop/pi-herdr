@@ -807,6 +807,18 @@ console.log("\n[9] get_agent_result — engine paths");
 		"dead pane + mined failure → typed error carrying last-known metadata",
 	);
 
+	// an INTERACTIVE child's settled error is final (no grace, no sidecar)
+	record.stance = "interactive";
+	deps.status = async () => ({ ok: true, data: "idle" });
+	const v7c = await resultMod.getAgentResult({ target: "scout" }, deps);
+	assert(
+		v7c.ok &&
+			v7c.data.status === "error" &&
+			v7c.data.error.errorMessage === "429 exhausted",
+		"interactive child + settled error → terminal error (never keeps polling)",
+	);
+	record.stance = "autonomous";
+
 	// pane-tail fallback for panes we didn't spawn; NOT used for spawned pi children
 	let tailCalls = 0;
 	const adopted = {
@@ -834,6 +846,34 @@ console.log("\n[9] get_agent_result — engine paths");
 	assert(
 		v9.ok && v9.data.source === "session-jsonl",
 		"spawned pi child: JSONL, never pane-tail",
+	);
+
+	// a spawned NON-pi kind has no session substrate: the settled result comes
+	// from the pane-tail fallback (with the caller's lines budget)
+	const claude = {
+		...record,
+		name: "cc",
+		kind: "claude",
+		sessionPath: undefined,
+	};
+	const regCc = new Map([["cc", claude]]);
+	let ccLines = 0;
+	const ccDeps = {
+		registry: () => regCc,
+		status: async () => ({ ok: true, data: "idle" }),
+		readTail: async (t, n) => {
+			ccLines = n;
+			return { ok: true, data: { text: "CLAUDE VERDICT", truncated: false } };
+		},
+	};
+	const v11 = await resultMod.getAgentResult({ target: "cc", lines: 42 }, ccDeps);
+	assert(
+		v11.ok &&
+			v11.data.status === "working" &&
+			v11.data.source === "pane-tail" &&
+			v11.data.result === "CLAUDE VERDICT" &&
+			ccLines === 42,
+		"spawned non-pi child: settled result read via the pane-tail fallback with the lines budget",
 	);
 
 	// wait loop: bounded expiry + terminal stop

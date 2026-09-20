@@ -166,7 +166,7 @@ try {
 			? ((g.data?.agent ?? g.data)?.agent_status ?? "live")
 			: "gone (auto-exited — session retained)";
 		check(
-			g.ok || !v.paneId || v.status === "gone" || v.status === "done",
+			g.ok || v.status === "gone" || v.status === "done",
 			`pane state after settle: ${status}`,
 		);
 	}

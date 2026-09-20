@@ -172,10 +172,11 @@ Hand a self-contained task to a fresh agent and collect the result.
 > 2. `Pull the result (herdr_get_agent_result, wait: true) and give me the summary.`
 
 **What happens:** `herdr_spawn_agent` splits a pane, launches the agent, submits
-the task, and returns a handle. The pane stays alive afterwards — you can send
-follow-ups or just look at it in herdr. Passing `wait: 180000` (ms) folds steps
-2–3 timing into the spawn call: it blocks until done-or-blocked and reports the
-terminal status.
+the task, and returns a handle. Pi children run **autonomous** by default: when
+the work settles they write their typed completion sidecar, close their pane,
+and the result lives on in the retained session file — pass `interactive: true`
+to keep the pane open for follow-ups instead. Passing `wait: 180000` (ms) folds
+the timing into the spawn call: it blocks until the terminal status.
 
 ### Example 2 — Parallel fan-out (do N things at once)
 
@@ -197,7 +198,8 @@ Because each agent is a real CLI in its own pane, you can mix models/vendors fre
 
 ### Example 4 — Steering and questions (stay in control)
 
-While an agent works you can steer it, and if it asks a question you can answer:
+While an **interactive** agent (`interactive: true` — the pane stays open) is at
+work you can steer it, and if it asks a question you can answer:
 
 > *Prompt:* `Send "focus only on the auth module" to agent "tests" (herdr_send_prompt), then keep waiting.`
 

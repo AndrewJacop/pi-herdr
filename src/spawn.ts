@@ -1079,6 +1079,9 @@ export async function spawnAgent(
 	// 8b. start now
 	const startR = await startRecordNow(record, deps);
 	if (!startR.ok) {
+		// Mark the record so get_agent_result answers "gone" (with the reason)
+		// instead of a phantom forever-"queued" — wait: true must terminate.
+		record.startError = startR.error.message;
 		return {
 			ok: false,
 			error: {

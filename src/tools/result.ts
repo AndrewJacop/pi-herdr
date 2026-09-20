@@ -172,6 +172,7 @@ async function inspectRecord(
 	target: string,
 	record: SpawnRecord,
 	deps: GetResultDeps,
+	lines: number,
 ): Promise<ResultView> {
 	const base = viewBase(target, record);
 	const isPi = record.kind.toLowerCase() === "pi" && Boolean(record.sessionPath);
@@ -310,10 +311,11 @@ async function inspectRecord(
 			const extracted = extract(record.sessionPath);
 			if (extracted) {
 				const mined = minedAssistantError(extracted.message);
-				if (mined) {
-					// A failed attempt on a LIVE pane is not yet exhaustion: the
-					// child's grace window lets pi retry. Keep polling (working);
-					// the typed payload rides along so callers see the truth.
+				if (mined && record.stance === "autonomous") {
+					// A failed attempt on a LIVE autonomous pane is not yet
+					// exhaustion: the child's grace window lets pi retry. Keep
+					// polling (working); the typed payload rides along so callers
+					// see the truth.
 					return {
 						...base,
 						status: "working",
@@ -323,6 +325,17 @@ async function inspectRecord(
 						result: extracted.text,
 						error: { stopReason: mined.stopReason, errorMessage: mined.errorMessage },
 						note: "last attempt failed; the child may still retry — wait for the sidecar or pane exit",
+					};
+				}
+				if (mined) {
+					// Interactive children never write a sidecar and never
+					// auto-exit: a settled error is final for them.
+					return {
+						...base,
+						status: "error",
+						source: "session-jsonl",
+						message: extracted.message,
+						error: { stopReason: mined.stopReason, errorMessage: mined.errorMessage },
 					};
 				}
 				return {
@@ -340,8 +353,9 @@ async function inspectRecord(
 				note: "no assistant message in the session file yet",
 			};
 		}
-		// non-pi children have no session substrate: terminal, no payload.
-		return { ...base, status: "done" };
+		// Non-pi children have no session substrate — the pane-tail fallback is
+		// the only result source for them (ticket 01 §5).
+		return inspectAdopted(target, deps, lines, base);
 	}
 
 	// working/unknown: mid-flight snapshot — pi children get the message-so-far.
@@ -377,6 +391,7 @@ export async function getAgentResult(
 
 	for (;;) {
 		if (deps.signal?.aborted) return err("TIMEOUT", "aborted");
+		const lines = params.lines ?? 80;
 		const record = (deps.registry ?? spawnRecords)().get(params.target);
 		if (!record) {
 			// paneId match — a handle is the addressable key, but callers may
@@ -385,10 +400,13 @@ export async function getAgentResult(
 				(r) => r.paneId && r.paneId === params.target,
 			);
 			if (byPane)
-				return { ok: true, data: await inspectRecord(byPane.name, byPane, deps) };
-			return { ok: true, data: await inspectAdopted(params.target, deps) };
+				return {
+					ok: true,
+					data: await inspectRecord(byPane.name, byPane, deps, lines),
+				};
+			return { ok: true, data: await inspectAdopted(params.target, deps, lines) };
 		}
-		const view = await inspectRecord(params.target, record, deps);
+		const view = await inspectRecord(params.target, record, deps, lines);
 		if (TERMINAL.has(view.status) || now() >= deadline)
 			return { ok: true, data: view };
 		await (deps.sleep ?? sleep)(pollMs);
@@ -397,14 +415,15 @@ export async function getAgentResult(
 
 /**
  * The fallback: a pane this session did not spawn (adopted) — or any target
- * the registry does not know. Pane-tail reading only; never used for spawned
- * pi children.
+ * the registry does not know, or a spawned NON-pi kind (no session substrate).
+ * Pane-tail reading only; never used for spawned pi children.
  */
 async function inspectAdopted(
 	target: string,
 	deps: GetResultDeps,
+	lines = 80,
+	base?: Omit<ResultView, "status">,
 ): Promise<ResultView> {
-	const lines = 80;
 	const readTail =
 		deps.readTail ??
 		(async (t: string, n: number) => {
@@ -433,16 +452,21 @@ async function inspectAdopted(
 		});
 	const r = await readTail(target, lines);
 	if (!r.ok)
-		return { target, status: "gone", source: "registry", adopted: true };
+		return {
+			...(base ?? { target, source: "registry" as const }),
+			status: "gone",
+			adopted: !base,
+		};
 	return {
-		target,
+		...(base ?? { target, source: "registry" as const }),
 		status: "working",
 		source: "pane-tail",
-		adopted: true,
+		adopted: !base,
 		result: r.data.text,
 		tail: { truncated: r.data.truncated },
-		note:
-			"pane-tail fallback: this pane was not spawned by pi-herdr, so there is no session file to read exactly",
+		note: base
+			? "pane-tail fallback: this non-pi child has no session file to read exactly"
+			: "pane-tail fallback: this pane was not spawned by pi-herdr, so there is no session file to read exactly",
 	};
 }
 
