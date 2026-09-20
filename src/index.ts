@@ -19,6 +19,7 @@ import { registerResultTool } from "./tools/result.js";
 import { registerMessageTool } from "./tools/message.js";
 import { registerAgents } from "./tools/agents.js";
 import { registerPaneSync } from "./tools/sync.js";
+import { registerDelivery, stopDeliveryLoop } from "./delivery.js";
 import { registerSelfReport } from "./selfreport.js";
 import { registerSubagentsCommand } from "./menu.js";
 import { floorError, formatVersion, MIN_HERDR_VERSION } from "./version.js";
@@ -34,6 +35,13 @@ export default function (pi: ExtensionAPI): void {
 	registerMessageTool(pi);
 	registerAgents(pi);
 	registerPaneSync(pi);
+
+	// Push delivery (v0.6 issue 06): the shared poll loop watches the spawn
+	// registry and steers terminal events into THIS session — full final
+	// messages, takeover notes, blocked wakes — with wake governed by the
+	// `notifications` setting (blocked always wakes).
+	registerDelivery(pi);
+	pi.on("session_shutdown", () => stopDeliveryLoop());
 
 	// The /subagents command: settings menu + confirmed Kill-all-agents action.
 	registerSubagentsCommand(pi);

@@ -35,6 +35,9 @@ const resultToolMod = await jiti.import(join(ROOT, "src/tools/result.ts"), {
 const syncTool = await jiti.import(join(ROOT, "src/tools/sync.ts"), {
 	parent: ROOT,
 });
+const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
+	parent: ROOT,
+});
 const tools = [];
 const mockPi = { registerTool: (d) => tools.push(d), on: () => {} };
 agentsTool.registerAgents(mockPi);
@@ -75,6 +78,8 @@ const watchdog = setTimeout(() => {
 	process.exit(2);
 }, 420_000);
 
+let paneId = null; // hoisted for the finally's pane cleanup
+
 try {
 	console.log("[blocked] 1. herdr_spawn_agent (background, ask_user prompt)");
 	const name = `blocked-relay-${Date.now()}`;
@@ -83,7 +88,7 @@ try {
 		{ name, agent: { name, kind: "pi" }, prompt: ASK_PROMPT, cwd: CWD },
 		undefined,
 	);
-	const paneId = res.details?.paneId ?? null;
+	paneId = res.details?.paneId ?? null;
 	check(res.isError !== true, `spawn ok (isError=${res.isError})`);
 	check(!!paneId, `paneId present (${paneId})`);
 	if (!paneId) throw new Error("no pane id");
@@ -160,6 +165,24 @@ try {
 	fail += 1;
 } finally {
 	clearTimeout(watchdog);
+	// Pane hygiene: close this run's spawned pane (if still live) and sweep
+	// any pane whose cwd is one of this test's temp projects. Scoped to the
+	// `pi-herdr-blocked-` tmp prefix — never touches panes outside it.
+	try {
+		if (typeof paneId === "string") {
+			await herdr(["pane", "close", paneId], { timeoutMs: 10_000 }).catch(() => {});
+		}
+		const r = await herdr(["pane", "list"], { timeoutMs: 10_000 }).catch(() => null);
+		const panes = r?.ok ? (r.data?.panes ?? r.data?.result?.panes ?? []) : [];
+		for (const p of panes) {
+			const id = p?.pane_id ?? p?.id;
+			if (id && typeof p.cwd === "string" && p.cwd.includes("pi-herdr-blocked-")) {
+				await herdr(["pane", "close", id], { timeoutMs: 10_000 }).catch(() => {});
+			}
+		}
+	} catch {
+		/* best-effort */
+	}
 	console.log(
 		`\n${fail === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${pass} passed, ${fail} failed)`,
 	);

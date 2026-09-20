@@ -298,6 +298,42 @@ the spawn naming the field — use `agent_args` or another kind.
 
 > `herdr_wait_agent` / `herdr_read_agent` are **retired** (v0.6 issue 04):
 > `herdr_get_agent_result` replaces them with exact session-file reads.
+
+### Push delivery, takeover, and idle re-arm
+
+You never have to poll. When a spawned pi child finishes — by settling
+autonomously or by calling its injected `agent_done` — the child's **full
+final message is steered straight into your session**: the push carries the
+letter, not a doorbell. Detection is triply redundant: the child's typed
+completion sidecar first, then the session JSONL's last message when a child
+died without one (typed error if it died failing), then an honest gone note
+after a bounded grace when a pane vanished. Transient herdr hiccups never
+fake a completion. Each terminal event is pushed exactly once, and a **blocked**
+child always wakes you (answer via `herdr_message_agent`) regardless of settings.
+
+The `notifications` setting governs the wake: `normal` steers the result in
+and wakes you immediately; `quiet` delivers it on your next natural turn
+without waking; `none` pushes nothing — pull with `herdr_get_agent_result`
+whenever you want (blocked still always wakes).
+
+**User takeover** splits two effects. If *you* type into a running child's
+pane, its auto-exit is disabled — a pane never slams shut on a human — while
+the result contract stays intact (`agent_done` still works, the session file
+is readable throughout). Your orchestrator gets a quiet
+`user took over <agent>` note on its next turn, and no mid-conversation
+pushes land from that pane. The child distinguishes your keystrokes from its
+orchestrator's own follow-ups (a steer watermark the parent stamps before it
+drives the pane), so `herdr_message_agent` never fakes a takeover.
+
+**Idle re-arm** is the headless plug: after a takeover, once the child
+settles and stays quiet for `idle_rearm_minutes` (default 15; any keystroke
+resets the timer), its latest final message auto-delivers — honestly labeled
+*auto-delivered after user steer* — the pane closes, and the session file is
+retained for resume. SSH in, steer, log out: the result still arrives, no
+orphan panes.
+
+`herdr_get_agent_result` stays pure inspection: mid-flight snapshot, bounded
+wait, re-read — never a mandatory second step after spawn.
 > Raw pane reads remain on the pane-sync quartet (`herdr_read_pane`).
 
 ### Fleet introspection
@@ -388,8 +424,8 @@ key (and per agent name for `models.agents`):
 | `models.agents.<name>` | `{}` | Per-agent model pins (routing level 3): agent name → model id. Entries merge across both files, project winning per name. |
 | `max_parallel_agents` | `3` | Concurrency cap; spawns beyond it are queued until a slot frees. |
 | `max_spawn_depth` | `2` | Guard against runaway recursive fleets. |
-| `notifications` | `"normal"` | Verbosity of agent-completion notifications: `none` / `quiet` / `normal`. |
-| `idle_rearm_minutes` | `15` | After a user takeover, minutes of quiet before the agent's result is auto-delivered and its pane closes (consumed by the push-delivery ticket). |
+| `notifications` | `"normal"` | Wake behavior when a spawned agent completes: `normal` = the full result is steered in and the session wakes; `quiet` = delivered on the next natural turn, no wake; `none` = no pushes at all (pull-only). A blocked agent always wakes, whatever this is set to. |
+| `idle_rearm_minutes` | `15` | After a user takeover, minutes of quiet (any keystroke resets) before the agent's latest final message auto-delivers — labeled *auto-delivered after user steer* — and its pane closes. The timer starts on settle, never mid-work; the session file is retained for resume. |
 | `workflows_enabled` | `true` | Register the workflow tool (consumed by the workflows ticket). A gate on new runs only. |
 
 Every key is read at the moment it matters, so menu edits take effect on the
@@ -408,7 +444,7 @@ Removed tools and their replacements:
 | --- | --- |
 | `herdr_send_prompt` | `herdr_message_agent` (v0.6 issue 05) — same delivery path, plus the envelope, the full resolution chain, and the reserved `orchestrator` role. |
 | `herdr_wait_agent` / `herdr_read_agent` | `herdr_get_agent_result` (exact session-file reads; `wait: true` blocks until terminal). |
-| `herdr_delegate` | `herdr_spawn_agent` + `herdr_get_agent_result(wait: true)` (spawn + wait is the one-shot form; push delivery lands with ticket 06 to make even that unnecessary). |
+| `herdr_delegate` | `herdr_spawn_agent` + `herdr_get_agent_result(wait: true)` (spawn + wait is the one-shot form; push delivery now brings the result to the session on its own). |
 | `herdr_start_agent` | `herdr_spawn_agent` (same single `agent start --kind` launch path underneath; registry types or inline definitions instead of loose flag bags). |
 | `herdr_get_agent`, `herdr_explain_agent` | `herdr_list_agents`. |
 | `herdr_stop_agent` | The confirmed **Kill all agents** action in `/subagents config`; for one runaway agent, `herdr_send_keys` with `["ctrl+c"]`, or close the pane in the herdr UI. |

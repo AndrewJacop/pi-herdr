@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Push delivery + user takeover + idle re-arm (v0.6 issue 06).** A spawned
+  pi child's completion now comes to you: the delivery loop watches the spawn
+  registry and steers the child's **full final assistant message** into your
+  session — the push carries the letter, no doorbell, no summary-then-fetch.
+  Both completion routes push (autonomous auto-settle and the declared
+  `agent_done`), and detection is triply redundant: typed exit sidecar →
+  session-JSONL sentinel (a sidecar-less death still delivers, mined as a
+  typed error when it died failing) → an honest gone note after a bounded
+  grace. Transient herdr errors never fake a completion; each terminal event
+  pushes exactly once. Wake follows the `notifications` setting — `normal`
+  steers + wakes (`triggerTurn`, `deliverAs: "steer"`), `quiet` delivers on
+  the next natural turn, `none` pushes nothing (pull-only) — and a **blocked**
+  child always wakes regardless, unless you've taken its pane over. **User
+  takeover** (your typing in a child's pane, reported by the child extension
+  and disambiguated from the orchestrator's own steering via a
+  `<session>.steer` watermark) disables auto-exit only — a pane never slams
+  shut on a human — while the result contract is never revoked: `agent_done`
+  stays available, the session file is readable before/during/after, the
+  orchestrator gets a quiet `user took over <agent>` note, and no
+  mid-conversation pushes land from that pane. **Idle re-arm** plugs the
+  headless case: takeover + settle + `idle_rearm_minutes` (default 15; any
+  keystroke resets, timer starts on settle) auto-delivers the latest final
+  message labeled *auto-delivered after user steer*, closes the pane, and
+  retains the session for resume. `herdr_get_agent_result` stays pure
+  inspection (snapshot, bounded wait, re-read). One shared poll loop
+  (`src/delivery.ts`) drives it all; the status projection (07) and
+  workflows (08/11) hang off the same loop. Offline: `tests/delivery.mjs`;
+  live round-trip: `tests/push-live.mjs`.
+
 - **The open message channel: `herdr_message_agent` (v0.6 issue 05).** One
   tool, anyone ↔ anyone, no broker: any session (orchestrator, child, or peer)
   delivers text to any agent pane. The `target` is always explicit and

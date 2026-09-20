@@ -41,8 +41,8 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "test": "node tests/smoke.mjs && node tests/substrate.mjs && node tests/settings.mjs && node tests/spawn.mjs && node tests/agentfiles.mjs && node tests/message.mjs",
-    "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/blocked.mjs && node tests/spawn-live.mjs && node tests/message-live.mjs && node tests/dev-load.mjs",
+    "test": "node tests/smoke.mjs && node tests/substrate.mjs && node tests/settings.mjs && node tests/spawn.mjs && node tests/agentfiles.mjs && node tests/message.mjs && node tests/delivery.mjs",
+    "test:live": "node tests/live.mjs && node tests/selfreport.mjs && node tests/blocked.mjs && node tests/spawn-live.mjs && node tests/message-live.mjs && node tests/push-live.mjs && node tests/dev-load.mjs",
     "test:win": "node tests/win-start.mjs",
     "test:multi": "node tests/multi.mjs",
     "test:stress": "node tests/stress.mjs",

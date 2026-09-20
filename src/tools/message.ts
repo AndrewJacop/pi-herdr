@@ -31,6 +31,7 @@ import { Type } from "typebox";
 import { herdr } from "../herdr.js";
 import { sendAgentPrompt } from "./orchestration.js";
 import { spawnRecords, type SpawnRecord } from "../spawn.js";
+import { writeSteerWatermark } from "../sessionfile.js";
 import {
 	normalizeAgent,
 	type HerdrErrorCode,
@@ -169,6 +170,8 @@ type Resolved =
 			state?: string;
 			name?: string;
 			to: string;
+			/** The spawn-registry record when the target is one of ours. */
+			record?: SpawnRecord;
 	  }
 	| { kind: "err"; error: SendError };
 
@@ -200,6 +203,7 @@ async function resolveTarget(
 			state: live.data.status,
 			name: record?.name,
 			to: record?.name ?? live.data.name ?? live.data.paneId,
+			...(record ? { record } : {}),
 		};
 	}
 
@@ -302,6 +306,12 @@ export async function messageAgent(
 		: envelope(from, resolved.to, params.text);
 
 	const send = deps.send ?? sendAgentPrompt;
+	// Steer watermark (issue 06): the exact text about to be typed into a
+	// registry child. The child matches its input event against it so the
+	// orchestrator's own follow-up is never mistaken for a human takeover.
+	if (resolved.kind === "live" && resolved.record?.sessionPath) {
+		writeSteerWatermark(resolved.record.sessionPath, payload);
+	}
 	const r = await send(resolved.paneId, payload, {
 		submit,
 		signal: deps.signal,

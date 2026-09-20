@@ -32,7 +32,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { seedSessionFile } from "./sessionfile.js";
+import { seedSessionFile, writeSteerWatermark } from "./sessionfile.js";
 import {
 	type Err,
 	type HerdrErrorCode,
@@ -502,9 +502,25 @@ export interface SpawnRecord {
 	stance: Stance;
 	/** Denied tool names (pi children; stamped to the child for its strip). */
 	deniedTools?: string[];
+	/** Terminal event already steered to the orchestrator (issue 06) —
+	 * one push per terminal event; 07 prunes fleet rows on this. */
+	delivery?: { kind: DeliveryKind; at: number };
+	/** A human took the pane over (child-reported <session>.takeover). */
+	takenOver?: boolean;
+	/** The quiet `user took over <agent>` note was sent. */
+	tookNotified?: boolean;
+	/** A blocked wake was pushed for the current blocked episode. */
+	blockedNotified?: boolean;
+	/** First absence evidence — the bounded-grace measurement (ms epoch). */
+	goneAt?: number;
 }
 
 const spawnRegistry = new Map<string, SpawnRecord>();
+
+/** Terminal (or one-shot) events the delivery loop steers to the
+ * orchestrator (issue 06). `blocked` is an episode wake, not terminal — the
+ * record stays watchable; the rest mark `delivery` and end the watch. */
+export type DeliveryKind = "done" | "error" | "gone" | "start-error" | "blocked";
 
 /** Live registry snapshot (later tickets consume this). */
 export function spawnRecords(): ReadonlyMap<string, SpawnRecord> {
@@ -746,6 +762,11 @@ export async function startRecordNow(
 		childEnv.PI_HERDR_DENIED_TOOLS = (record.deniedTools ?? []).join(",");
 		if (record.activityPath)
 			childEnv.PI_HERDR_ACTIVITY_FILE = record.activityPath;
+		// idle re-arm window (issue 06): after a human takeover, settle + this
+		// much quiet → the child auto-delivers (rearm-labeled) and closes.
+		childEnv.PI_HERDR_IDLE_REARM_MS = String(
+			Math.max(0, (deps.load ?? defaultLoad)().idle_rearm_minutes) * 60_000,
+		);
 	}
 	const start = deps.start ?? startHerdrAgent;
 	const startR = await start({
@@ -807,6 +828,11 @@ async function submitRecordPrompt(
 	const deadline = Date.now() + SUBMIT_CHUNK_MS;
 	for (let attempt = 0; attempt < 2; attempt++) {
 		if (attempt > 0) await sleep(2_000);
+		// Steer watermark (issue 06), stamped PER ATTEMPT: the exact text about
+		// to be typed. The child matches its input event against it so the
+		// parent's own steering is never mistaken for a human takeover — and a
+		// re-submit after a lost turn re-stamps, so the retry is not misread.
+		if (record.sessionPath) writeSteerWatermark(record.sessionPath, record.prompt);
 		const r = await submit(record.paneId, record.prompt, deadline, deps.signal);
 		if (r.ok || r.error.message !== "NOT_STARTED") break; // only retry lost turns
 	}
