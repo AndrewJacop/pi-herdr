@@ -184,9 +184,16 @@ async function startAgentNew(
 		input.split ?? "right",
 	];
 	if (input.cwd) splitArgs.push("--cwd", input.cwd);
-	if (input.env)
-		for (const [k, v] of Object.entries(input.env))
-			splitArgs.push("--env", `${k}=${v}`);
+	// Make the spawned agent's pi-herdr self-report (selfreport.ts) match the
+	// requested --kind. Without this, a pi-family host (e.g. omp) defaults its
+	// label to "pi" and herdr's `agent start` rejects with "expected <kind>,
+	// detected pi". User-supplied env wins.
+	const paneEnv: Record<string, string> = {
+		PI_HERDR_AGENT_LABEL: kind,
+		...input.env,
+	};
+	for (const [k, v] of Object.entries(paneEnv))
+		splitArgs.push("--env", `${k}=${v}`);
 	if (input.focus) splitArgs.push("--focus");
 	const splitR = await herdr<unknown>(splitArgs, {
 		timeoutMs: 20_000,
@@ -232,7 +239,15 @@ async function startAgentNew(
 		if (code !== "agent_pane_busy" || Date.now() >= deadline) break;
 		await sleep(250);
 	} while (true);
-	if (!startR.ok) return startR;
+	if (!startR.ok) {
+		// Roll back the pane split in step 1 so a failed `agent start` (e.g. a
+		// kind-detection mismatch) doesn't leave an orphan pane + agent process
+		// behind. Best-effort; the original start error is what we return.
+		await herdr(["pane", "close", paneId], { timeoutMs: 10_000 }).catch(
+			() => {},
+		);
+		return startR;
+	}
 	return {
 		ok: true,
 		data: {
