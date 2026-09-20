@@ -754,12 +754,13 @@ console.log("\n[9] get_agent_result — engine paths");
 	assert(v5.ok && v5.data.status === "queued", "queued record reports queued");
 	record.paneId = "w1:p1";
 
-	// working → interim snapshot from the JSONL
+	// working → interim snapshot from the JSONL (projected vocabulary: the
+	// pane is live and working → active; no activity sidecar on disk → coarse)
 	deps.status = async () => ({ ok: true, data: "working" });
 	const v6 = await resultMod.getAgentResult({ target: "scout" }, deps);
 	assert(
 		v6.ok &&
-			v6.data.status === "working" &&
+			v6.data.status === "active" &&
 			v6.data.interim === true &&
 			!!v6.data.message,
 		"mid-flight snapshot carries the message-so-far, marked interim",
@@ -781,16 +782,17 @@ console.log("\n[9] get_agent_result — engine paths");
 		].join("\n"),
 	);
 	// a LIVE pane whose last attempt failed keeps polling (grace semantics):
-	// typed payload attached, but status stays working so wait loops ride out
-	// the child's retries
+	// typed payload attached, and the projected state stays NON-terminal
+	// (waiting — herdr sees it settled; the child may still retry) so wait
+	// loops ride out the retries
 	deps.status = async () => ({ ok: true, data: "idle" });
 	const v7 = await resultMod.getAgentResult({ target: "scout" }, deps);
 	assert(
 		v7.ok &&
-			v7.data.status === "working" &&
+			v7.data.status === "waiting" &&
 			v7.data.error?.errorMessage === "429 exhausted" &&
 			v7.data.interim === true,
-		"live pane + failed last attempt: interim working with the typed payload (grace semantics)",
+		"live pane + failed last attempt: non-terminal waiting with the typed payload (grace semantics)",
 	);
 
 	// a DEAD pane whose last word was the failure IS the terminal typed answer
@@ -861,7 +863,7 @@ console.log("\n[9] get_agent_result — engine paths");
 	const ccDeps = {
 		registry: () => regCc,
 		status: async () => ({ ok: true, data: "idle" }),
-		readTail: async (t, n) => {
+		readTail: async (_t, n) => {
 			ccLines = n;
 			return { ok: true, data: { text: "CLAUDE VERDICT", truncated: false } };
 		},
@@ -869,7 +871,7 @@ console.log("\n[9] get_agent_result — engine paths");
 	const v11 = await resultMod.getAgentResult({ target: "cc", lines: 42 }, ccDeps);
 	assert(
 		v11.ok &&
-			v11.data.status === "working" &&
+			v11.data.status === "running" &&
 			v11.data.source === "pane-tail" &&
 			v11.data.result === "CLAUDE VERDICT" &&
 			ccLines === 42,

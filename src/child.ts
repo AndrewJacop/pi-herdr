@@ -36,6 +36,7 @@ import {
 	readSteerWatermark,
 	takeoverPathFor,
 } from "./sessionfile.js";
+import type { ActivitySnapshot } from "./status.js";
 
 /** Session file path — presence marks this pi as a herdr-spawned child. */
 export const ENV_SESSION = "PI_HERDR_SESSION";
@@ -47,7 +48,9 @@ export const ENV_AGENT = "PI_HERDR_AGENT";
 export const ENV_AUTO_EXIT = "PI_HERDR_AUTO_EXIT";
 /** Comma list of denied tools (for the identity strip count). */
 export const ENV_DENIED_TOOLS = "PI_HERDR_DENIED_TOOLS";
-/** Activity sidecar path — RESERVED for ticket 07; stamped, not yet written. */
+/** Activity sidecar path — issue 07: written by the child-side activity
+ * recorder, read by the orchestrator's poll loop (current tool, streaming —
+ * what makes `active · bash 7m` possible). */
 export const ENV_ACTIVITY_FILE = "PI_HERDR_ACTIVITY_FILE";
 /** Idle re-arm window in ms (v0.6 issue 06), stamped by the parent from the
  * `idle_rearm_minutes` setting. After a human takeover: settle + this much
@@ -180,6 +183,119 @@ export function idleRearmMs(): number {
 }
 
 /**
+ * The child-side activity recorder (v0.6 issue 07): mirrors this pi's
+ * lifecycle into the activity sidecar the orchestrator's poll loop reads.
+ * Writes are throttled to one per ACTIVITY_WRITE_MS for high-frequency
+ * events (message_update fires per stream chunk); phase/tool changes flush
+ * immediately, and a trailing write captures the final state of a throttled
+ * window. Best-effort: a failed write must never break the agent loop.
+ */
+export const ACTIVITY_WRITE_MS = 500;
+
+export class ActivityRecorder {
+	private state: ActivitySnapshot;
+	private lastWrite = 0;
+	private trailing: ReturnType<typeof setTimeout> | null = null;
+
+	constructor(
+		private readonly path: string,
+		private readonly now: () => number = Date.now,
+		private readonly write: (path: string, data: string) => void = (p, d) =>
+			writeFileSync(p, d),
+	) {
+		this.state = { version: 1, updatedAt: now(), phase: "starting" };
+	}
+
+	/** Boot: the child is up, no run yet. */
+	sessionStart(): void {
+		this.state = { version: 1, updatedAt: this.now(), phase: "starting" };
+		this.flushNow();
+	}
+
+	/** A run began. */
+	runStarted(): void {
+		this.state = {
+			...this.state,
+			phase: "active",
+			activeSince: this.now(),
+			tool: undefined,
+			toolStartedAt: undefined,
+			streaming: false,
+			waitingSince: undefined,
+		};
+		this.flushNow();
+	}
+
+	/** A tool started executing. */
+	toolStarted(toolName: string): void {
+		this.state = {
+			...this.state,
+			tool: toolName,
+			toolStartedAt: this.now(),
+			streaming: false,
+		};
+		this.flushNow();
+	}
+
+	/** The tool finished. */
+	toolEnded(): void {
+		this.state = { ...this.state, tool: undefined, toolStartedAt: undefined };
+		this.flushNow();
+	}
+
+	/** Assistant message streaming (high frequency — throttled). */
+	streamMessage(): void {
+		this.state = { ...this.state, streaming: true };
+		this.touch(false);
+	}
+
+	/** The run settled — pi will not auto-retry/compact/continue. */
+	settled(): void {
+		this.state = {
+			...this.state,
+			phase: "waiting",
+			waitingSince: this.now(),
+			activeSince: undefined,
+			tool: undefined,
+			toolStartedAt: undefined,
+			streaming: false,
+		};
+		this.flushNow();
+	}
+
+	private touch(force: boolean): void {
+		if (!force && this.now() - this.lastWrite < ACTIVITY_WRITE_MS) {
+			this.scheduleTrailing();
+			return;
+		}
+		this.flushNow();
+	}
+
+	private flushNow(): void {
+		this.lastWrite = this.now();
+		this.state.updatedAt = this.lastWrite;
+		try {
+			this.write(this.path, JSON.stringify(this.state));
+		} catch {
+			/* best-effort */
+		}
+		if (this.trailing) {
+			clearTimeout(this.trailing);
+			this.trailing = null;
+		}
+	}
+
+	private scheduleTrailing(): void {
+		if (this.trailing) return;
+		this.trailing = setTimeout(() => {
+			this.trailing = null;
+			this.flushNow();
+		}, ACTIVITY_WRITE_MS);
+		this.trailing.unref?.();
+	}
+}
+
+/**
  * Register the child extension. A no-op when PI_HERDR_SESSION is unset.
  * Exported (not only the default factory) so offline tests can drive it with
  * a mock pi.
@@ -196,6 +312,22 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 	const autoExit = process.env[ENV_AUTO_EXIT] === "1";
 	const denied = parseDeniedTools(process.env[ENV_DENIED_TOOLS]);
 	const label = agentType || childName;
+
+	// Activity recorder (issue 07) — independent of the rest of the
+	// extension's lifecycle logic, so the sidecar stays truthful even when
+	// takeover/error-grace branches early-return below.
+	const activityPath = process.env[ENV_ACTIVITY_FILE];
+	if (activityPath) {
+		const recorder = new ActivityRecorder(activityPath);
+		pi.on("session_start", () => recorder.sessionStart());
+		pi.on("agent_start", () => recorder.runStarted());
+		pi.on("tool_execution_start", (event) =>
+			recorder.toolStarted(event.toolName),
+		);
+		pi.on("tool_execution_end", () => recorder.toolEnded());
+		pi.on("message_update", () => recorder.streamMessage());
+		pi.on("agent_settled", () => recorder.settled());
+	}
 
 	let toolNames: string[] = [];
 	let expanded = false;

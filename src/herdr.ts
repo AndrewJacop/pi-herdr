@@ -10,7 +10,8 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveHerdrBin } from "./config.js";
-import type { HerdrErrorCode, Result } from "./env.js";
+import type { HerdrErrorCode, NormalizedAgent, Result } from "./env.js";
+import { normalizeAgent } from "./env.js";
 import { floorError, parseVersion, type HerdrProbe } from "./version.js";
 
 export interface HerdrOpts {
@@ -275,4 +276,23 @@ function parseLastJson(s: string): unknown | null {
 		}
 	}
 	return null;
+}
+
+// ---- the fleet observation -------------------------------------------------
+
+/**
+ * One normalized fleet observation (`herdr agent list`) — the shared seam
+ * every poll consumer uses (push delivery, the watchdog, the list view), so
+ * the fleet-agent shape is spelled once (NormalizedAgent) and one tick costs
+ * one CLI call no matter how many passes read it.
+ */
+export async function fleetList(
+	signal?: AbortSignal,
+): Promise<Result<NormalizedAgent[]>> {
+	const r = await herdr<{ agents?: unknown[] }>(["agent", "list"], {
+		timeoutMs: 10_000,
+		signal,
+	});
+	if (!r.ok) return r;
+	return { ok: true, data: (r.data?.agents ?? []).map(normalizeAgent) };
 }

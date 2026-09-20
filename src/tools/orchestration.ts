@@ -15,15 +15,23 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { herdr } from "../herdr.js";
+import { fleetList, herdr } from "../herdr.js";
 import { getAgentKinds } from "../config.js";
 import {
-	normalizeAgent,
+	type NormalizedAgent,
 	type Err,
 	type HerdrErrorCode,
 	type Result,
 	type ToolReturn,
 } from "../env.js";
+import { spawnRecords, type SpawnRecord } from "../spawn.js";
+import { readExitSidecar, type ReadSidecarResult } from "../sessionfile.js";
+import {
+	isSubstrateChild,
+	projectStatus,
+	readActivityFile,
+	type ActivityRead,
+} from "../status.js";
 
 // The spawn engine consumes this module's machinery (startHerdrAgent,
 // waitForStatus, submitAndWait, getAgentStatus, kindError) — the launch path
@@ -452,6 +460,124 @@ export async function submitAndWait(
 	return driveOneTurn(paneId, { deadline: opts.deadline, signal });
 }
 
+// ---- list_agents: the projected fleet view (v0.6 issue 07) -----------------
+
+export interface FleetRow {
+	paneId?: string;
+	name?: string;
+	kind?: string;
+	/** The projected state label (`active · bash 7m`, `queued`, `stalled`…)
+	 * for our records; the coarse agentStatus for adopted panes. */
+	state: string;
+	/** True when the state is one of the ten projected states. */
+	projected: boolean;
+	/** The raw coarse status (always available). */
+	agentStatus?: string;
+	stance?: string;
+}
+
+export interface ListAgentsDeps {
+	list?: (signal?: AbortSignal) => Promise<Result<NormalizedAgent[]>>;
+	registry?: () => ReadonlyMap<string, SpawnRecord>;
+	readSidecar?: (sessionPath: string) => ReadSidecarResult;
+	readActivity?: (activityPath?: string) => ActivityRead;
+	now?: () => number;
+	signal?: AbortSignal;
+}
+
+const defaultFleetList = fleetList;
+
+/**
+ * The fleet's projected view: our registry records report one of the ten
+ * states (queued from the parallel-cap queue, active · <tool> <age> from
+ * activity snapshots, stalled/gone from absence, finalizing from the
+ * completion sidecar); panes this session didn't spawn keep their coarse
+ * status. Delivered (consumed) records leave the table.
+ */
+export async function listAgentsView(
+	deps: ListAgentsDeps = {},
+): Promise<Result<{ rows: FleetRow[] }>> {
+	const fleet = await (deps.list ?? defaultFleetList)(deps.signal);
+	if (!fleet.ok) return fleet;
+	const registry = deps.registry ?? spawnRecords;
+	const now = deps.now ?? (() => Date.now());
+	const rows: FleetRow[] = [];
+	const seenPanes = new Set<string>();
+	// The registry is keyed by handle (name); fleet rows address panes.
+	const byPane = new Map<string, SpawnRecord>();
+	for (const record of registry().values())
+		if (record.paneId) byPane.set(record.paneId, record);
+
+	for (const a of fleet.data) {
+		if (!a.paneId) continue;
+		seenPanes.add(a.paneId);
+		const record = byPane.get(a.paneId);
+		if (!record) {
+			// adopted pane — coarse status, not ours to project
+			rows.push({
+				paneId: a.paneId,
+				name: a.name,
+				kind: a.agent,
+				state: a.agentStatus ?? "unknown",
+				projected: false,
+				agentStatus: a.agentStatus,
+			});
+			continue;
+		}
+		rows.push({
+			paneId: a.paneId,
+			name: record.name,
+			kind: record.kind,
+			state: projectedLabel(record, deps, a.agentStatus, false, now()),
+			projected: true,
+			agentStatus: a.agentStatus,
+			stance: record.stance,
+		});
+	}
+
+	// registry records the fleet doesn't show: queued (no pane yet), or a
+	// pane that just vanished (undelivered → stalled/finalizing, honest
+	// snapshot). Delivered (consumed) records leave the table.
+	for (const record of registry().values()) {
+		if (record.delivery) continue;
+		if (record.paneId && seenPanes.has(record.paneId)) continue;
+		rows.push({
+			paneId: record.paneId,
+			name: record.name,
+			kind: record.kind,
+			state: projectedLabel(record, deps, undefined, true, now()),
+			projected: true,
+			stance: record.stance,
+		});
+	}
+	return { ok: true, data: { rows } };
+}
+
+/** Project one record (shared by the live-fleet loop and the vanished/
+ * queued loop so the sidecar read can't drift between them). */
+function projectedLabel(
+	record: SpawnRecord,
+	deps: ListAgentsDeps,
+	live: string | undefined,
+	absent: boolean,
+	now: number,
+): string {
+	const sidecarOk = Boolean(
+		isSubstrateChild(record) &&
+			record.sessionPath &&
+			(deps.readSidecar ?? readExitSidecar)(record.sessionPath).state === "ok",
+	);
+	const proj = projectStatus(record, {
+		live,
+		absent,
+		unhealthy: false,
+		sidecar: sidecarOk,
+		activity: (deps.readActivity ?? readActivityFile)(record.activityPath),
+		now,
+	});
+	return proj.detail ? `${proj.status} · ${proj.detail}` : proj.status;
+}
+
 // ---- registration ----------------------------------------------------------
 
 export function registerOrchestration(pi: ExtensionAPI): void {
@@ -469,40 +595,33 @@ export function registerOrchestration(pi: ExtensionAPI): void {
 //    delivery path; resolvePaneId died with it (message resolves via its own
 //    `agent get`, which also carries the state the physics branch needs).
 
+/** One `- pane [state] name (kind, stance)` line. */
+function formatFleetRow(a: FleetRow): string {
+	const stance = a.stance ? `, ${a.stance}` : "";
+	return `- ${a.paneId ?? "?"} [${a.state}] ${a.name ?? ""} (${a.kind ?? "?"}${stance})`;
+}
+
 // 5. list_agents ----------------------------------------------------------
 	pi.registerTool({
 		name: "herdr_list_agents",
 		label: "List herdr agents",
 		description:
-			"List all agents currently running in herdr with their status — the fleet's single introspection tool " +
-			"(per-agent detail comes from steering the agent, not from extra tools).",
+			"List all agents currently running in herdr — the fleet's single introspection tool. " +
+			"Agents this session spawned report their projected state (queued/starting/active · tool/waiting/blocked/stalled/running/finalizing/gone, e.g. `active · bash 7m`); " +
+			"panes from elsewhere keep their coarse status. Per-agent detail comes from steering the agent, not from extra tools.",
 		promptSnippet: "List all herdr agent panes and their statuses",
 		promptGuidelines: [
-			"Use herdr_list_agents to see what agent panes exist and their idle/working status.",
+			"Use herdr_list_agents to see what agent panes exist and their states.",
 		],
 		parameters: Type.Object({}),
 		async execute(_id, _p, signal) {
-			const r = await herdr<{ agents?: Record<string, unknown>[] }>(
-				["agent", "list"],
-				{
-					timeoutMs: 10_000,
-					signal,
-				},
-			);
+			const r = await listAgentsView({ signal });
 			if (!r.ok) return fail(r);
-			const agents = (r.data?.agents ?? []).map(normalizeAgent);
-			return okText(
-				agents.length
-					? `${agents.length} agent(s):\n` +
-							agents
-								.map(
-									(a) =>
-										`- ${a.paneId ?? "?"} [${a.agentStatus ?? "?"}] ${a.name ?? ""} (${a.agent ?? "?"})`,
-								)
-								.join("\n")
-					: "No agents running.",
-				{ agents },
-			);
+			const { rows } = r.data;
+			const text = rows.length
+				? `${rows.length} agent(s):\n${rows.map(formatFleetRow).join("\n")}`
+				: "No agents running.";
+			return okText(text, { rows });
 		},
 	});
 }

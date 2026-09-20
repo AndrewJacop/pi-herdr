@@ -513,6 +513,11 @@ export interface SpawnRecord {
 	blockedNotified?: boolean;
 	/** First absence evidence — the bounded-grace measurement (ms epoch). */
 	goneAt?: number;
+	/** Watchdog bookkeeping (07): whether a stall ping was sent for the
+	 * current episode, and when a broken-substrate problem was first seen.
+	 * The stalled STATE itself is always derived (src/status.ts), never
+	 * stored — this only dedupes pings and ages problems. */
+	watch?: { stalled?: boolean; problemSince?: number };
 }
 
 const spawnRegistry = new Map<string, SpawnRecord>();

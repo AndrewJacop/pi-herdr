@@ -28,8 +28,8 @@
 // declared (`agent_done`) or re-armed (idle re-arm, labeled).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { herdr } from "./herdr.js";
-import { normalizeAgent, type Result } from "./env.js";
+import { fleetList } from "./herdr.js";
+import type { NormalizedAgent, Result } from "./env.js";
 import {
 	getSettingsPaths,
 	loadSettings,
@@ -44,6 +44,12 @@ import {
 	type ReadSidecarResult,
 	type ReadTakeoverResult,
 } from "./sessionfile.js";
+import {
+	isSubstrateChild,
+	readActivityFile,
+	STALL_AFTER_MS,
+	type ActivityRead,
+} from "./status.js";
 import { spawnRecords, type DeliveryKind, type SpawnRecord } from "./spawn.js";
 
 // ---- types -----------------------------------------------------------------
@@ -62,10 +68,8 @@ export interface DeliveryDeps {
 	registry?: () => ReadonlyMap<string, SpawnRecord>;
 	/** Effective settings (notifications) — default: live settings read. */
 	load?: () => HerdrSettings;
-	/** One fleet observation per tick — default: `herdr agent list`. */
-	list?: () => Promise<
-		Result<{ paneId?: string; name?: string; agentStatus?: string }[]>
-	>;
+	/** One fleet observation per tick — default: the shared fleetList(). */
+	list?: () => Promise<Result<NormalizedAgent[]>>;
 	/** Completion-sidecar read — default: readExitSidecar. */
 	readSidecar?: (sessionPath: string) => ReadSidecarResult;
 	/** Takeover-marker read — default: readTakeoverMarker. */
@@ -77,6 +81,9 @@ export interface DeliveryDeps {
 	now?: () => number;
 	/** Bounded grace between first absence and the gone resolution (10s). */
 	goneGraceMs?: number;
+	/** A pre-fetched fleet observation (shared with the watchdog so one tick
+	 * costs one `agent list`). When set, `list` is not called. */
+	fleet?: Result<NormalizedAgent[]>;
 }
 
 // ---- push composition ---------------------------------------------------------
@@ -141,7 +148,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 
 	// One fleet observation per tick. A FAILED observation is not absence
 	// evidence — skip the whole tick rather than risk false gones.
-	const fleet = await (deps.list ?? defaultList)();
+	const fleet = deps.fleet ?? (await (deps.list ?? fleetList)());
 	if (!fleet.ok) return;
 	const statusByPane = new Map<string, string>();
 	for (const a of fleet.data) {
@@ -365,15 +372,134 @@ function pushTerminal(
 const defaultLoad = (): HerdrSettings =>
 	loadSettings(getSettingsPaths(process.cwd())).effective;
 
-const defaultList = async (): Promise<
-	Result<{ paneId?: string; name?: string; agentStatus?: string }[]>
-> => {
-	const r = await herdr<{ agents?: unknown[] }>(["agent", "list"], {
-		timeoutMs: 10_000,
-	});
-	if (!r.ok) return r;
-	return { ok: true, data: (r.data?.agents ?? []).map(normalizeAgent) };
-};
+// ---- the watchdog (v0.6 issue 07) ----------------------------------------------
+
+/** Injectable seams for watchdogOnce (offline red-green; defaults hit herdr
+ * + disk). */
+export interface WatchdogDeps {
+	/** The session spawn registry — default: the LIVE spawnRecords(). */
+	registry?: () => ReadonlyMap<string, SpawnRecord>;
+	/** One fleet observation — default: the shared fleetList(). */
+	list?: () => Promise<Result<NormalizedAgent[]>>;
+	/** Pre-fetched observation (shared with deliverOnce — one list per tick). */
+	fleet?: Result<NormalizedAgent[]>;
+	/** Completion-sidecar read — default: readExitSidecar. */
+	readSidecar?: (sessionPath: string) => ReadSidecarResult;
+	/** Activity-sidecar read — default: readActivityFile (src/status.ts). */
+	readActivity?: (activityPath?: string) => ActivityRead;
+	/** The steer sink — default: pi.sendMessage into THIS session. */
+	push?: (msg: SteeredMessage) => void;
+	now?: () => number;
+	/** How long a broken-substrate problem must hold before `stalled`.
+	 * Default STALL_AFTER_MS (60s, prior art). */
+	stallAfterMs?: number;
+}
+
+/** First sighting of a broken-substrate problem (idempotent). */
+function stampProblem(record: SpawnRecord, now: number): number {
+	record.watch ??= {};
+	record.watch.problemSince ??= now;
+	return record.watch.problemSince;
+}
+
+/**
+ * One watchdog pass over the registry. Stall rules reference ONLY broken-
+ * substrate evidence: a pane vanished without a completion sidecar, a
+ * substrate child whose activity snapshot stays missing/invalid while herdr
+ * reports it working, or a fleet-level inspection outage that outlasts the
+ * threshold. Aged-but-valid `active`/`waiting` snapshots are healthy no
+ * matter how old: the state never stalls merely by aging (ticket ruling).
+ * The projected stalled STATE stays derived (src/status.ts); this pass only
+ * stamps `record.watch` bookkeeping (problem age, ping-once-per-episode) and
+ * steers the pings — entry + recovery — AUTONOMOUS agents only. Interactive
+ * panes stay widget-only: a steer there burns an orchestrator turn on a
+ * no-op.
+ */
+export async function watchdogOnce(deps: WatchdogDeps = {}): Promise<void> {
+	const registry = (deps.registry ?? spawnRecords)();
+	if (registry.size === 0) return;
+	const now = deps.now ?? (() => Date.now());
+	const push = deps.push ?? (() => {});
+	const stallAfterMs = deps.stallAfterMs ?? STALL_AFTER_MS;
+
+	const fleet = deps.fleet ?? (await (deps.list ?? fleetList)());
+
+	for (const record of registry.values()) {
+		// queued / never-started / delivered records are out of scope
+		if (!record.paneId || record.startError || record.delivery) continue;
+
+		const was = record.watch?.stalled ?? false;
+		let stalled = false;
+		let reason = "";
+
+		if (!fleet.ok) {
+			// Inspection unhealthy at fleet level: never absence evidence, but
+			// every watchable pane is blind to us — stamp the problem and
+			// stall+ping past the threshold; a later healthy tick recovers.
+			const heldMs = now() - stampProblem(record, now());
+			if (heldMs >= stallAfterMs) {
+				stalled = true;
+				reason = `herdr fleet inspection unavailable for ${Math.round(heldMs / 1000)}s`;
+			}
+		} else {
+			const sidecarOk =
+				isSubstrateChild(record) &&
+				record.sessionPath &&
+				(deps.readSidecar ?? readExitSidecar)(record.sessionPath).state ===
+					"ok";
+			const present = fleet.data.some((a) => a.paneId === record.paneId);
+			const live = fleet.data.find((a) => a.paneId === record.paneId)
+				?.agentStatus;
+			let problem = false;
+
+			if (!present && !sidecarOk) {
+				stalled = true;
+				reason = "the pane vanished without a completion sidecar";
+			} else if (
+				present &&
+				isSubstrateChild(record) &&
+				!sidecarOk &&
+				live === "working"
+			) {
+				const read = (deps.readActivity ?? readActivityFile)(
+					record.activityPath,
+				);
+				if (read.state !== "ok") {
+					problem = true;
+					const heldMs = now() - stampProblem(record, now());
+					if (heldMs >= stallAfterMs) {
+						stalled = true;
+						reason = `no usable activity snapshot for ${Math.round(heldMs / 1000)}s`;
+					}
+				}
+			}
+			// healthy presence (or a completion sidecar in hand): clear stamps
+			if (!problem && !stalled && record.watch)
+				record.watch.problemSince = undefined;
+		}
+
+		record.watch ??= {};
+		record.watch.stalled = stalled;
+		if (stalled === was) continue; // no episode edge — nothing to say
+		if (record.stance !== "autonomous") continue; // interactive: widget-only
+
+		if (stalled) {
+			push({
+				content:
+					`Agent "${record.name}" looks STALLED (${reason}). ` +
+					`Steer it with herdr_message_agent, or inspect with herdr_get_agent_result.`,
+				details: { name: record.name, kind: "stalled", reason },
+				wake: true,
+			});
+		} else {
+			push({
+				content: `Agent "${record.name}" recovered from a stall — responsive again.`,
+				details: { name: record.name, kind: "stall-recovered" },
+				wake: true,
+			});
+		}
+	}
+}
 
 // ---- the loop -----------------------------------------------------------------
 
@@ -407,7 +533,12 @@ export function registerDelivery(pi: ExtensionAPI): void {
 	};
 	const tick = async (): Promise<void> => {
 		try {
-			await deliverOnce({ push });
+			// An idle registry costs nothing — no fleet call, no passes.
+			if (spawnRecords().size === 0) return;
+			// ONE fleet observation per tick, shared by both passes.
+			const fleet = await fleetList();
+			await deliverOnce({ push, fleet });
+			await watchdogOnce({ push, fleet });
 		} catch {
 			/* best-effort */
 		}

@@ -54,6 +54,9 @@ const { herdr } = await jiti.import(join(ROOT, "src/herdr.ts"), {
 const { sessionsDirFor } = await jiti.import(join(ROOT, "src/sessionfile.ts"), {
 	parent: ROOT,
 });
+const { readActivityFile } = await jiti.import(join(ROOT, "src/status.ts"), {
+	parent: ROOT,
+});
 
 const tools = [];
 const mockPi = { registerTool: (d) => tools.push(d), on: () => {} };
@@ -147,6 +150,17 @@ try {
 			);
 			const sidecar = JSON.parse(readFileSync(v.exitPath, "utf8"));
 			check(sidecar.type === "done", "sidecar is typed done");
+
+			// The activity recorder (issue 07): the child mirrored its lifecycle
+			// into the activity sidecar — valid snapshot, settled at the end.
+			// (d.activityPath comes from the spawn result — the jiti-direct
+			// spawn.ts import here holds a DIFFERENT registry instance than the
+			// one tools/agents.ts populated.)
+			const act = readActivityFile(d.activityPath);
+			check(
+				act.state === "ok" && act.activity.phase === "waiting",
+				`activity sidecar written by the child and settled (got ${act.state}/${act.activity?.phase})`,
+			);
 		} else if (v.status === "error") {
 			// typed failure — the substrate did its job; the provider connection
 			// did not. Surface the mined message so the flake is diagnosable.

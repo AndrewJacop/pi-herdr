@@ -13,11 +13,14 @@
 // and non-pi passthrough kinds (ticket 01 ruling; research §2). For spawned
 // pi children it is never consulted.
 //
-// Statuses are COARSE interim vocabulary until ticket 07 lands the ten-state
-// projection: queued | working | idle | done | blocked | error | gone.
-// `gone` is a valid terminal answer carrying last-known registry metadata;
-// sessions are never deleted by pi-herdr, so a gone pane's session file (and
-// its result) remains readable — only the live pane is lost.
+// Statuses: the interim vocabulary IS the ten-state projection (07):
+// queued | starting | active | running | waiting | blocked for mid-flight,
+// done | error | gone as terminal answers (a pull that finds the result
+// hands it over directly — superseding the fleet's `finalizing` in-flight
+// label). `gone` is a valid terminal answer carrying last-known registry
+// metadata; sessions are never deleted by pi-herdr, so a gone pane's
+// session file (and its result) remains readable — only the live pane is
+// lost.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -31,6 +34,12 @@ import {
 import { herdr } from "../herdr.js";
 import { getAgentStatus } from "./orchestration.js";
 import {
+	projectStatus,
+	readActivityFile,
+	type ActivityRead,
+	type ProjectedStatus,
+} from "../status.js";
+import {
 	extractSessionResult,
 	minedAssistantError,
 	readExitSidecar,
@@ -41,15 +50,12 @@ import { spawnRecords, type SpawnRecord } from "../spawn.js";
 
 // ---- engine types -------------------------------------------------------------
 
-/** The coarse result-tool status (07 projects these into the ten-state set). */
-export type ResultStatus =
-	| "queued"
-	| "working"
-	| "idle"
-	| "done"
-	| "blocked"
-	| "error"
-	| "gone";
+/** The result-tool status: the ten projected states plus the two terminal
+ * pull answers (`done`/`error` — a pull that finds the result hands it over
+ * directly). In practice `finalizing` is never ANSWERED — the sidecar branch
+ * above supersedes the in-flight push label — but the view speaks the same
+ * vocabulary as the fleet. */
+export type ResultStatus = ProjectedStatus | "done" | "error";
 
 /** Structured inspection payload (tool `details`). */
 export interface ResultView {
@@ -60,6 +66,9 @@ export interface ResultView {
 	type?: string;
 	stance?: string;
 	status: ResultStatus;
+	/** `bash 7m` / `streaming 12s` — the activity snapshot's detail,
+	 * rendered as `active · bash 7m`. */
+	detail?: string;
 	/** Exact final assistant message text (pi children; source session-jsonl). */
 	result?: string;
 	/** The full last assistant message object, verbatim from the session JSONL. */
@@ -103,6 +112,8 @@ export interface GetResultDeps {
 	extract?: (sessionPath: string) => ExtractedResult | null;
 	/** Completion-sidecar read — default: readExitSidecar. */
 	readSidecar?: (sessionPath: string) => ReadSidecarResult;
+	/** Activity-sidecar read — default: readActivityFile (src/status.ts). */
+	readActivity?: (activityPath?: string) => ActivityRead;
 	sleep?: (ms: number) => Promise<void>;
 	now?: () => number;
 	pollMs?: number;
@@ -161,6 +172,28 @@ function viewBase(
 				}
 			: {}),
 	};
+}
+
+/** Read the activity sidecar through the injectable seam. */
+function activityOf(record: SpawnRecord, deps: GetResultDeps): ActivityRead {
+	return (deps.readActivity ?? readActivityFile)(record.activityPath);
+}
+
+/** The shared interim projection for a LIVE pane: one call into the 07
+ * projection so the pull tool and the fleet can't drift apart. */
+function interimProjection(
+	record: SpawnRecord,
+	deps: GetResultDeps,
+	live?: string,
+): { status: ResultStatus; detail?: string } {
+	return projectStatus(record, {
+		live,
+		absent: false,
+		unhealthy: live === undefined,
+		sidecar: false, // the sidecar branch above already handled done/error
+		activity: activityOf(record, deps),
+		now: (deps.now ?? (() => Date.now()))(),
+	});
 }
 
 /**
@@ -290,10 +323,13 @@ async function inspectRecord(
 					: {}),
 			};
 		}
-		// transient herdr error — keep the last-known-live view
+		// transient herdr error — the projected last-known-live view (the
+		// activity sidecar still tells the truth even when the CLI hiccups)
+		const proj = interimProjection(record, deps);
 		return {
 			...base,
-			status: "working",
+			status: proj.status,
+			...(proj.detail ? { detail: proj.detail } : {}),
 			interim: true,
 			note: `pane status unavailable (${live.error.message})`,
 		};
@@ -305,7 +341,7 @@ async function inspectRecord(
 
 	if (live.data === "idle" || live.data === "done") {
 		const settled = record.submitted || record.sawWorking;
-		if (!settled) return { ...base, status: "idle" };
+		if (!settled) return { ...base, status: "starting" };
 		// settled with an unconsumed result — pi children: read the JSONL.
 		if (isPi && record.sessionPath) {
 			const extracted = extract(record.sessionPath);
@@ -314,11 +350,13 @@ async function inspectRecord(
 				if (mined && record.stance === "autonomous") {
 					// A failed attempt on a LIVE autonomous pane is not yet
 					// exhaustion: the child's grace window lets pi retry. Keep
-					// polling (working); the typed payload rides along so callers
-					// see the truth.
+					// polling (non-terminal projected state); the typed payload
+					// rides along so callers see the truth.
+					const proj = interimProjection(record, deps, live.data);
 					return {
 						...base,
-						status: "working",
+						status: proj.status,
+						...(proj.detail ? { detail: proj.detail } : {}),
 						interim: true,
 						source: "session-jsonl",
 						message: extracted.message,
@@ -358,8 +396,16 @@ async function inspectRecord(
 		return inspectAdopted(target, deps, lines, base);
 	}
 
-	// working/unknown: mid-flight snapshot — pi children get the message-so-far.
-	const view: ResultView = { ...base, status: "working", interim: true };
+	// working/unknown: mid-flight — the projected vocabulary (07), with the
+	// message-so-far for pi children. (The completion sidecar was already
+	// checked above, so `sidecar: false` here is accurate, not an omission.)
+	const proj = interimProjection(record, deps, live.data);
+	const view: ResultView = {
+		...base,
+		status: proj.status,
+		...(proj.detail ? { detail: proj.detail } : {}),
+		interim: true,
+	};
 	if (isPi && record.sessionPath) {
 		const extracted = extract(record.sessionPath);
 		if (extracted) {
@@ -459,7 +505,7 @@ async function inspectAdopted(
 		};
 	return {
 		...(base ?? { target, source: "registry" as const }),
-		status: "working",
+		status: "running",
 		source: "pane-tail",
 		adopted: !base,
 		result: r.data.text,
@@ -522,18 +568,6 @@ function render(view: ResultView): ToolReturn {
 				],
 				details: view,
 			};
-		case "working":
-			return {
-				content: [
-					{
-						type: "text",
-						text: view.result
-							? `Agent "${label}" is still working — interim snapshot of its latest message so far:\n\n${view.result}`
-							: `Agent "${label}" is still working — no assistant message yet.`,
-					},
-				],
-				details: view,
-			};
 		case "blocked":
 			return {
 				content: [
@@ -544,12 +578,58 @@ function render(view: ResultView): ToolReturn {
 				],
 				details: view,
 			};
-		case "idle":
+		case "active": {
+			const detail = view.detail ? ` (${view.detail})` : "";
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Agent "${label}" is idle (prompt not yet submitted).`,
+						text: view.result
+							? `Agent "${label}" is active${detail} — interim snapshot of its latest message so far:\n\n${view.result}`
+							: `Agent "${label}" is active${detail} — no assistant message yet.`,
+					},
+				],
+				details: view,
+			};
+		}
+		case "running":
+			return {
+				content: [
+					{
+						type: "text",
+						text: view.result
+							? `Agent "${label}" is still running — interim tail of its output:\n\n${view.result}`
+							: `Agent "${label}" is still running (coarse status — no activity snapshot for this kind).`,
+					},
+				],
+				details: view,
+			};
+		case "waiting":
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Agent "${label}" is waiting — settled with its pane intentionally open (interactive stance or mid-conversation).`,
+					},
+				],
+				details: view,
+			};
+		case "starting":
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Agent "${label}" is starting up (boot window — the prompt may not be in yet).`,
+					},
+				],
+				details: view,
+			};
+		case "stalled":
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Agent "${label}" looks STALLED (its activity snapshot has been unusable while the pane reports working). It may still recover — steer with herdr_message_agent or keep polling.`,
 					},
 				],
 				details: view,
