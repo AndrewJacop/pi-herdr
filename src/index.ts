@@ -21,10 +21,16 @@ import { registerLifecycle } from "./tools/lifecycle.js";
 import { registerAgents } from "./tools/agents.js";
 import { registerPaneSync } from "./tools/sync.js";
 import { registerDelivery, stopDeliveryLoop } from "./delivery.js";
+import { registerFleetWidget } from "./widget.js";
 import { registerSelfReport } from "./selfreport.js";
 import { registerSubagentsCommand } from "./menu.js";
-import { floorError, formatVersion, MIN_HERDR_VERSION } from "./version.js";
-import { herdr, probeHerdr, refreshHerdrProbe } from "./herdr.js";
+import { refreshHerdrProbe } from "./herdr.js";
+import {
+	floorError,
+	formatVersion,
+	MIN_HERDR_VERSION,
+	type HerdrProbe,
+} from "./version.js";
 
 export default function (pi: ExtensionAPI): void {
 	// Push this pi's own state to herdr so agent_status is reliable for everyone
@@ -47,6 +53,9 @@ export default function (pi: ExtensionAPI): void {
 	// `notifications` setting (blocked always wakes).
 	registerDelivery(pi);
 	pi.on("session_shutdown", () => stopDeliveryLoop());
+	// The fleet widget (v0.6 issue 11) rides the SAME tick as a third
+	// consumer — the ambient table above the editor, read-only.
+	registerFleetWidget(pi);
 
 	// The /subagents command: settings menu + confirmed Kill-all-agents action.
 	registerSubagentsCommand(pi);
@@ -60,6 +69,10 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("session_start", (e, ctx) => {
 		if (e.reason !== "startup" && e.reason !== "reload") return;
 		refreshHerdrProbe().then((probe) => {
+			// Diagnostics-only footer (v0.6 issue 11): the fleet widget carries
+			// the agent counts; the footer keeps the version tag + failure
+			// verdicts. Set from the probe verdict — no fleet polling here.
+			ctx.ui.setStatus("pi-herdr", footerStatus(probe));
 			if (probe.state === "ok" || !ctx.hasUI) return;
 			if (probe.state === "missing") {
 				ctx.ui.notify(
@@ -72,61 +85,15 @@ export default function (pi: ExtensionAPI): void {
 			if (floor) ctx.ui.notify(floor.error.message, "error");
 		});
 	});
+}
 
-	// NFR-6: optional footer status showing the herdr fleet while orchestrating.
-	const updateStatus = (
-		setStatus: (key: string, text: string) => void,
-	): void => {
-		Promise.all([
-			herdr<{ agents?: { agent_status?: string }[] }>(["agent", "list"], {
-				timeoutMs: 5_000,
-			}),
-			probeHerdr(),
-		])
-			.then(([r, probe]) => {
-				// The probe verdict leads: below the floor the fleet call was
-				// refused (HERDR_TOO_OLD), so say that instead of "unavailable".
-				const vtag =
-					probe.state === "ok" ? ` (${formatVersion(probe.version)})` : "";
-				if (probe.state === "missing") {
-					setStatus("pi-herdr", "herdr: not installed — herdr.dev");
-					return;
-				}
-				if (probe.state === "unknown") {
-					setStatus(
-						"pi-herdr",
-						`herdr: version unknown — needs ≥ ${formatVersion(MIN_HERDR_VERSION)}`,
-					);
-					return;
-				}
-				if (probe.state === "ok" && floorError(probe)) {
-					setStatus(
-						"pi-herdr",
-						`herdr: too old (${formatVersion(probe.version)} < ${formatVersion(MIN_HERDR_VERSION)})`,
-					);
-					return;
-				}
-				if (!r.ok) {
-					setStatus("pi-herdr", `herdr: unavailable${vtag}`);
-					return;
-				}
-				const agents = r.data?.agents ?? [];
-				const working = agents.filter((a) => a.agent_status === "working").length;
-				const noun = agents.length === 1 ? "agent" : "agents";
-				setStatus(
-					"pi-herdr",
-					`herdr: ${agents.length} ${noun}${working ? ` (${working} working)` : ""}${vtag}`,
-				);
-			})
-			.catch(() => {
-				/* status is best-effort */
-			});
-	};
-
-	pi.on("agent_start", (_e, ctx) => {
-		updateStatus((k, t) => ctx.ui.setStatus(k, t));
-	});
-	pi.on("turn_end", (_e, ctx) => {
-		updateStatus((k, t) => ctx.ui.setStatus(k, t));
-	});
+/** Diagnostics-only footer (v0.6 issue 11): the fleet widget carries the
+ * agent counts; the footer keeps the version tag + failure verdicts. */
+function footerStatus(probe: HerdrProbe): string {
+	if (probe.state === "missing") return "herdr: not installed — herdr.dev";
+	if (probe.state === "unknown")
+		return `herdr: version unknown — needs ≥ ${formatVersion(MIN_HERDR_VERSION)}`;
+	if (floorError(probe))
+		return `herdr: too old (${formatVersion(probe.version)} < ${formatVersion(MIN_HERDR_VERSION)})`;
+	return `herdr ${formatVersion(probe.version)}`;
 }

@@ -39,7 +39,7 @@ It covers:
   absence of `src/tools/layout.ts` / `src/tools/introspection.ts`.
 - **Destructive labels (AC7)** — every ⚠️ tool's `description` carries the marker.
 
-Current count: **167 passed, 0 failed**.
+Current count: **175 passed, 0 failed**.
 
 ## Live QA by group
 

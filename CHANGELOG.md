@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The fleet widget: the table (v0.6 issue 11).** The orchestrator's ambient
+  view of the fleet, rendered above the editor and read-only — no affordances
+  ever ("go look" = focus the pane). One row per in-flight agent: process
+  elapsed (`MM:SS`, freezing at `finalizing`), name, the projected
+  `state · current-tool` from the activity snapshots, and the state age on
+  the right (snapshot clocks when present, a first-seen cache otherwise).
+  The header counts **active** ({active, starting, running, blocked}) vs
+  **open** (everything still tracked) and the border turns **amber when
+  active = 0** — the "your fleet is idle, look up" signal. Rows leave on
+  delivery (the table is in-flight work only, not a morgue). Blocked rows
+  additionally trigger the **callout beneath the table** with the question
+  preview (the child's last assistant message) — blocked stays the widget's
+  one loud alarm. The **footer is reduced to diagnostics**: the widget
+  displaces the agent count; the footer keeps the version tag and the
+  install/upgrade verdicts, set from the startup probe — the per-turn `herdr
+  agent list` polling is gone. No separate polling tier: the widget is the
+  third consumer of the same delivery-loop tick that feeds push delivery and
+  the watchdog (one `herdr agent list` per tick, many consumers). Offline
+  suite: `tests/widget.mjs`.
+
 - **Interrupt + resume: the lifecycle pair (v0.6 issue 10).**
   `herdr_interrupt_agent(target)` is a turn-level cancel, not a terminate: it
   sends Escape to the child pane via the existing key-send machinery and

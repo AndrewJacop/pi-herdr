@@ -127,7 +127,27 @@ const cut = [
 ];
 for (const n of cut)
 	assert(!names.includes(n), `${n} absent (cut from the surface)`);
-assert(events.agent_start?.length >= 1, "wired agent_start footer hook");
+// Self-report (src/selfreport.ts) activates only inside a herdr pane; when it
+// does, it adds session_start/agent_start/agent_settled/session_shutdown hooks
+// plus rpiv + cursor ask-blocked EventBus subscriptions.
+const selfReportActive =
+	!!process.env.HERDR_PANE_ID && process.env.HERDR_ENV === "1";
+// Footer wiring (v0.6 issue 11): the footer no longer polls the fleet per
+// turn — the widget owns the agent counts; the footer is probe-diagnostics,
+// set once at session_start alongside the widget's UI capture. agent_start
+// is self-report's (when in-pane), never the footer's.
+assert(
+	(events.agent_start?.length ?? 0) === (selfReportActive ? 1 : 0),
+	"agent_start: self-report only — the footer hook is gone",
+);
+assert(
+	!events.turn_end?.length,
+	"no turn_end footer hook (footer is probe-diagnostics)",
+);
+assert(
+	events.session_start?.length === (selfReportActive ? 3 : 2),
+	"session_start: probe verdict (footer) + widget UI capture (+self-report in-pane)",
+);
 assert(
 	commands.some((c) => c.name === "subagents"),
 	"registered the /subagents config command",
@@ -136,12 +156,6 @@ assert(
 	!commands.some((c) => c.name === "herdr"),
 	"the /herdr command is gone (renamed /subagents)",
 );
-assert(events.turn_end?.length === 1, "wired turn_end footer hook");
-// Self-report (src/selfreport.ts) activates only inside a herdr pane; when it
-// does, it adds session_start/agent_start/agent_settled/session_shutdown hooks
-// plus rpiv + cursor ask-blocked EventBus subscriptions.
-const selfReportActive =
-	!!process.env.HERDR_PANE_ID && process.env.HERDR_ENV === "1";
 if (selfReportActive) {
 	assert(
 		(events.session_start?.length ?? 0) >= 1,

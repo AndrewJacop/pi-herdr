@@ -88,7 +88,7 @@ server. If herdr is missing or not running, every tool returns a clean
 > 0.9.0 is the release that fixed Windows `agent start --kind` (shim launch +
 > flaky process-tree detection), which is what lets every platform share ONE
 > launch path. Above the floor the probe keeps reporting for diagnostics: the
-> detected version shows in the footer, e.g. `herdr: 3 agents (1 working) (0.9.0)`.
+> detected version shows in the footer, e.g. `herdr 0.9.4`.
 
 > ⚠️ **macOS — do not manage herdr with `brew services`.** `brew services` runs the
 > herdr server under launchd, which gives it macOS's *minimal* PATH
@@ -158,7 +158,11 @@ Spawn a background agent to summarize README.md in 3 bullets, wait for it, and g
 ```
 
 You'll see a new pane appear in herdr, the spawned agent work, and pi return its
-answer. While orchestrating, pi's footer shows the fleet, e.g. `herdr: 3 agents (1 working) (0.9.0)`.
+answer. While orchestrating, the fleet widget above the editor shows every
+in-flight agent — elapsed, name, projected `state · tool`, state age — with
+the header counting `N active · M open` (amber border when nothing is active)
+and a loud callout beneath the table when an agent is blocked on a question.
+The footer keeps diagnostics only (version tag, install/upgrade verdicts).
 
 ---
 
@@ -539,7 +543,8 @@ The extension is TypeScript loaded via jiti — **no build step**. Edit `src/` a
 
 ```text
 src/
-  index.ts               # entry; registers the 11-tool surface + footer status + self-report
+  index.ts               # entry; registers the 11-tool surface + diagnostics footer + self-report
+  widget.ts              # the fleet widget (table + blocked callout), a consumer of the delivery tick
   herdr.ts               # the one spawn module (envelope parse, timeouts, errors, version probe + floor gate)
   version.ts             # pure version-floor logic (parse/compare/HERDR_TOO_OLD)
   config.ts              # binary resolution + live agent-kind list (env + PATH)

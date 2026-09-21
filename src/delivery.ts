@@ -50,6 +50,7 @@ import {
 	STALL_AFTER_MS,
 	type ActivityRead,
 } from "./status.js";
+import { fleetWidgetOnce } from "./widget.js";
 import { spawnRecords, type DeliveryKind, type SpawnRecord } from "./spawn.js";
 
 // ---- types -----------------------------------------------------------------
@@ -533,12 +534,18 @@ export function registerDelivery(pi: ExtensionAPI): void {
 	};
 	const tick = async (): Promise<void> => {
 		try {
-			// An idle registry costs nothing — no fleet call, no passes.
-			if (spawnRecords().size === 0) return;
-			// ONE fleet observation per tick, shared by both passes.
+			// An idle registry costs nothing — no fleet call. But a stale
+			// widget must not outlive its fleet: clear it on the way out.
+			if (spawnRecords().size === 0) {
+				await fleetWidgetOnce();
+				return;
+			}
+			// ONE fleet observation per tick, shared by every pass (deliver,
+			// watchdog, widget — the one-poll-loop-many-consumers ruling).
 			const fleet = await fleetList();
 			await deliverOnce({ push, fleet });
 			await watchdogOnce({ push, fleet });
+			await fleetWidgetOnce({ fleet });
 		} catch {
 			/* best-effort */
 		}
