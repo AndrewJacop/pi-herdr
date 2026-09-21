@@ -20,6 +20,8 @@ import { registerMessageTool } from "./tools/message.js";
 import { registerLifecycle } from "./tools/lifecycle.js";
 import { registerAgents } from "./tools/agents.js";
 import { registerPaneSync } from "./tools/sync.js";
+import { registerWorkflowTool } from "./tools/workflow.js";
+import { stopAllWorkflowRuns } from "./workflow/runs.js";
 import { registerDelivery, stopDeliveryLoop } from "./delivery.js";
 import { registerFleetWidget } from "./widget.js";
 import { registerSelfReport } from "./selfreport.js";
@@ -46,13 +48,21 @@ export default function (pi: ExtensionAPI): void {
 	registerLifecycle(pi);
 	registerAgents(pi);
 	registerPaneSync(pi);
+	// Scripted workflows (v0.6 issue 12): herdr_run_workflow — the vm runtime +
+	// host seam. `workflows_enabled: false` refuses new runs (a gate, not a stop).
+	registerWorkflowTool(pi);
 
 	// Push delivery (v0.6 issue 06): the shared poll loop watches the spawn
 	// registry and steers terminal events into THIS session — full final
 	// messages, takeover notes, blocked wakes — with wake governed by the
 	// `notifications` setting (blocked always wakes).
 	registerDelivery(pi);
-	pi.on("session_shutdown", () => stopDeliveryLoop());
+	pi.on("session_shutdown", () => {
+		stopDeliveryLoop();
+		// Workflow runs do not outlive their session (issue 12): terminate the
+		// workers; the run signal's abort closes the in-flight children host-side.
+		stopAllWorkflowRuns();
+	});
 	// The fleet widget (v0.6 issue 11) rides the SAME tick as a third
 	// consumer — the ambient table above the editor, read-only.
 	registerFleetWidget(pi);

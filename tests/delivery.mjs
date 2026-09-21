@@ -809,6 +809,70 @@ console.log("\n[3] Delivery loop — detection routes + wake flags");
 		rmSync(dir, { recursive: true, force: true });
 	}
 
+	// --- workflow children (v0.6 issue 12): the run reports, not the child --
+	{
+		// terminal sidecar → delivery marked (row leaves the fleet) but NO push
+		const dir = mkdtempSync(join(tmpdir(), "pi-herdr-dlv-wf-"));
+		const sess = join(dir, "s.jsonl");
+		writeSession(sess, [assistantMsg("child work")]);
+		writeFileSync(sf.sidecarPathFor(sess), '{"type":"done"}');
+		const child = rec("wfa", { sessionPath: sess, workflow: "wf_abc123" });
+		const w = world([child], { fleet: [] });
+		await w.tick();
+		assert(
+			w.pushes.length === 0 && child.delivery?.kind === "done",
+			"a workflow child's terminal sidecar MARKS the record (row prunes) without a per-child push",
+		);
+		// ...and the error sidecar is equally silent
+		const dir2 = mkdtempSync(join(tmpdir(), "pi-herdr-dlv-wf2-"));
+		const sess2 = join(dir2, "s.jsonl");
+		writeSession(sess2, [assistantMsg("boom", { stopReason: "error" })]);
+		writeFileSync(
+			sf.sidecarPathFor(sess2),
+			'{"type":"error","errorMessage":"provider overloaded","stopReason":"error"}',
+		);
+		const failing = rec("wfb", { sessionPath: sess2, workflow: "wf_abc123" });
+		const w2 = world([failing], { fleet: [] });
+		await w2.tick();
+		assert(
+			w2.pushes.length === 0 && failing.delivery?.kind === "error",
+			"a workflow child's error sidecar is silent too (the run's report carries it)",
+		);
+		// blocked still wakes — the orchestrator can answer and resume the child
+		const blocked = rec("wfc", { sessionPath: join(tmpdir(), "wf-nope.jsonl"), workflow: "wf_abc123" });
+		const w3 = world([blocked], { fleet: [{ paneId: blocked.paneId, status: "blocked" }] });
+		await w3.tick();
+		assert(
+			w3.pushes.length === 1 && w3.pushes[0].details.kind === "blocked" && w3.pushes[0].wake === true,
+			"a BLOCKED workflow child still wakes (an answer via message_agent resumes it)",
+		);
+		// gone (bounded grace expiry) marks without a push
+		const vanished = rec("wfd", { sessionPath: join(tmpdir(), "wf-nope2.jsonl"), workflow: "wf_abc123" });
+		const w4 = world([vanished], { fleet: [] });
+		await w4.tick();
+		w4.advance(10_001);
+		await w4.tick();
+		assert(
+			w4.pushes.length === 0 && vanished.delivery?.kind === "gone",
+			"a workflow child that vanishes is marked gone without a per-child push",
+		);
+		// an ordinary child in the SAME registry still pushes normally
+		const dir3 = mkdtempSync(join(tmpdir(), "pi-herdr-dlv-wf3-"));
+		const sess3 = join(dir3, "s.jsonl");
+		writeSession(sess3, [assistantMsg("plain work")]);
+		writeFileSync(sf.sidecarPathFor(sess3), '{"type":"done"}');
+		const plain = rec("plain", { sessionPath: sess3 });
+		const w5 = world([plain, rec("midflight-wf", { sessionPath: join(tmpdir(), "wf-nope3.jsonl"), workflow: "wf_x" })], {
+			fleet: [{ paneId: "w1:midflight-wf", status: "working" }],
+		});
+		await w5.tick();
+		assert(
+			w5.pushes.length === 1 && w5.pushes[0].details.name === "plain",
+			"ordinary children in the same registry keep their completion pushes",
+		);
+		for (const d of [dir, dir2, dir3]) rmSync(d, { recursive: true, force: true });
+	}
+
 	// --- registration smoke: sink maps wake → sendMessage flags ------------
 	{
 		delivery.stopDeliveryLoop();

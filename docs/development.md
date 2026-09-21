@@ -15,7 +15,7 @@ npm test              # offline suite (tests/smoke.mjs + per-area suites incl. t
 `tests/smoke.mjs` is the offline gate. It does **not** require a running herdr server.
 It covers:
 
-- **Extension load + tool registration** — exactly the **9** kept tools register
+- **Extension load + tool registration** — exactly the **10** kept tools register
   with the expected names (and every cut tool is asserted absent), each has a
   `parameters` schema and an `execute()`, and the self-report hooks wire up
   when running inside herdr.
@@ -39,7 +39,11 @@ It covers:
   absence of `src/tools/layout.ts` / `src/tools/introspection.ts`.
 - **Destructive labels (AC7)** — every ⚠️ tool's `description` carries the marker.
 
-Current count: **175 passed, 0 failed**.
+Current count: **178 passed, 0 failed**. Per-area suites (each with its own
+`node tests/<area>.mjs` runner): `substrate` (89), `settings` (111),
+`launchplan` (77), `modes` (31), `spawn` (121), `agentfiles` (71), `message`
+(45), `lifecycle` (71), `delivery` (68), `status` (86), `widget` (51),
+`workflow` (118 — runtime + host seam + runs/tool, issue 12).
 
 ## Live QA by group
 

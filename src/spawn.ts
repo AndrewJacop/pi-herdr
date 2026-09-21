@@ -598,6 +598,11 @@ export interface SpawnRecord {
 	 * inline spawn, deleted .md). Frontmatter pins are the spawn-time
 	 * snapshot; routing levels 3–5 still resolve against CURRENT settings. */
 	definition?: SpawnSpec;
+	/** Workflow run id (v0.6 issue 12): the child belongs to a herdr_run_workflow
+	 * run — the RUN reports for its children (one aggregated completion push),
+	 * so per-child terminal pushes are suppressed and issue 14's card rehomes
+	 * the rows. */
+	workflow?: string;
 	/** Message-less resume (issue 10): the boot IS the handoff — the
 	 * original prompt must NOT be resubmitted. Rides the record so the
 	 * queue drain's startRecordNow stays silent too. */

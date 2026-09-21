@@ -72,6 +72,9 @@ const expected = [
 	"herdr_resume_agent",
 	// the fleet's single introspection tool
 	"herdr_list_agents",
+	// the scripted workflow runner (issue 12) — surface 9 → 10; 13/14 converge
+	// the count toward 12
+	"herdr_run_workflow",
 	// the pane-sync quartet
 	"herdr_run_command",
 	"herdr_read_pane",

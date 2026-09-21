@@ -12,12 +12,12 @@ works, wait for it to finish, and harvest its response — all from your pi
 session. Each spawned agent is an independent CLI process you can watch, attach
 to, and intervene in while pi coordinates them.
 
-The v0.6 surface is deliberately small: **one surface, nine tools today**
-(spawn, save, result, message, list, and the pane quartet), converging to
-**twelve** as the remaining v0.6 tickets land (`interrupt`/`resume`,
-`run_workflow`). Everything else — layout, tab/workspace CRUD, worktrees,
-fleet introspection — is machinery you never have to switch to: the herdr UI
-stays the human's surface for that.
+The v0.6 surface is deliberately small: **one surface, ten tools today**
+(spawn, save, result, message, list, run_workflow, and the pane quartet),
+converging to **twelve** as the remaining v0.6 tickets land. Everything
+else — layout, tab/workspace CRUD, worktrees, fleet introspection — is
+machinery you never have to switch to: the herdr UI stays the human's surface
+for that.
 
 > **Complementary to [`pi-subagents`](https://www.npmjs.com/package/pi-subagents):**
 > `pi-subagents` runs children **in-process** (fast, shared context). `pi-herdr`
@@ -391,6 +391,32 @@ run re-enters every supervision path as any spawn. Same gates, same honest
 limit: the session file is the whole truth — anything that lived only in the
 dead process is gone.
 
+### Scripted workflows
+
+| Tool | What it does |
+| --- | --- |
+| `herdr_run_workflow` | Run a small sandboxed JavaScript program in the background that fans out real agents: `agent(prompt, opts)` spawns one pi child and resolves to its exact final text; `pipeline(items, ...stages)` (no barrier) and `parallel(thunks)` (barrier) coordinate many; `phase()`, `log()`, `args`, `budget` round out the globals. Returns immediately — one aggregated completion push lands when the run settles. |
+
+The script is the coordinator, not a worker: it has no filesystem, no
+network, no `eval`, and `Date.now()` / `new Date()` / `Math.random()` throw
+(runs must be replayable — issue 13's resume journal is what replay buys).
+Every `agent()` spawns a real pane through the ordinary gates (kill-switch →
+depth → parallel cap, over-cap = queued — no separate pool), options mapped:
+`agentType` → registry type (pi-kind pinned), `model` → the routing chain
+(exact IDs, enforce-or-error), `effort` → thinking, `isolation: "worktree"` →
+herdr-side worktree, `gate` → a shell command that must pass after settle
+(failure = a typed agent error), `resume: label` → the resume machinery on
+the retained session. A failed `agent()` resolves to `null` — scripts
+`.filter(Boolean)`; an un-awaited one fails the run. The workflow's children
+report to the run, not the session: the run sends exactly one aggregated
+completion push, and a blocked child still wakes you (answer it with
+`herdr_message_agent` and the run continues). The tool takes an inline
+`script` or a `scriptPath` (scratch copy reported back — edit it and re-run);
+saved names + the resume journal arrive with the next workflows ticket.
+Stopping a run = the kill-all menu action; `workflows_enabled: false`
+removes the tool from the surface (evaluated at load) and refuses new runs
+after a mid-session toggle.
+
 ### Fleet introspection
 
 | Tool | What it does |
@@ -407,6 +433,7 @@ dead process is gone.
 | `herdr_send_keys` ⚠️ | Send logical key presses (`ctrl+c`, `esc`, `Enter`) — interrupts, option-list answers. |
 
 Per-tool reference: [docs/tools/orchestration.md](docs/tools/orchestration.md) ·
+[docs/tools/workflow.md](docs/tools/workflow.md) ·
 [docs/tools/pane-sync.md](docs/tools/pane-sync.md) ·
 [docs/concepts.md](docs/concepts.md).
 
@@ -481,7 +508,7 @@ key (and per agent name for `models.agents`):
 | `max_spawn_depth` | `2` | Guard against runaway recursive fleets. |
 | `notifications` | `"normal"` | Wake behavior when a spawned agent completes: `normal` = the full result is steered in and the session wakes; `quiet` = delivered on the next natural turn, no wake; `none` = no pushes at all (pull-only). A blocked agent always wakes, whatever this is set to. |
 | `idle_rearm_minutes` | `15` | After a user takeover, minutes of quiet (any keystroke resets) before the agent's latest final message auto-delivers — labeled *auto-delivered after user steer* — and its pane closes. The timer starts on settle, never mid-work; the session file is retained for resume. |
-| `workflows_enabled` | `true` | Register the workflow tool (consumed by the workflows ticket). A gate on new runs only. |
+| `workflows_enabled` | `true` | `false` removes `herdr_run_workflow` from the surface (evaluated at load) and refuses new runs after a mid-session toggle — never stops one in flight. |
 
 Every key is read at the moment it matters, so menu edits take effect on the
 next operation — no restart needed. Malformed JSON in a settings file is
@@ -491,7 +518,7 @@ the menu never overwrites a file it can't parse. The v0.5 `surface` and
 
 ## Upgrading v0.5 → v0.6
 
-**Breaking: the tool surface was cut from 43 to one deliberate surface** (9
+**Breaking: the tool surface was cut from 43 to one deliberate surface** (10
 tools today, 12 at v0.6 completion), and `/herdr` became `/subagents config`.
 Removed tools and their replacements:
 
@@ -602,6 +629,19 @@ pi-herdr keeps the thin slices it needs internally:
 - **Tested on Windows and macOS** (see [Platform support](#platform-support)).
 - Self-report is pi-only; heterogeneous (claude/codex) completion relies on herdr's
   auto-detect (also caught by the `agent get` polling fallback).
+
+## Acknowledgements
+
+The workflow runtime is ported from
+[`tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
+(MIT): `src/workflow/runtime.ts`, `src/workflow/worker-source.ts`, and
+`src/workflow/meta.ts` are near-verbatim ports of its `src/workflow/` core —
+the vm worker bootstrap, the determinism jail, the caps table, the
+un-awaited-launch ruling, and the `meta` pre-parse — with pi-herdr trims
+marked in each file's header (no separate concurrency pool, journal/control/
+schema deferred to the following tickets). The host seam, run lifecycle, and
+tool surface are pi-herdr's own. One borrowed error message (the
+un-awaited-launch ruling) is kept verbatim upstream by design.
 
 ## License
 

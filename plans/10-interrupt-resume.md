@@ -100,8 +100,8 @@ Docs honesty: resume replays the session file; nothing that lived only in the de
 - [x] 7. Wire registrations (`src/index.ts`); `node tests/lifecycle.mjs` green, `npm run typecheck` clean, full `npm test`
 - [x] 8. `tests/lifecycle-live.mjs`: interrupt→stop-and-redirect (working child → escape → `interrupted` row → message → active → completes) and one crash→`gone`→resume→push round-trip; run against a live herdr session. **Pane hygiene (user rule, pinned in the test):** every opened pane id goes into a tracked list and a `finally` block closes them all (push-live.mjs's `cleanupPanes` pattern) — no panes left hanging. **Concurrency cap (user rule):** scenarios run strictly sequentially, never more than 2 child agents live beside the orchestrator (test settings pin `max_parallel_agents: 2`); the resume round-trip starts only after the interrupt scenario's child is closed.
 - [x] 9. README + CHANGELOG
-- [ ] 10. `/code-review` the work; fix findings
-- [ ] 11. Commit to the current branch
+- [x] 10. `/code-review` the work; fix findings
+- [x] 11. Commit to the current branch
 
 ## Verification
 

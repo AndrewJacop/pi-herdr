@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scripted workflows: the vm runtime + host seam (v0.6 issue 12).**
+  `herdr_run_workflow(script | scriptPath, args?)` runs a small JavaScript
+  program in the background inside a Node `vm` sandbox — no filesystem, no
+  network, no `eval` — whose `agent(prompt, opts)` spawns real herdr panes
+  and resolves to each child's exact final message (session JSONL), with
+  `pipeline` (barrier-free staged fan-out), `parallel` (barrier), `phase()`,
+  `log()`, `args`, and `budget` (`total` always `null`; `spent()` honestly
+  `Infinity` until the budget ticket) around it. The runtime core, worker
+  bootstrap, caps table (1000 agents/run, 4096 items/call, 512 KiB scripts),
+  determinism jail (`Date.now()`/`new Date()`/`Math.random()` throw — runs
+  must be replayable), and the un-awaited-`agent()` failure ruling are
+  **ported from tintinweb/pi-subagents** (MIT — provenance headers on every
+  ported file + a README acknowledgement); the host seam is pi-herdr's:
+  `agentType` → registry type (pi-kind pinned), `model`/`effort` → the
+  routing chain (exact IDs, enforce-or-error naming the level, per-agent
+  refusal), `isolation: "worktree"` → herdr-side worktrees, `gate` → a shell
+  command that must pass after settle (failure = a typed agent error),
+  `resume: label` → the resume machinery on the retained session.
+  Concurrency flows through the ordinary gates (kill-switch → depth →
+  cap=queue — no separate pool). Children report to the run, not the
+  session: per-child terminal pushes are suppressed and the run steers ONE
+  aggregated completion push (counts, return value, log lines; wake per
+  `notifications`, failures always wake); a blocked child still wakes you —
+  answer with `herdr_message_agent` and the run continues. The tool returns
+  immediately (run id + scratch path — the edit-and-re-run loop);
+  `workflows_enabled: false` removes the tool from the surface (evaluated at
+  load) and refuses new runs after a mid-session toggle — never stops one in
+  flight. Surface 9 → 10. Offline suite `tests/workflow.mjs` (runtime against a
+  stub host, host mapping, delivery suppression, tool gate); live suite
+  `tests/workflow-live.mjs` (one 3-agent pipeline fan-out completes and
+  reports, zero panes left open).
+
 - **The fleet widget: the table (v0.6 issue 11).** The orchestrator's ambient
   view of the fleet, rendered above the editor and read-only — no affordances
   ever ("go look" = focus the pane). One row per in-flight agent: process

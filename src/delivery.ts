@@ -178,8 +178,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 		// --- never started (a queued record failed in the drain loop, after
 		// the spawn tool had already returned "queued")
 		if (record.startError) {
-			markTerminal(record, "start-error", now);
-			push({
+			deliverTerminal(deps, record, "start-error", {
 				content: `Agent "${record.name}" never started: ${record.startError}`,
 				details: { name: record.name, kind: "start-error" },
 				wake: terminalWake(notifications(deps)),
@@ -217,10 +216,11 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 					// the sentinel: a sidecar-less death whose last message is
 					// still deliverable (typed error when stopReason=error)
 					const mined = minedAssistantError(extracted.message);
-					markTerminal(record, mined ? "error" : "done", now);
 					if (mined) {
-						pushTerminal(
+						deliverTerminal(
 							deps,
+							record,
+							"error",
 							{
 								content: errorContent(record, mined.errorMessage, extracted, false),
 								details: {
@@ -232,11 +232,12 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 								},
 								wake: terminalWake(notifications(deps)),
 							},
-							notifications(deps),
 						);
 					} else {
-						pushTerminal(
+						deliverTerminal(
 							deps,
+							record,
+							"done",
 							{
 								content: doneContent(record, extracted, false),
 								details: {
@@ -248,22 +249,21 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 								},
 								wake: terminalWake(notifications(deps)),
 							},
-							notifications(deps),
 						);
 					}
 					continue;
 				}
 			}
 			// route 3: nothing on disk — an honest gone note (session retained)
-			markTerminal(record, "gone", now);
-			pushTerminal(
+			deliverTerminal(
 				deps,
+				record,
+				"gone",
 				{
 					content: goneContent(record),
 					details: { name: record.name, kind: "gone" },
 					wake: terminalWake(notifications(deps)),
 				},
-				notifications(deps),
 			);
 			continue;
 		}
@@ -301,16 +301,16 @@ function deliverSidecar(
 	sidecar: { type: "done"; rearm?: true } | { type: "error"; errorMessage: string; stopReason: string; rearm?: true },
 	deps: DeliveryDeps,
 ): void {
-	const now = deps.now ?? (() => Date.now());
 	const notes = notifications(deps);
 	const extracted = record.sessionPath
 		? (deps.extract ?? extractSessionResult)(record.sessionPath)
 		: null;
 	const rearm = sidecar.rearm === true;
 	if (sidecar.type === "done") {
-		markTerminal(record, "done", now);
-		pushTerminal(
+		deliverTerminal(
 			deps,
+			record,
+			"done",
 			{
 				content: doneContent(record, extracted, rearm),
 				details: {
@@ -323,13 +323,13 @@ function deliverSidecar(
 				},
 				wake: terminalWake(notes),
 			},
-			notes,
 		);
 		return;
 	}
-	markTerminal(record, "error", now);
-	pushTerminal(
+	deliverTerminal(
 		deps,
+		record,
+		"error",
 		{
 			content: errorContent(record, sidecar.errorMessage, extracted, rearm),
 			details: {
@@ -342,7 +342,6 @@ function deliverSidecar(
 			},
 			wake: terminalWake(notes),
 		},
-		notes,
 	);
 }
 
@@ -350,6 +349,51 @@ function deliverSidecar(
 
 function markTerminal(record: SpawnRecord, kind: DeliveryKind, now: () => number): void {
 	record.delivery = { kind, at: now() };
+}
+
+/**
+ * Mark a record's terminal event, then steer it — UNLESS the record belongs to
+ * a workflow run (v0.6 issue 12): the RUN reports for its children, so the
+ * per-child push is suppressed while the delivery mark (row leaves the fleet,
+ * one event per record) still happens. Takeover notes and blocked wakes are
+ * NOT routed through here — a blocked workflow child still wakes the
+ * orchestrator, whose answer via herdr_message_agent resumes it.
+ */
+function deliverTerminal(
+	deps: DeliveryDeps,
+	record: SpawnRecord,
+	kind: DeliveryKind,
+	msg: SteeredMessage,
+): void {
+	markTerminal(record, kind, deps.now ?? (() => Date.now()));
+	if (record.workflow) return;
+	pushTerminal(deps, msg, notifications(deps));
+}
+
+/**
+ * Build the steer sink for a session: pi.sendMessage with delivery's exact
+ * envelope (`herdr-delivery`, wake → steer/nextTurn flags). ONE factory so
+ * every consumer (the delivery loop, the workflow run's completion report)
+ * cannot drift apart.
+ */
+export function makeDeliverySink(pi: ExtensionAPI): (msg: SteeredMessage) => void {
+	return (msg: SteeredMessage): void => {
+		try {
+			pi.sendMessage(
+				{
+					customType: "herdr-delivery",
+					content: msg.content,
+					display: true,
+					details: msg.details,
+				},
+				msg.wake
+					? { triggerTurn: true, deliverAs: "steer" }
+					: { triggerTurn: false, deliverAs: "nextTurn" },
+			);
+		} catch {
+			/* best-effort — delivery must never break its caller */
+		}
+	};
 }
 
 function notifications(deps: DeliveryDeps): HerdrSettings["notifications"] {
@@ -515,23 +559,7 @@ let deliveryTimer: NodeJS.Timeout | null = null;
  */
 export function registerDelivery(pi: ExtensionAPI): void {
 	if (deliveryTimer) return;
-	const push = (msg: SteeredMessage): void => {
-		try {
-			pi.sendMessage(
-				{
-					customType: "herdr-delivery",
-					content: msg.content,
-					display: true,
-					details: msg.details,
-				},
-				msg.wake
-					? { triggerTurn: true, deliverAs: "steer" }
-					: { triggerTurn: false, deliverAs: "nextTurn" },
-			);
-		} catch {
-			/* best-effort — delivery must never break the loop */
-		}
-	};
+	const push = makeDeliverySink(pi);
 	const tick = async (): Promise<void> => {
 		try {
 			// An idle registry costs nothing — no fleet call. But a stale
