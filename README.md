@@ -410,9 +410,16 @@ the retained session. A failed `agent()` resolves to `null` — scripts
 `.filter(Boolean)`; an un-awaited one fails the run. The workflow's children
 report to the run, not the session: the run sends exactly one aggregated
 completion push, and a blocked child still wakes you (answer it with
-`herdr_message_agent` and the run continues). The tool takes an inline
-`script` or a `scriptPath` (scratch copy reported back — edit it and re-run);
-saved names + the resume journal arrive with the next workflows ticket.
+`herdr_message_agent` and the run continues). Source comes from an inline
+`script`, a `scriptPath`, or a saved `name` — `<name>.js` looked up in
+`.pi/workflows/` → `.agents/workflows/` → the agent dir's `workflows/`, first
+hit wins, and the `export const meta = { name, description }` literal (a
+validation rule, pre-parsed before anything runs) is what marks a file as a
+workflow. Every run journals each settled `agent()` call beside its scratch
+script as `<run id>.workflow.jsonl`; re-running with `resumeFromRunId` replays
+the unchanged prefix from that journal — an edited suffix pays only the delta,
+a journaled failure ends the prefix (resuming retries from the failure), and a
+run that used `agent({ resume })` is never replayed. Same session only.
 Stopping a run = the kill-all menu action; `workflows_enabled: false`
 removes the tool from the surface (evaluated at load) and refuses new runs
 after a mid-session toggle.
@@ -638,8 +645,10 @@ The workflow runtime is ported from
 `src/workflow/meta.ts` are near-verbatim ports of its `src/workflow/` core —
 the vm worker bootstrap, the determinism jail, the caps table, the
 un-awaited-launch ruling, and the `meta` pre-parse — with pi-herdr trims
-marked in each file's header (no separate concurrency pool, journal/control/
-schema deferred to the following tickets). The host seam, run lifecycle, and
+marked in each file's header (no separate concurrency pool, run control and
+schema deferred to the following tickets). Issue 13 added `src/workflow/journal.ts`
+(the resume journal and prefix replay) and `src/workflow/saved.ts` (saved-workflow
+discovery), ported on the same terms. The host seam, run lifecycle, and
 tool surface are pi-herdr's own. One borrowed error message (the
 un-awaited-launch ruling) is kept verbatim upstream by design.
 

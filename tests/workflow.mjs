@@ -1140,7 +1140,7 @@ console.log("\n[18] runs.ts + the tool — background lifecycle, gate, scratch f
 		const { pi, tools } = mockPi();
 		wfTool.registerWorkflowTool(pi, { load: () => settings(true) });
 		const missing = await tools[0].execute("t6", { scriptPath: "D:/nope/missing.js" }, undefined, undefined, undefined);
-		assert(missing.isError && missing.details.error.message.includes("could not read scriptPath"), "an unreadable scriptPath refuses cleanly");
+		assert(missing.isError && missing.details.error.message.includes("Could not read workflow script"), "an unreadable scriptPath refuses cleanly");
 	}
 }
 

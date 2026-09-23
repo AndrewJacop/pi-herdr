@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scripted workflows: the resume journal + saved workflows (v0.6 issue 13).**
+  Every `herdr_run_workflow` run journals each settled `agent()` call beside
+  its scratch script as `<run id>.workflow.jsonl`; re-running with
+  `resumeFromRunId` replays the **unchanged prefix** of that journal — an
+  edited suffix pays only the delta, a journaled failure ends the prefix
+  (resuming retries exactly the failed agent), and a run that used
+  `agent({ resume })` is never replayed (a replayed child leaves no
+  conversation to continue). Same session only, like the run itself. A run
+  with no source of its own re-runs the prior run's script file. Replayed
+  rows are flagged in the progress log and the completion push counts them
+  ("N replayed from …"). Source can also be a saved `name`: `<name>.js`
+  discovered in `.pi/workflows/` → `.agents/workflows/` → the agent dir's
+  `workflows/` (first hit wins), with the pure-literal
+  `export const meta = { name, description }` block as the marker — a
+  validation rule, pre-parsed before anything runs, not a convention. A
+  meta-less file at the winning path refuses as "not a workflow" instead of
+  being silently skipped. Saved names light up nested `workflow()` too:
+  a script can call another saved workflow (one level) inline. Journal,
+  discovery, and the meta pre-parse are **ported from
+  tintinweb/pi-subagents** (MIT — same provenance terms). Offline suite
+  `tests/workflow-journal-saved.mjs` chained into `npm test`.
+
 - **Scripted workflows: the vm runtime + host seam (v0.6 issue 12).**
   `herdr_run_workflow(script | scriptPath, args?)` runs a small JavaScript
   program in the background inside a Node `vm` sandbox — no filesystem, no

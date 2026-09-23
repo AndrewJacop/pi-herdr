@@ -6,17 +6,20 @@
  * pi-herdr trims, all decided by the v0.6 issue-12 ruling — provenance kept in
  * this header per the honesty ruling; see the README acknowledgement:
  *
- *   1. **No journal** — replay/record state, `replayedCount` and the
- *      replay-before-semaphore branch are issue 13's port.
- *   2. **No run control** — `WorkflowControl` (pause/skip/retry) belongs to
+ *   1. **No run control** — `WorkflowControl` (pause/skip/retry) belongs to
  *      the FleetView inspector, deferred post-v0.6; stopping a run is the
- *      kill-switch / card action (card = issue 14).
- *   3. **No schema** — structured output is issue 14's stretch; the worker
- *      names it as an unsupported option.
- *   4. **No separate pool** — `workflowConcurrency()` (cpus-derived) is not
+ *      kill-switch / card action (card = issue 14). Without control there are
+ *      no skip/retry intents, so the journal has no skipped-call recording.
+ *   2. **No schema** — structured output is issue 14's stretch; the worker
+ *      names it as an unsupported option, and `journalKey` has no schema slot.
+ *   3. **No separate pool** — `workflowConcurrency()` (cpus-derived) is not
  *      ported; the run's semaphore is `Infinity` and pacing flows through the
  *      ordinary spawn gates (cap/queue/kill-switch/depth). The Semaphore is
- *      kept as the mechanism; `Infinity` is the value.
+ *      kept as the mechanism; `Infinity` is the value. With nothing ever
+ *      parked, upstream's replay-before-semaphore branch collapses into a
+ *      replay at the top of {@link handleAgent}.
+ *   4. **No token accounting** — `budget.spent()` reports honest `Infinity`;
+ *      usage is not yet recoverable from the pi session substrate.
  *
  * Owns the worker lifecycle, the RPC bridge, the per-run caps, and the
  * progress log. The script's only route to an agent is a `call` message
@@ -32,10 +35,18 @@
 
 import { Worker } from "node:worker_threads";
 import { extractMeta, type WorkflowMeta } from "./meta.js";
+import {
+	type JournalKeyInput,
+	journalKey,
+	type WorkflowJournalEntry,
+} from "./journal.js";
 import { WORKER_SOURCE } from "./worker-source.js";
 
 /** Matches the `script` field's size check — 512 KiB. */
 export const MAX_SCRIPT_LENGTH = 524_288;
+
+/** Matches the `resumeFromRunId` field — `wf_` + lowercase id characters. */
+export const RUN_ID_PATTERN = "^wf_[a-z0-9-]{6,}$";
 
 /** Agents one run may schedule, in total. */
 export const WORKFLOW_AGENT_CAP = 1000;
@@ -191,6 +202,19 @@ export interface RunWorkflowOptions {
 	 * {@link agentCap}.
 	 */
 	nestedCap?: number;
+	/**
+	 * Replay and record, for `resumeFromRunId` (issue 13).
+	 *
+	 * The runtime does no file IO — `entries` come in already read and `append`
+	 * goes back out — so its tests stay free of a filesystem, the same reason
+	 * spawning is behind {@link WorkflowHost}.
+	 */
+	journal?: {
+		/** A previous run's settled calls, in position order. Empty replays nothing. */
+		entries?: readonly WorkflowJournalEntry[];
+		/** Called as each call of *this* run settles, so it can be resumed in turn. */
+		append?(entry: WorkflowJournalEntry): void;
+	};
 }
 
 export interface WorkflowRunResult {
@@ -203,6 +227,8 @@ export interface WorkflowRunResult {
 	progress: WorkflowEntry[];
 	/** Agents scheduled, including those that failed. */
 	agentCount: number;
+	/** How many of those came back from the journal instead of being spawned. */
+	replayedCount: number;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -240,6 +266,8 @@ export interface WorkflowAgentEntry {
 	resultPreview?: string;
 	error?: string;
 	skipped?: boolean;
+	/** Set when the answer came from the resume journal, not a live child. */
+	cached?: boolean;
 }
 
 export type WorkflowEntry =
@@ -499,6 +527,36 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 	let aborted = false;
 	let settled = false;
 
+	/* --- resume journal (issue 13) --------------------------------------- */
+
+	const journalEntries = options.journal?.entries ?? [];
+	const recordJournal = options.journal?.append;
+	/**
+	 * Whether the replayable prefix is still intact.
+	 *
+	 * Once a position misses — different key, a journaled failure, or nothing
+	 * recorded there — every later call runs live, however well it matches.
+	 * See the header of journal.ts for why this is a prefix and not a lookup.
+	 */
+	// A journal from a run that used `agent({ resume })` is declined whole: see
+	// journal.ts on why a replayed agent leaves nothing for a later resume to
+	// continue. Declining up front beats stranding the first `resume` call
+	// partway through a run that has already spent its cheap half.
+	const journalResumes = journalEntries.some((entry) => entry.resumed);
+	let prefixIntact = journalEntries.length > 0 && !journalResumes;
+	let replayedCount = 0;
+
+	/** The journal entry to reuse at `index`, or undefined to run it live. */
+	function replayAt(index: number, key: string): WorkflowJournalEntry | undefined {
+		if (!prefixIntact) return undefined;
+		const entry = journalEntries[index];
+		if (entry === undefined || entry.index !== index || entry.key !== key || !entry.ok) {
+			prefixIntact = false;
+			return undefined;
+		}
+		return entry;
+	}
+
 	const worker = new Worker(WORKER_SOURCE, {
 		eval: true,
 		workerData: {
@@ -532,7 +590,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 		};
 
 		const finish = (
-			result: Omit<WorkflowRunResult, "meta" | "progress" | "agentCount">,
+			result: Omit<WorkflowRunResult, "meta" | "progress" | "agentCount" | "replayedCount">,
 		) => {
 			if (settled) return;
 			settled = true;
@@ -546,7 +604,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 			semaphore.drain();
 			// Resolve only once the thread is actually down, so a caller that
 			// awaits runWorkflow() is guaranteed not to be leaking one.
-			const settle = () => resolve({ ...result, meta, progress, agentCount });
+			const settle = () => resolve({ ...result, meta, progress, agentCount, replayedCount });
 			void worker.terminate().then(settle, settle);
 		};
 
@@ -588,15 +646,23 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 					const known = [...completedByLabel.keys()];
 					// Fatal: a typo'd label is a script bug, and folding it into a null
 					// would show up as an agent that mysteriously returned nothing.
+					//
+					// Unless agents were replayed, in which case it is not a script bug
+					// at all — the label's child came back from the journal and has no
+					// conversation here to continue. Saying "no agent has completed"
+					// would send the reader hunting for a typo that is not there.
 					respond(
 						callId,
 						false,
 						undefined,
-						`agent() opts.resume: no agent has completed under the label "${payload.resume}" in this run. ${
-							known.length === 0
-								? "No agent has completed yet."
-								: `Known labels: ${known.map((label) => `"${label}"`).join(", ")}.`
-						}`,
+						replayedCount > 0
+							? `agent() opts.resume: "${payload.resume}" was replayed from the resume journal, not run, so there is ` +
+								"no conversation in this run to continue. Re-run without resumeFromRunId."
+							: `agent() opts.resume: no agent has completed under the label "${payload.resume}" in this run. ${
+									known.length === 0
+										? "No agent has completed yet."
+										: `Known labels: ${known.map((label) => `"${label}"`).join(", ")}.`
+								  }`,
 						true,
 					);
 					return;
@@ -636,6 +702,54 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
 			const queuedAt = Date.now();
 			emit([{ ...base, queuedAt }]);
+
+			// The payload decides the journal key: everything that changes what the
+			// agent does, and nothing that only moves its row around the tree.
+			const keyInput: JournalKeyInput = {
+				prompt: payload.prompt,
+				...(payload.label !== undefined ? { label: payload.label } : {}),
+				...(payload.model !== undefined ? { model: payload.model } : {}),
+				...(payload.agentType !== undefined ? { agentType: payload.agentType } : {}),
+				...(payload.effort !== undefined ? { effort: payload.effort } : {}),
+				...(payload.isolation !== undefined ? { isolation: payload.isolation } : {}),
+				...(payload.gate !== undefined ? { gate: payload.gate } : {}),
+				...(payload.resume !== undefined ? { resume: payload.resume } : {}),
+			};
+			const key = journalKey(keyInput);
+			// Replay before the child is registered in-flight: a cached answer is
+			// not a child, so there is nothing to abort and no slot it holds. The
+			// row still appears in the progress log — the run reads as the same
+			// shape it had the first time, just faster.
+			const replayed = replayAt(index, key);
+			if (replayed !== undefined) {
+				replayedCount++;
+				const replayedText = replayed.text ?? "";
+				const at = Date.now();
+				emit([
+					{
+						...base,
+						queuedAt,
+						startedAt: at,
+						lastProgressAt: at,
+						durationMs: 0,
+						state: "done",
+						// The row reads as done, because it is — `cached` is what tells
+						// issue 14's card to annotate it "from resume journal" rather
+						// than letting a 0ms agent look like one that did the work
+						// impossibly fast.
+						cached: true,
+						resultPreview: preview(replayedText),
+					},
+				]);
+				openLaunches.delete(callId);
+				// Re-recorded so this run's journal is complete on its own terms: a
+				// resume of a resume must not have to walk back through a chain of
+				// earlier files to find the prefix.
+				recordJournal?.({ index, key: replayed.key, ok: true, text: replayedText });
+				respond(callId, true, replayedText);
+				return;
+			}
+			const resumeMark = payload.resume !== undefined ? ({ resumed: true } as const) : {};
 
 			const startedAt = Date.now();
 			emit([{ ...base, queuedAt, startedAt }]);
@@ -707,9 +821,14 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 			if (result.ok) {
 				const text = result.text ?? "";
 				emit([{ ...common, state: "done", resultPreview: preview(text) }]);
+				recordJournal?.({ index, key, ok: true, text, ...resumeMark });
 				respond(callId, true, text);
 				return;
 			}
+			// Recorded as a failure rather than left out: a gap would be read as an
+			// unchanged prefix on the next resume, silently skipping the retry this
+			// whole mechanism exists to make cheap.
+			recordJournal?.({ index, key, ok: false, ...resumeMark });
 			// A dead agent is a null in the script, not a thrown error: Claude Code
 			// scripts .filter(Boolean) rather than try/catch around every call.
 			emit([

@@ -74,7 +74,7 @@ In `deliverOnce`, records with `workflow` set skip the **terminal** done/error/g
 - [x] 4. Host seam `host.ts` (TDD with injected `SpawnDeps`/fake `getAgentResult`): option mapping (type/model enforce-or-error/effort/isolation/name), non-pi type refusal, gate pass/fail → typed error, blocked → wait, abort → pane close, resume mapping
 - [x] 5. `runs.ts` + tool registration + `workflows_enabled` gate + index wiring (offline: gate refusal, immediate return shape, script scratch file)
 - [x] 6. `tests/workflow.mjs` in `npm test`; `tests/workflow-live.mjs` (one live 3-agent fan-out completes and reports) in `test:live`
-- [ ] 7. Docs + README acknowledgement + CHANGELOG; full suite + typecheck; `/code-review`; commit
+- [x] 7. Docs + README acknowledgement + CHANGELOG; full suite + typecheck; `/code-review`; commit
 
 ## Verification
 

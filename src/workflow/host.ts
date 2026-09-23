@@ -52,9 +52,12 @@ import type { RoutingRegistry } from "../launchplan.js";
 import {
 	type WorkflowGateResult,
 	type WorkflowHost,
+	type WorkflowScriptRef,
+	type WorkflowScriptSource,
 	type WorkflowSpawnRequest,
 	type WorkflowSpawnResult,
 } from "./runtime.js";
+import { resolveWorkflowSource } from "./saved.js";
 
 /** Wall-clock bound on a `gate` command. Generous — a gate is routinely a test
  * suite — but not unbounded: a gate that hangs forever would wedge the agent
@@ -267,7 +270,14 @@ export function createWorkflowHost(deps: WorkflowHostDeps): WorkflowHost {
 			return { ok: result.code === 0, output };
 		},
 
-		// Issue 12 ships without saved-workflow resolution — the runtime refuses
-		// `workflow()` fatally, naming issue 13.
+		/**
+		 * Resolve a nested `workflow()` reference (issue 13): a saved name through
+		 * the same discovery the tool's `name` parameter uses, or a scriptPath.
+		 * Whether what comes back *is* a workflow stays runtime-side
+		 * ({@link validateScript}), as does the name-unknown error text.
+		 */
+		loadWorkflow(ref: WorkflowScriptRef): WorkflowScriptSource {
+			return resolveWorkflowSource(ref, process.cwd());
+		},
 	};
 }
