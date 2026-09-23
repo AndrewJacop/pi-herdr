@@ -42,7 +42,9 @@ const FORK_COSTS =
 const DESCRIPTION =
 	"Spawn a background AI agent in a herdr pane, submit the task prompt, and return " +
 	"{name, paneId, status}. Address the agent by `name` afterwards. " +
-	"Specify the agent EITHER by `type` (registry) or an inline `agent` definition — exactly one. " +
+	"Specify the agent by `type` (registry), an inline `agent` definition, or NEITHER — " +
+	"a prompt-only spawn (just `prompt`, optionally `name`) defaults to the built-in general-purpose " +
+	"type (pi kind, autonomous stance). `type` and `agent` are mutually exclusive — never both. " +
 	`Built-in types:\n${builtInTypeLines()}\n` +
 	"The registry also serves `.md` definitions from `.pi/agents/` (project) and the global " +
 	"agents dir — project shadows global, session inline definitions shadow both. " +
@@ -164,7 +166,7 @@ export function registerAgents(pi: ExtensionAPI): void {
 			type: Type.Optional(
 				Type.String({
 					description:
-						'Registry agent type, e.g. "general-purpose", "Explore", "Plan", or a session inline definition name. Exactly one of type/agent.',
+						'Registry agent type, e.g. "general-purpose", "Explore", "Plan", or a session inline definition name. Omit both type and agent to spawn the general-purpose default on the prompt alone; never pass both.',
 				}),
 			),
 			agent: Type.Optional(AGENT_DEF_SCHEMA),

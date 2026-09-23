@@ -323,9 +323,14 @@ export function validateAgentDefinition(raw: unknown): Result<AgentDefinition> {
 }
 
 /**
- * Resolve the spawn specifier: `type` xor `agent`, exactly one (wayfinder
- * ticket 01 decision 1 — no silent default agent). Returns the definition and
- * whether it came from the registry or was inline.
+ * Resolve the spawn specifier: `type` xor `agent`, exactly one — unless the
+ * caller opts into the prompt-only default (manual e2e F1 ruling: omitting
+ * everything spawns the built-in general-purpose type), in which case a fully
+ * omitted specifier resolves as `opts.defaultType` through the ordinary
+ * registry lookup (session > project > global > built-in — a project
+ * `general-purpose.md` still shadows the built-in). Surfaces without the
+ * opt-in (herdr_save_agent) keep demanding one of the two. Returns the
+ * definition and whether it came from the registry or was inline.
  */
 export function resolveSpecifier(
 	spec: {
@@ -333,6 +338,7 @@ export function resolveSpecifier(
 		agent?: unknown;
 	},
 	dirs: AgentDirs = defaultAgentDirs(),
+	opts?: { defaultType?: string },
 ): Result<{ definition: AgentDefinition; inline: boolean }> {
 	const hasType = spec.type !== undefined;
 	const hasAgent = spec.agent !== undefined;
@@ -342,9 +348,12 @@ export function resolveSpecifier(
 		);
 	}
 	if (!hasType && !hasAgent) {
-		return err(
-			'Pass one of `type` (registry name, e.g. "Explore") or `agent` (inline definition).',
-		);
+		if (!opts?.defaultType) {
+			return err(
+				'Pass one of `type` (registry name, e.g. "Explore") or `agent` (inline definition).',
+			);
+		}
+		spec = { type: opts.defaultType };
 	}
 	if (hasAgent) {
 		const v = validateAgentDefinition(spec.agent);

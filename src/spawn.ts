@@ -1223,9 +1223,12 @@ export async function spawnAgent(
 
 	// 1. specifier: `type` xor `agent` (pure). File-backed types resolve from
 	// the `.md` registry folders (project shadows global, read-at-use).
+	// Prompt-only spawn (manual e2e F1): omitting BOTH defaults to the built-in
+	// general-purpose type, riding the ordinary registry path.
 	const spec = resolveSpecifier(
 		{ type: params.type, agent: params.agent },
 		deps.agentDirs ?? defaultAgentDirs(),
+		{ defaultType: "general-purpose" },
 	);
 	if (!spec.ok) return spec;
 	const { definition, inline } = spec.data;

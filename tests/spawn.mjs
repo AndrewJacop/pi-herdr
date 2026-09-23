@@ -70,7 +70,20 @@ console.log("\n[1] `type` xor `agent` — exactly one");
 	const neither = spawn.resolveSpecifier({});
 	assert(
 		!neither.ok && /one of/i.test(neither.error.message),
-		"neither errors asking for one",
+		"bare resolveSpecifier (no opt-in) still errors asking for one — save_agent keeps the demand",
+	);
+	// Manual e2e F1: the prompt-only default rides the ordinary registry path
+	// (inline=false, built-in layer) — the spawn surface opts in per call.
+	const defaulted = spawn.resolveSpecifier(
+		{},
+		undefined,
+		{ defaultType: "general-purpose" },
+	);
+	assert(
+		defaulted.ok &&
+			defaulted.data.definition.name === "general-purpose" &&
+			defaulted.data.inline === false,
+		"prompt-only specifier (neither type nor agent) resolves the general-purpose registry type",
 	);
 	const badInline = spawn.resolveSpecifier({
 		agent: { name: "x", tools: ["read", 5] },
@@ -538,6 +551,23 @@ console.log("\n[9] Engine — background spawn end to end, child env stamped");
 		h.calls.submit[0].text === "find the entry point",
 		"prompt submitted to the pane",
 	);
+	// Manual e2e F1: {prompt} alone spawns the default — general-purpose on
+	// the ordinary registry path (the most natural minimal call must work).
+	reset();
+	const hDefault = makeDeps({ env: { HERDR_PANE_ID: "w9:p9" } });
+	const rDefault = await spawn.spawnAgent({ prompt: "do the thing" }, hDefault.deps);
+	assert(
+		rDefault.ok,
+		`prompt-only spawn accepted (${rDefault.ok ? "" : rDefault.error.message})`,
+	);
+	assert(
+		rDefault.ok && rDefault.data.type === "general-purpose",
+		"{prompt} alone resolves type general-purpose",
+	);
+	assert(
+		rDefault.ok && rDefault.data.kind === "pi",
+		"prompt-only default rides the built-in's pi kind",
+	);
 	// no HERDR_PANE_ID → no orchestrator var
 	const h2 = makeDeps();
 	await spawn.spawnAgent({ prompt: "x", type: "Plan", name: "quiet" }, h2.deps);
@@ -853,11 +883,21 @@ console.log("\n[16] Tool registration surface");
 			t.description.includes("General-purpose agent for researching"),
 		"description carries the trio's full text",
 	);
-	// offline-safe error path: specifier failure happens before any I/O
-	const res = await t.execute("t1", { prompt: "x" }, undefined);
+	// Manual e2e F1: prompt-only no longer refuses (asserted via
+	// resolveSpecifier + spawnAgent in [1]/[9]); the impossible state — BOTH
+	// type and agent — still errors, offline-safe before any I/O.
+	const res = await t.execute(
+		"t1",
+		{ prompt: "x", type: "Explore", agent: { name: "y" } },
+		undefined,
+	);
 	assert(
-		res.isError === true && /one of/.test(res.content[0].text),
-		"execute without type/agent errors cleanly",
+		res.isError === true && /exactly one/i.test(res.content[0].text),
+		"execute with BOTH type and agent errors cleanly",
+	);
+	assert(
+		!/Pass one of `type`/.test(res.content[0].text),
+		"the old neither-given refusal is gone from the spawn surface",
 	);
 }
 

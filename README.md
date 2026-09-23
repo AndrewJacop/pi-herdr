@@ -241,7 +241,10 @@ definitions from accepted spawns this session) > **project** (`.pi/agents/*.md`)
 > **global** (`~/.pi/agent/agents/*.md`) > **built-in** (`general-purpose`,
 `Explore`, `Plan`). First-hit-wins per name, so a project file shadows a
 global one and a session definition shadows both. The file layers are
-read-at-use: a freshly saved `.md` resolves without a reload.
+read-at-use: a freshly saved `.md` resolves without a reload. A spawn that
+names neither `type` nor `agent` — a bare prompt — resolves the built-in
+`general-purpose` through this same chain (a project `general-purpose.md`
+still shadows it).
 
 An agent file is YAML-ish frontmatter plus the system prompt as the body:
 
@@ -282,7 +285,7 @@ selects how the child session begins (see [Session modes](#session-modes)).
 
 | Tool | What it does |
 | --- | --- |
-| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status, sessionPath, stance, model, thinking, session_mode}`. Registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) xor an inline `agent: {…}` definition. `model`/`thinking` resolve down the five-level routing chain — spawn param > frontmatter > `models.agents.<name>` > `models.default` > this session's model — exact authenticated `provider/model-id` only, enforce-or-error naming the offending level. `fork: true` boots a pi child with this conversation as context, truncated before your last user message (see [Session modes](#session-modes)). Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. Prompts over 2000 chars ride `<session>.task.md` beside the child's session file, delivered as a one-line reference. Every pi child runs on a parent-owned session file in pi's default sessions dir (`herdr/<name>` in `/resume`) with the injected child extension (`agent_done`, identity strip, typed completion sidecars); stance: autonomous (auto-exit on settle — pane closes, session retained) by default, `interactive: true` keeps the pane open. |
+| `herdr_spawn_agent` | Spawn a background agent in a herdr pane, submit the task prompt, return `{name, paneId, status, sessionPath, stance, model, thinking, session_mode}`. Prompt-only spawn works: omitting both specifier fields defaults to the built-in `general-purpose` type (pi kind, autonomous stance). Otherwise a registry `type` (`general-purpose` / `Explore` / `Plan`, plus `.md`-registry and session-inline definitions) or an inline `agent: {…}` definition — never both. `model`/`thinking` resolve down the five-level routing chain — spawn param > frontmatter > `models.agents.<name>` > `models.default` > this session's model — exact authenticated `provider/model-id` only, enforce-or-error naming the offending level. `fork: true` boots a pi child with this conversation as context, truncated before your last user message (see [Session modes](#session-modes)). Gates (kill-switch → depth → parallel cap, over-cap = queued), `isolated: true` worktrees, `wait` to block for the result. Prompts over 2000 chars ride `<session>.task.md` beside the child's session file, delivered as a one-line reference. Every pi child runs on a parent-owned session file in pi's default sessions dir (`herdr/<name>` in `/resume`) with the injected child extension (`agent_done`, identity strip, typed completion sidecars); stance: autonomous (auto-exit on settle — pane closes, session retained) by default, `interactive: true` keeps the pane open. |
 | `herdr_save_agent` | Persist an inline `agent` definition or an existing registry `type` to a `.md` file in the project (`.pi/agents/`, default) or global registry — spawn it by `type` in any session afterwards. Ungated (delete the file to undo); refuses to overwrite an existing file unless `overwrite: true`. |
 
 An inline `agent` definition takes: `name`, `description`, `kind` (default: the
