@@ -583,6 +583,8 @@ export interface SpawnRecord {
 	taskArtifactPath?: string;
 	/** Denied tool names (pi children; stamped to the child for its strip). */
 	deniedTools?: string[];
+	/** Extra env vars for the child pane (issue 14: PI_HERDR_SCHEMA). */
+	extraEnv?: Record<string, string>;
 	/** Terminal event already steered to the orchestrator (issue 06) —
 	 * one push per terminal event; 07 prunes fleet rows on this. */
 	delivery?: { kind: DeliveryKind; at: number };
@@ -952,6 +954,10 @@ export async function startRecordNow(
 		childEnv.PI_HERDR_IDLE_REARM_MS = String(
 			Math.max(0, (deps.load ?? defaultLoad)().idle_rearm_minutes) * 60_000,
 		);
+		// Caller-stamped extras (issue 14) run LAST, so they deliberately win
+		// over any built-in of the same name. Only trusted code sets extraEnv
+		// (the workflow host, in-process) — never a tool caller.
+		Object.assign(childEnv, record.extraEnv);
 	}
 	const start = deps.start ?? startHerdrAgent;
 	const startR = await start({
@@ -1135,6 +1141,10 @@ export interface SpawnParams {
 	agent_args?: string[];
 	cwd?: string;
 	isolated?: boolean;
+	/** Extra PI_* env vars stamped into the child's pane environment (issue
+	 * 14: the workflow host passes PI_HERDR_SCHEMA). Single-value scalars per
+	 * the env-contract discipline; merged after the built-ins. */
+	extraEnv?: Record<string, string>;
 	wait?: boolean | number;
 }
 
@@ -1359,6 +1369,7 @@ export async function spawnAgent(
 		session_mode: merged.session_mode,
 		routing,
 		deniedTools: merged.exclude_tools,
+		...(params.extraEnv !== undefined ? { extraEnv: params.extraEnv } : {}),
 		definition: definitionSnapshot,
 	};
 	spawnRegistry.set(handle, record);

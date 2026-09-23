@@ -75,6 +75,7 @@ const check = (c, m) => {
 	fail += c ? 0 : 1;
 	console.log((c ? "  ✓ " : "  ✗ ") + m);
 };
+const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Close every pane whose cwd is inside this run's temp project — the spawned
@@ -101,13 +102,26 @@ async function openTmpPanes() {
 }
 
 /** Drive delivery passes so per-child suppression is observable, and collect
- * nothing — the run's own push arrives through pi.sendMessage directly. */
-async function deliveryTicks(budgetMs) {
+ * nothing — the run's own push arrives through pi.sendMessage directly. On
+ * the first mid-flight tick that shows progress (issue 14), snapshot the
+ * run's LIVE state — what the card and the widget's workflow row render. */
+let midFlight = null;
+async function deliveryTicks(budgetMs, runId) {
 	const deadline = Date.now() + budgetMs;
 	while (Date.now() < deadline) {
 		await delivery.deliverOnce().catch(() => {});
 		const run = [...runs.workflowRuns().values()].at(-1);
 		if (run && run.status !== "running") return run;
+		if (
+			run && runId && midFlight === null && run.runId === runId &&
+			run.progress.length > 0
+		) {
+			midFlight = {
+				live: runs.liveWorkflowRuns().has(runId),
+				progressEntries: run.progress.length,
+				started: run.progress.filter((e) => e.type === "workflow_agent" && e.state === "start").length,
+			};
+		}
 		await sleep(3_000);
 	}
 	return [...runs.workflowRuns().values()].at(-1);
@@ -118,8 +132,8 @@ try {
 	{
 		const workflow = `export const meta = {
   name: 'live-fanout',
-  description: 'three real agents answer in parallel',
-  phases: [{ title: 'Fanout' }],
+  description: 'three real agents answer in parallel, one reports structured',
+  phases: [{ title: 'Fanout' }, { title: 'Shape' }],
 }
 phase('Fanout')
 const outs = await pipeline(
@@ -127,7 +141,21 @@ const outs = await pipeline(
   (n) => agent('Reply with exactly one word and nothing else: ' + n, { label: 'say-' + n }),
 )
 log('collected ' + outs.filter(Boolean).length + ' of 3')
-return outs`;
+const spentAfterFanout = budget.spent()
+phase('Shape')
+const shaped = await agent(
+  'Here are three words: ' + JSON.stringify(outs) + '. Report them in the words field.',
+  {
+    label: 'shape',
+    schema: {
+      type: 'object',
+      properties: { words: { type: 'array', items: { type: 'string' } } },
+      required: ['words'],
+      additionalProperties: false,
+    },
+  },
+)
+return { outs, spentAfterFanout, spentIsFinite: Number.isFinite(spentAfterFanout), shaped: shaped === null ? null : JSON.parse(shaped) }`;
 
 		const t0 = Date.now();
 		const result = await tool.execute("live-1", { script: workflow }, undefined, undefined, undefined);
@@ -146,24 +174,42 @@ return outs`;
 
 			// wait for the run to settle (delivery ticks keep the loop honest; the
 			// run's own push arrives via pi.sendMessage regardless)
-			const run = (await deliveryTicks(10 * 60_000)) ?? { status: "missing" };
+			const run = (await deliveryTicks(10 * 60_000, result.details.runId)) ?? { status: "missing" };
 			check(run.status === "completed", `the run completed (status: ${run.status}${run.result?.error ? ` — ${run.result.error}` : ""})`);
+
+			// issue 14: the card's live state — mid-flight, the run was in the
+			// live set with progress entries already flowing (what the card and
+			// the widget's workflow row render)
+			check(midFlight !== null && midFlight.live === true,
+				"mid-flight: the run was in liveWorkflowRuns (the card + widget row render it)");
+			check(midFlight !== null && midFlight.progressEntries > 0 && midFlight.started > 0,
+				`mid-flight: progress was already flowing (${midFlight?.progressEntries ?? 0} entries, ${midFlight?.started ?? 0} agents started)`);
+			check((runs.liveWorkflowRuns().size ?? 0) === 0, "after settle: the live set is empty (card + row cleared)");
 
 			// exactly ONE aggregated push, carrying the pipeline's value
 			const pushes = sent.filter((s) => s.msg.details?.kind === "workflow");
 			check(pushes.length === 1, `exactly ONE completion push (got ${pushes.length})`);
 			const push = pushes[0]?.msg;
 			check(
-				push?.content.includes('Workflow "live-fanout" finished — 3/3 agents'),
-				"the push reports 3/3 agents under the workflow name",
+				push?.content.includes('Workflow "live-fanout" finished — 4/4 agents'),
+				"the push reports 4/4 agents under the workflow name",
 			);
+			const valueJson = run.result?.value ?? {};
 			check(
-				(push?.content ?? "").includes('["one","two","three"]'),
-				"the push carries the pipeline's aggregated return value",
+				eq(valueJson.outs, ["one", "two", "three"]),
+				"the pipeline's aggregated words ride the return value",
 			);
 			check(
 				(push?.content ?? "").includes("collected 3 of 3"),
 				"the script's log() line rides the report",
+			);
+			check(
+				valueJson.spentIsFinite === true && valueJson.spentAfterFanout > 0,
+				`budget.spent() was REAL mid-run (recoverable from session JSONL: ${valueJson.spentAfterFanout} output tokens)`,
+			);
+			check(
+				valueJson.shaped !== null && typeof valueJson.shaped === "object" && Array.isArray(valueJson.shaped.words) && valueJson.shaped.words.length === 3,
+				"the schema'd agent's answer arrived as a validated object (StructuredOutput round trip)",
 			);
 			check(pushes[0]?.opts?.triggerTurn === true, "notifications normal: the completion wakes the orchestrator");
 			check(typeof runId === "string" && runId.startsWith("wf_"), "the reported run id keys the run registry");

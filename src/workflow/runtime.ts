@@ -41,6 +41,7 @@ import {
 	type WorkflowJournalEntry,
 } from "./journal.js";
 import { WORKER_SOURCE } from "./worker-source.js";
+import { compileJsonSchema, type CompiledSchema } from "./json-schema.js";
 
 /** Matches the `script` field's size check — 512 KiB. */
 export const MAX_SCRIPT_LENGTH = 524_288;
@@ -104,6 +105,12 @@ export interface WorkflowSpawnRequest {
 	 * The `gate` command this agent is being spawned under, when it has one.
 	 */
 	gate?: string;
+	/**
+	 * The compiled schema for a structured-output call (issue 14) — compiled
+	 * runtime-side before anything spawns; the host registers the child-side
+	 * `StructuredOutput` tool from it and re-checks the payload on settle.
+	 */
+	schema?: CompiledSchema;
 }
 
 export interface WorkflowSpawnResult {
@@ -114,6 +121,12 @@ export interface WorkflowSpawnResult {
 	error?: string;
 	/** The user dismissed it rather than it failing; renders as skipped. */
 	skipped?: boolean;
+	/** Lifetime output tokens from the child's session JSONL (issue 14).
+	 * Absent = unrecoverable — the run's `budget.spent()` turns honest
+	 * `Infinity` rather than sum a number that understates the truth. */
+	outputTokens?: number;
+	/** Completed tool calls, for the card row. */
+	toolCalls?: number;
 }
 
 /** Outcome of a `gate` command. `output` is what the user is shown when it fails. */
@@ -232,48 +245,22 @@ export interface WorkflowRunResult {
 }
 
 /* ------------------------------------------------------------------------- *
- * Progress entries — pi-herdr inline types (issue 12): the minimal shape the
- * runtime emits. Issue 14 replaces these with the ported `progress.ts`.
+ * Progress entries — PORTED to `progress.ts` (issue 14): the append-only log
+ * types now live with the collapse/derivation model that reads them.
  * ------------------------------------------------------------------------- */
 
-export interface WorkflowPhaseEntry {
-	type: "workflow_phase";
-	index: number;
-	title: string;
-}
+import type {
+	WorkflowAgentEntry,
+	WorkflowEntry,
+	WorkflowLogEntry,
+} from "./progress.js";
 
-export interface WorkflowLogEntry {
-	type: "workflow_log";
-	message: string;
-}
-
-export interface WorkflowAgentEntry {
-	type: "workflow_agent";
-	index: number;
-	label: string;
-	state: "start" | "done" | "error";
-	agentId: string;
-	agentType: string;
-	model?: string;
-	isolation?: "worktree";
-	phaseIndex?: number;
-	phaseTitle?: string;
-	promptPreview?: string;
-	queuedAt?: number;
-	startedAt?: number;
-	lastProgressAt?: number;
-	durationMs?: number;
-	resultPreview?: string;
-	error?: string;
-	skipped?: boolean;
-	/** Set when the answer came from the resume journal, not a live child. */
-	cached?: boolean;
-}
-
-export type WorkflowEntry =
-	| WorkflowPhaseEntry
-	| WorkflowLogEntry
-	| WorkflowAgentEntry;
+export type {
+	WorkflowAgentEntry,
+	WorkflowEntry,
+	WorkflowLogEntry,
+	WorkflowPhaseEntry,
+} from "./progress.js";
 
 /* ------------------------------------------------------------------------- *
  * JSON boundary — host side
@@ -394,6 +381,8 @@ interface AgentCallPayload {
 	resume?: string;
 	/** Reasoning effort, already validated against pi's thinking levels worker-side. */
 	effort?: string;
+	/** Raw JSON Schema from `agent({ schema })`, compiled before anything spawns. */
+	schema?: unknown;
 }
 
 type WorkerMessage =
@@ -427,6 +416,36 @@ interface CompletedChild {
 	agentType: string;
 	model?: string;
 	isolation?: "worktree";
+}
+
+/**
+ * Hold a schema'd result to its schema, runtime-side.
+ *
+ * PORTED from upstream (MIT). The child's own StructuredOutput tool already
+ * validated whatever it captured, so this normally agrees. It exists for the
+ * cases where nothing did: a host that ignores `schema` entirely, a replayed
+ * journal entry from before the schema changed, or a payload that reached us
+ * some other way. The script asked for a shape; exactly one place should be
+ * able to promise it.
+ */
+function applySchema(result: WorkflowSpawnResult, compiled: CompiledSchema): WorkflowSpawnResult {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(result.text ?? "");
+	} catch {
+		return {
+			...result,
+			ok: false,
+			error: "The agent did not return structured output: its answer was not JSON.",
+		};
+	}
+	const verdict = compiled.check(parsed);
+	if (verdict === true) return result;
+	return {
+		...result,
+		ok: false,
+		error: `The agent's answer did not match the requested schema: ${verdict}`,
+	};
 }
 
 /**
@@ -524,8 +543,26 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 	 */
 	const openLaunches = new Map<number, string>();
 	let agentCount = 0;
-	let aborted = false;
 	let settled = false;
+
+	/* --- budget.spent() (issue 14) --------------------------------------- */
+
+	/**
+	 * Output tokens this run has spent, mirrored to the script as
+	 * `budget.spent()`. The host owns the number and every response carries
+	 * it (upstream's pattern): two counters would drift, and the script only
+	 * learns anything through agent responses, so there is no observable
+	 * staleness to worry about.
+	 *
+	 * pi-herdr's honesty rule: usage is recovered from the child's session
+	 * JSONL; ONE child without recoverable usage makes the whole tally
+	 * unknown (`Infinity`) — a sum that understates spend is the lie a
+	 * budget-gated script would overspend on. Replayed (journal) calls spent
+	 * nothing this run and never poison.
+	 */
+	let spentKnown = 0;
+	let spentUnknown = false;
+	const spent = () => (spentUnknown ? Number.POSITIVE_INFINITY : spentKnown);
 
 	/* --- resume journal (issue 13) --------------------------------------- */
 
@@ -586,7 +623,9 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 			// already finishing is not an unawaited launch either.
 			openLaunches.delete(callId);
 			if (settled) return;
-			worker.postMessage({ type: "response", callId, ok, value, error, fatal });
+			// `spent` rides on every response, so the worker's `budget.spent()` is
+			// a mirror of this number rather than a second tally of its own.
+			worker.postMessage({ type: "response", callId, ok, value, error, fatal, spent: spent() });
 		};
 
 		const finish = (
@@ -609,7 +648,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 		};
 
 		function onAbort() {
-			aborted = true;
 			// terminate() is why this runs in a worker at all: it stops a script that
 			// is spinning or wedged mid-await, which an in-process vm cannot do.
 			finish({ status: "killed", error: "Workflow aborted." });
@@ -669,6 +707,20 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 				}
 			}
 
+			// Compiled before anything is scheduled. A schema the runtime cannot use
+			// is a script bug, so it is fatal like a typo'd resume label — folding it
+			// into a null would surface as an agent that mysteriously returned
+			// nothing, and it costs no model call to say so here.
+			let compiledSchema: CompiledSchema | undefined;
+			if (payload.schema !== undefined) {
+				const compilation = compileJsonSchema(payload.schema);
+				if (!compilation.ok) {
+					respond(callId, false, undefined, compilation.message, true);
+					return;
+				}
+				compiledSchema = compilation.compiled;
+			}
+
 			if (agentCount >= agentCap) {
 				// Fatal, so parallel()/pipeline() rethrow instead of folding it into a
 				// null. A cap that silently drops work is worse than no cap.
@@ -705,6 +757,8 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
 			// The payload decides the journal key: everything that changes what the
 			// agent does, and nothing that only moves its row around the tree.
+			// The schema is the raw object; the key wants it serialized, so the
+			// spread is narrowed rather than passed through.
 			const keyInput: JournalKeyInput = {
 				prompt: payload.prompt,
 				...(payload.label !== undefined ? { label: payload.label } : {}),
@@ -714,13 +768,25 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 				...(payload.isolation !== undefined ? { isolation: payload.isolation } : {}),
 				...(payload.gate !== undefined ? { gate: payload.gate } : {}),
 				...(payload.resume !== undefined ? { resume: payload.resume } : {}),
+				...(payload.schema !== undefined ? { schema: JSON.stringify(payload.schema) } : {}),
 			};
 			const key = journalKey(keyInput);
 			// Replay before the child is registered in-flight: a cached answer is
 			// not a child, so there is nothing to abort and no slot it holds. The
 			// row still appears in the progress log — the run reads as the same
 			// shape it had the first time, just faster.
-			const replayed = replayAt(index, key);
+			// A replayed answer still has to satisfy the schema. The key covers a
+			// schema that *changed*, but not a journal that was hand-edited, and
+			// not the empty text a torn entry leaves behind — either would hand
+			// the script a null from an entry the journal claims succeeded.
+			let replayed = replayAt(index, key);
+			if (replayed !== undefined && compiledSchema !== undefined) {
+				const recheck = applySchema({ ok: true, text: replayed.text ?? "" }, compiledSchema);
+				if (!recheck.ok) {
+					prefixIntact = false;
+					replayed = undefined;
+				}
+			}
 			if (replayed !== undefined) {
 				replayedCount++;
 				const replayedText = replayed.text ?? "";
@@ -784,6 +850,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 								...(payload.phaseIndex !== undefined ? { phaseIndex: payload.phaseIndex } : {}),
 								...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
 								...(payload.gate !== undefined ? { gate: payload.gate } : {}),
+								...(compiledSchema !== undefined ? { schema: compiledSchema } : {}),
 								onResolved,
 							});
 				if (result.ok) {
@@ -797,6 +864,16 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 						...(model !== undefined ? { model } : {}),
 						...(isolation !== undefined ? { isolation } : {}),
 					});
+					// Re-checked here, not just in the child's tool: this is the one
+					// place that decides the script's value matches the schema it
+					// asked for, so a host that ignored `schema` fails loudly instead
+					// of handing the script prose. Before the gate, because a gate
+					// verifies work and there is no work to verify if the shape is
+					// wrong — and the reader should see the schema error, not a gate
+					// error standing in front of it.
+					if (compiledSchema !== undefined) {
+						result = applySchema(result, compiledSchema);
+					}
 					if (result.ok && payload.gate !== undefined && runGate !== undefined) {
 						result = await applyGate(result, payload.gate, agentId, runGate);
 					}
@@ -818,9 +895,24 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 				durationMs: finishedAt - startedAt,
 			};
 
+			// Counted before either settle branch responds, so the very call that
+			// spent them already sees them in `budget.spent()`. A child whose usage
+			// never landed in a readable session file poisons the tally — a number
+			// that understates spend is worse than an honest unknown. Failed
+			// agents burned tokens either way (upstream's ruling).
+			if (result.outputTokens === undefined) spentUnknown = true;
+			else spentKnown += result.outputTokens;
+
 			if (result.ok) {
 				const text = result.text ?? "";
-				emit([{ ...common, state: "done", resultPreview: preview(text) }]);
+				emit([
+					{
+						...common,
+						state: "done",
+						resultPreview: preview(text),
+						...(result.toolCalls !== undefined ? { toolCalls: result.toolCalls } : {}),
+					},
+				]);
 				recordJournal?.({ index, key, ok: true, text, ...resumeMark });
 				respond(callId, true, text);
 				return;
@@ -829,14 +921,13 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 			// unchanged prefix on the next resume, silently skipping the retry this
 			// whole mechanism exists to make cheap.
 			recordJournal?.({ index, key, ok: false, ...resumeMark });
-			// A dead agent is a null in the script, not a thrown error: Claude Code
-			// scripts .filter(Boolean) rather than try/catch around every call.
 			emit([
 				{
 					...common,
 					state: "error",
 					error: result.error ?? "Agent failed.",
 					...(result.skipped ? { skipped: true } : {}),
+					...(result.toolCalls !== undefined ? { toolCalls: result.toolCalls } : {}),
 				},
 			]);
 			respond(callId, true, null);

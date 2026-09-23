@@ -22,6 +22,7 @@ import { registerAgents } from "./tools/agents.js";
 import { registerPaneSync } from "./tools/sync.js";
 import { registerWorkflowTool } from "./tools/workflow.js";
 import { stopAllWorkflowRuns } from "./workflow/runs.js";
+import { registerWorkflowCard } from "./workflow/card.js";
 import { registerDelivery, stopDeliveryLoop } from "./delivery.js";
 import { registerFleetWidget } from "./widget.js";
 import { registerSelfReport } from "./selfreport.js";
@@ -66,6 +67,9 @@ export default function (pi: ExtensionAPI): void {
 	// The fleet widget (v0.6 issue 11) rides the SAME tick as a third
 	// consumer — the ambient table above the editor, read-only.
 	registerFleetWidget(pi);
+	// The workflow progress card (v0.6 issue 14): a second slot above the
+	// editor, one block per live run — own 1s render clock, in-memory only.
+	registerWorkflowCard(pi);
 
 	// The /subagents command: settings menu + confirmed Kill-all-agents action.
 	registerSubagentsCommand(pi);

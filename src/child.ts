@@ -27,15 +27,16 @@
 // Without PI_HERDR_SESSION this extension is a no-op, so loading it in a
 // non-child pi (or an adopted session) is harmless.
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import {
 	clearSteerWatermark,
 	inputMatchesSteer,
 	readSteerWatermark,
 	takeoverPathFor,
 } from "./sessionfile.js";
+import { compileJsonSchema, type CompiledSchema } from "./workflow/json-schema.js";
 import type { ActivitySnapshot } from "./status.js";
 
 /** Session file path — presence marks this pi as a herdr-spawned child. */
@@ -57,6 +58,88 @@ export const ENV_ACTIVITY_FILE = "PI_HERDR_ACTIVITY_FILE";
  * quiet → the final message auto-delivers (rearm-labeled) and the pane
  * closes. Unset = the 15-minute default. */
 export const ENV_IDLE_REARM_MS = "PI_HERDR_IDLE_REARM_MS";
+
+/** Schema file for a structured-output child (issue 14): the workflow host
+ * writes the compiled JSON Schema to the workflow scratch dir and stamps this
+ * env var with its path — a path, not inline JSON (Windows env-block limits).
+ * Set only for `agent(prompt, { schema })` children of a workflow run. */
+export const ENV_SCHEMA = "PI_HERDR_SCHEMA";
+
+/** What the child produced, filled in as StructuredOutput is called.
+ * PORTED from upstream `structured-output.ts` (MIT) — the capture box the
+ * host reads via the completion sidecar. */
+export interface StructuredCapture {
+	/** The last payload that validated, canonical JSON. Absent until one does. */
+	json?: string;
+	/** Why the most recent attempt was rejected, for the error text. */
+	lastError?: string;
+	/** Whether the tool was called at all — "never tried" reads differently. */
+	called: boolean;
+}
+
+export function createStructuredCapture(): StructuredCapture {
+	return { called: false };
+}
+
+/** Claude Code's tool name, kept verbatim — a ported prompt that mentions
+ * `StructuredOutput` is still telling the truth. */
+export const STRUCTURED_OUTPUT_TOOL_NAME = "StructuredOutput";
+
+/**
+ * The synthetic tool behind `agent(prompt, { schema })` — PORTED from
+ * upstream `structured-output.ts` (MIT), adapted to pi-herdr's env channel
+ * (the schema arrives as a file path, not in-process state).
+ *
+ * pi has no forced toolChoice, so this is pressure, not guarantee: the
+ * caller's schema IS the parameters (providers that can constrain sampling
+ * hold the payload to it), the description demands the call, and an
+ * off-schema payload is answered with `isError` so the model self-corrects
+ * inside the same run. The host-side re-check (applySchema) is the actual
+ * guarantee, and the host's one resume prompt is the backstop.
+ */
+export function createStructuredOutputTool(
+	compiled: CompiledSchema,
+	capture: StructuredCapture,
+): ToolDefinition {
+	return {
+		name: STRUCTURED_OUTPUT_TOOL_NAME,
+		label: "Structured Output",
+		description:
+			"Report your final answer. Call this exactly once, with the complete result, and put everything the " +
+			"caller needs inside the arguments — text written outside this call is discarded. If a call is " +
+			"rejected for not matching the schema, fix the reported fields and call it again.",
+		promptSnippet: "Report your final answer as structured data",
+		promptGuidelines: [
+			"Your final answer MUST be reported by calling StructuredOutput. Prose outside that call is discarded.",
+		],
+		// The caller's schema is the tool's input schema, verbatim — that is
+		// what makes the provider fill the fields. pi types this as typebox's
+		// TSchema, which v1 defines as an open interface, so a plain JSON
+		// Schema satisfies it at runtime; the cast is shape-level only.
+		parameters: compiled.schema as never,
+		async execute(_id, params) {
+			capture.called = true;
+			const verdict = compiled.check(params);
+			if (verdict !== true) {
+				capture.lastError = verdict;
+				// isError puts the reason in front of the model as a tool result,
+				// so it can correct itself inside this same run.
+				return {
+					content: [{
+						type: "text",
+						text: `StructuredOutput did not match the required schema:\n${verdict}\nCall it again with a corrected value.`,
+					}],
+					isError: true,
+					details: {},
+				};
+			}
+			// Last valid call wins: a model that calls twice meant the second one.
+			capture.json = JSON.stringify(params);
+			capture.lastError = undefined;
+			return { content: [{ type: "text", text: "Recorded." }], details: {} };
+		},
+	};
+}
 
 /** A minimal shape of the agent messages this extension inspects. */
 export interface AgentMessageLike {
@@ -313,6 +396,26 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 	const denied = parseDeniedTools(process.env[ENV_DENIED_TOOLS]);
 	const label = agentType || childName;
 
+	// Structured output (issue 14): when the workflow host stamped a schema
+	// file, register the StructuredOutput tool and let its validated payload
+	// ride the completion sidecar. A missing/unreadable/bad file skips
+	// silently — the host-side applySchema re-check still guards the contract.
+	const schemaPath = process.env[ENV_SCHEMA];
+	let structured: StructuredCapture | undefined;
+	if (schemaPath) {
+		let compiled: CompiledSchema | undefined;
+		try {
+			const compilation = compileJsonSchema(JSON.parse(readFileSync(schemaPath, "utf8")));
+			if (compilation.ok) compiled = compilation.compiled;
+		} catch {
+			/* skip — the host-side check is the guarantee */
+		}
+		if (compiled) {
+			structured = createStructuredCapture();
+			pi.registerTool(createStructuredOutputTool(compiled, structured));
+		}
+	}
+
 	// Activity recorder (issue 07) — independent of the rest of the
 	// extension's lifecycle logic, so the sidecar stays truthful even when
 	// takeover/error-grace branches early-return below.
@@ -345,9 +448,19 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 		rearm = false,
 	): void {
 		try {
+			// A schema'd child's captured payload rides the done sidecar (issue
+			// 14) — it IS the delivered result, ahead of the assistant text.
+			const structuredField =
+				payload.type === "done" && structured?.json !== undefined
+					? { structured: structured.json }
+					: {};
 			writeFileSync(
 				sidecarPath,
-				JSON.stringify(rearm ? { ...payload, rearm: true } : payload),
+				JSON.stringify(
+					rearm
+						? { ...payload, ...structuredField, rearm: true }
+						: { ...payload, ...structuredField },
+				),
 			);
 		} catch {
 			/* best-effort */

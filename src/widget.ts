@@ -44,6 +44,8 @@ import {
 	type ProjectableRecord,
 	type Projection,
 } from "./status.js";
+import { liveWorkflowRuns, type WorkflowRun } from "./workflow/runs.js";
+import { stats as workflowStats } from "./workflow/progress.js";
 import type { NormalizedAgent, Result } from "./env.js";
 
 // ---- the model ---------------------------------------------------------------
@@ -102,6 +104,9 @@ export type WidgetRecord = ProjectableRecord & {
 	type?: string;
 	spawnedAt: number;
 	startedAt?: number;
+	/** Workflow run id (issue 14): a run-stamped child is never a fleet row —
+	 * the run's own workflow row reports for it. */
+	workflow?: string;
 };
 
 /**
@@ -110,16 +115,23 @@ export type WidgetRecord = ProjectableRecord & {
  * back to the first-seen cache for states without a clock (blocked, coarse
  * running); the cache restarts an episode on state change. Pure apart from
  * the cache.
+ *
+ * `liveRuns` (issue 14): the fleet's workflow children do NOT render as
+ * rows — the RUN reports for them — so each live run gets ONE row instead
+ * (`<name> │ running · N/M agents`), counted toward the header's active
+ * side, gone when the run settles.
  */
 export function buildWidgetModel(
 	records: WidgetRecord[],
 	projections: WidgetProjection[],
 	now: number,
 	cache: WidgetCache,
+	liveRuns: readonly WorkflowRun[] = [],
 ): WidgetModel {
 	const rows: WidgetRow[] = [];
 	for (let i = 0; i < records.length; i++) {
 		const record = records[i];
+		if (record.workflow) continue; // the run's row reports for it
 		const proj = projections[i];
 		if (record.delivery) continue; // rows leave on delivery — not a morgue
 
@@ -166,6 +178,18 @@ export function buildWidgetModel(
 			elapsedMs,
 			stateAgeMs,
 			blockedPreview: proj.blockedPreview,
+		});
+	}
+	// One row per live workflow run — in-flight work only, like every row here.
+	for (const run of liveRuns) {
+		const s = workflowStats(run.progress);
+		const elapsedMs = Math.max(0, now - run.startedAt);
+		rows.push({
+			name: run.meta.name,
+			status: "running",
+			detail: `${s.done}/${s.total} agents`,
+			elapsedMs,
+			stateAgeMs: elapsedMs,
 		});
 	}
 	const active = rows.filter((r) => ACTIVE_STATES.has(r.status)).length;
@@ -306,6 +330,8 @@ export interface WidgetDeps {
 	readActivity?: (activityPath?: string) => ActivityRead;
 	extract?: (sessionPath: string) => ExtractedResult | null;
 	now?: () => number;
+	/** The live workflow runs (issue 14) — default: the real runs registry. */
+	liveRuns?: () => readonly WorkflowRun[];
 	/** The setWidget sink — default: the orchestrator's ctx.ui. */
 	ui?: UiSink;
 }
@@ -401,9 +427,12 @@ export async function fleetWidgetOnce(deps: WidgetDeps = {}): Promise<void> {
 
 	// Rows leave on delivery — the table is in-flight work only, not a morgue
 	// (the registry keeps delivered records, so an empty ROWS view must clear
-	// exactly like an empty registry would).
-	const records = [...registry.values()].filter((r) => !r.delivery);
-	if (records.length === 0) {
+	// exactly like an empty registry would). Run-stamped records (issue 14)
+	// never render as rows at all — the run's own workflow row reports for
+	// them — and live runs keep the table up even with no ordinary rows.
+	const liveRuns = (deps.liveRuns ?? (() => [...liveWorkflowRuns().values()]))();
+	const records = [...registry.values()].filter((r) => !r.delivery && !r.workflow);
+	if (records.length === 0 && liveRuns.length === 0) {
 		clearOnce();
 		return;
 	}
@@ -445,7 +474,7 @@ export async function fleetWidgetOnce(deps: WidgetDeps = {}): Promise<void> {
 	for (const k of cache.keys()) if (!names.has(k)) cache.delete(k);
 
 	shown = true;
-	const model = buildWidgetModel(records, projections, now(), cache);
+	const model = buildWidgetModel(records, projections, now(), cache, [...liveRuns]);
 	sink.setWidget(WIDGET_KEY, (_tui, theme) => ({
 		render: (width) =>
 			renderWidgetLines(model, width, {

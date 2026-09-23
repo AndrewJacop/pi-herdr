@@ -343,15 +343,73 @@ export function minedAssistantError(message: unknown): {
 // terminal declaration (checked BEFORE pane status: an auto-exited pane is
 // already gone when its sidecar lands).
 
+/**
+ * Usage recovered from a child's session JSONL (issue 14): lifetime output
+ * tokens across the assistant messages + the number of tool calls made.
+ * `budget.spent()` counts output only — a fan-out's re-sent input would swamp
+ * it (the same rule upstream's port follows). `undefined` means
+ * unrecoverable: the file is missing or unreadable, so the caller reports an
+ * honest unknown rather than a too-small sum.
+ */
+export interface SessionUsage {
+	outputTokens: number;
+	toolCalls: number;
+}
+
+/** Sum one assistant message's output tokens (finite numbers only). */
+function messageOutputTokens(message: unknown): number {
+	const usage = (message as { usage?: unknown } | null)?.usage;
+	if (!usage || typeof usage !== "object") return 0;
+	const output = (usage as { output?: unknown }).output;
+	return typeof output === "number" && Number.isFinite(output) ? output : 0;
+}
+
+/** Count one message's `toolCall` content blocks (0 for string content). */
+function messageToolCalls(message: unknown): number {
+	const content = (message as { content?: unknown } | null)?.content;
+	if (!Array.isArray(content)) return 0;
+	return content.filter(
+		(block) => (block as { type?: unknown } | null)?.type === "toolCall",
+	).length;
+}
+
+/**
+ * Read a session file and recover lifetime usage. Zeros (not undefined) when
+ * the file parses but has no assistant usage yet — a child that has only just
+ * started is measurable at 0; a child whose file cannot be read is not.
+ */
+export function sessionUsage(sessionPath: string): SessionUsage | undefined {
+	if (!existsSync(sessionPath)) return undefined;
+	let text: string;
+	try {
+		text = readFileSync(sessionPath, "utf8");
+	} catch {
+		return undefined;
+	}
+	let outputTokens = 0;
+	let toolCalls = 0;
+	for (const entry of parseSessionEntries(text).entries) {
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (!message || typeof message !== "object") continue;
+		if ((message as { role?: unknown }).role !== "assistant") continue;
+		outputTokens += messageOutputTokens(message);
+		toolCalls += messageToolCalls(message);
+	}
+	return { outputTokens, toolCalls };
+}
+
 export function sidecarPathFor(sessionPath: string): string {
 	return `${sessionPath}.exit`;
 }
 
 /** A valid completion sidecar payload. `rearm` marks an idle-re-arm exit
  * (issue 06): the run completed AFTER a human takeover — the parent labels
- * the delivery "auto-delivered after user steer". */
+ * the delivery "auto-delivered after user steer". `structured` (issue 14)
+ * carries the validated StructuredOutput payload of a schema'd workflow
+ * child — canonical JSON, captured child-side, verbatim here. */
 export type ExitSidecar =
-	| { type: "done"; rearm?: true }
+	| { type: "done"; rearm?: true; structured?: string }
 	| { type: "error"; errorMessage: string; stopReason: string; rearm?: true };
 
 /** Parse sidecar text. Anything malformed or of an unknown shape is invalid. */
@@ -369,8 +427,12 @@ export function parseExitSidecar(
 	// rearm is optional and tolerated on either type; anything else unknown
 	// is ignored (forward compatibility).
 	const rearm = o.rearm === true ? { rearm: true as const } : {};
+	// The one unknown field we DO consume (issue 14) — only in the shape the
+	// child extension writes it: a JSON string of the validated payload.
+	const structured =
+		typeof o.structured === "string" ? { structured: o.structured } : {};
 	if (o.type === "done")
-		return { ok: true, sidecar: { type: "done", ...rearm } };
+		return { ok: true, sidecar: { type: "done", ...rearm, ...structured } };
 	if (o.type === "error") {
 		const message =
 			typeof o.errorMessage === "string" && o.errorMessage.trim()

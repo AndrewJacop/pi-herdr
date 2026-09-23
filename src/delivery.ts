@@ -52,16 +52,9 @@ import {
 } from "./status.js";
 import { fleetWidgetOnce } from "./widget.js";
 import { spawnRecords, type DeliveryKind, type SpawnRecord } from "./spawn.js";
+import { type SteeredMessage, makeDeliverySink, terminalWake } from "./push.js";
 
 // ---- types -----------------------------------------------------------------
-
-/** One steered message (tests capture these through the injected sink). */
-export interface SteeredMessage {
-	content: string;
-	details: Record<string, unknown>;
-	/** true → wake the orchestrator now; false → next natural turn. */
-	wake: boolean;
-}
 
 /** Injectable seams (offline red-green; defaults hit herdr + disk). */
 export interface DeliveryDeps {
@@ -94,13 +87,6 @@ function sessionNote(record: SpawnRecord): string {
 	return record.sessionPath
 		? ` (session: ${record.sessionPath} — retained for resume)`
 		: "";
-}
-
-/** The wake flags for a terminal push under the notifications setting. */
-export function terminalWake(
-	notes: HerdrSettings["notifications"],
-): SteeredMessage["wake"] {
-	return notes !== "quiet"; // normal → wake; quiet → next turn; none → never reaches a push
 }
 
 function doneContent(
@@ -368,32 +354,6 @@ function deliverTerminal(
 	markTerminal(record, kind, deps.now ?? (() => Date.now()));
 	if (record.workflow) return;
 	pushTerminal(deps, msg, notifications(deps));
-}
-
-/**
- * Build the steer sink for a session: pi.sendMessage with delivery's exact
- * envelope (`herdr-delivery`, wake → steer/nextTurn flags). ONE factory so
- * every consumer (the delivery loop, the workflow run's completion report)
- * cannot drift apart.
- */
-export function makeDeliverySink(pi: ExtensionAPI): (msg: SteeredMessage) => void {
-	return (msg: SteeredMessage): void => {
-		try {
-			pi.sendMessage(
-				{
-					customType: "herdr-delivery",
-					content: msg.content,
-					display: true,
-					details: msg.details,
-				},
-				msg.wake
-					? { triggerTurn: true, deliverAs: "steer" }
-					: { triggerTurn: false, deliverAs: "nextTurn" },
-			);
-		} catch {
-			/* best-effort — delivery must never break its caller */
-		}
-	};
 }
 
 function notifications(deps: DeliveryDeps): HerdrSettings["notifications"] {

@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Workflows: the live progress card, real `budget.spent()`, structured
+  output, and per-run stop (v0.6 issue 14 — closes v0.6).** While a run is
+  going, a live progress card renders above the editor: workflow name,
+  `N/M agents · elapsed`, the phase tree (declared `meta` phases merged with
+  observed `phase()` calls; placeholders for phases not yet reached),
+  per-agent rows (✔/✘/⟳/▪, label, type, derived state, tool calls, duration,
+  `from resume journal` on replayed rows), and `log()` lines beneath. The
+  fleet table shows ONE row for the run (`running · N/M agents`, counted
+  active) instead of a row per child — the run reports for them. The card
+  reads the runs registry in memory on a 1s render clock; no new polling
+  tier. `budget.spent()` now returns the run's real lifetime output tokens
+  where each child's session JSONL reports them; ONE child without
+  recoverable usage makes the tally honest `Infinity` (replayed calls spent
+  nothing and never poison); `total` stays `null` and settled rows carry
+  tool-call counts for the card. `agent(prompt, { schema })` is a supported
+  option: the compiled schema is written to the run's scratch dir and stamped
+  into the child env, the child gets a `StructuredOutput` tool whose
+  parameters ARE the schema (isError validation-and-retry pressure — pi has
+  no forced toolChoice), the validated payload rides the completion sidecar,
+  the host re-checks it and sends ONE resume prompt if the child never
+  called the tool; a changed schema changes the journal key (breaks the
+  replay prefix). Stopping: a `/subagents` “Stop workflow run” action (pick
+  a live run, confirm) and kill-all now stops live runs too (closing panes
+  alone let the script spawn fresh children). A twelve-tool convergence test
+  pins the model-facing surface: exactly the twelve, no leaks.
 - **Scripted workflows: the resume journal + saved workflows (v0.6 issue 13).**
   Every `herdr_run_workflow` run journals each settled `agent()` call beside
   its scratch script as `<run id>.workflow.jsonl`; re-running with

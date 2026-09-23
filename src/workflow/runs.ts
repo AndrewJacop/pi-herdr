@@ -16,18 +16,22 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	runWorkflow,
 	validateScript,
 	type WorkflowAgentEntry,
+	type WorkflowEntry,
 	type WorkflowRunResult,
 } from "./runtime.js";
 import type { WorkflowMeta } from "./meta.js";
-import { appendJournal, readJournal } from "./journal.js";
+import {
+	appendJournal,
+	readJournal,
+	workflowScratchDir,
+} from "./journal.js";
 import { createWorkflowHost } from "./host.js";
-import { makeDeliverySink, terminalWake, type SteeredMessage } from "../delivery.js";
+import { makeDeliverySink, terminalWake, type SteeredMessage } from "../push.js";
 import {
 	getSettingsPaths,
 	loadSettings,
@@ -49,7 +53,11 @@ export interface WorkflowRun {
 	status: "running" | "completed" | "failed" | "killed";
 	startedAt: number;
 	/** Filled when the run settles. */
+	endedAt?: number;
 	result?: WorkflowRunResult;
+	/** The append-only progress log, updated LIVE (issue 14) — the card and
+	 * the widget's workflow row derive from this, not from `result`. */
+	progress: WorkflowEntry[];
 }
 
 const runs = new Map<string, WorkflowRun>();
@@ -59,15 +67,33 @@ export function workflowRuns(): ReadonlyMap<string, WorkflowRun> {
 	return runs;
 }
 
+/** The runs still going (issue 14): the card and the widget's workflow row
+ * render exactly these, and clear when the set is empty. */
+export function liveWorkflowRuns(): ReadonlyMap<string, WorkflowRun> {
+	return new Map([...runs].filter(([, run]) => run.status === "running"));
+}
+
+/**
+ * Stop one live run (the kill-switch action, issue 14): abort its signal —
+ * the runtime terminates the worker and closes every in-flight child
+ * host-side (sessions retained). Already-settled or unknown ids are a no-op
+ * returning false, so a double-click cannot double-report.
+ */
+export function stopWorkflowRun(runId: string): boolean {
+	const controller = abortBySession.get(runId);
+	if (controller === undefined) return false;
+	controller.abort();
+	return true;
+}
+
 /** `wf_` + hex — matches the resumeFromRunId shape issue 13 keys on. */
 export function newWorkflowRunId(): string {
 	return `wf_${randomBytes(6).toString("hex")}`;
 }
 
-/** The scratch directory: `<tmp>/pi-herdr-workflows/`. */
-export function workflowScratchDir(): string {
-	return join(tmpdir(), "pi-herdr-workflows");
-}
+/** The scratch directory moved to journal.ts (issue 14) so the host can use
+ * it without a runs→host cycle; re-exported here for the tool + tests. */
+export { workflowScratchDir } from "./journal.js";
 
 export interface StartRunOptions {
 	script: string;
@@ -126,6 +152,7 @@ export function startWorkflowRun(options: StartRunOptions): StartedRun {
 		...(options.resumeFrom !== undefined ? { resumedFrom: options.resumeFrom.runId } : {}),
 		status: "running",
 		startedAt: (options.now ?? (() => Date.now()))(),
+		progress: [],
 	};
 	runs.set(runId, run);
 
@@ -151,6 +178,11 @@ export function startWorkflowRun(options: StartRunOptions): StartedRun {
 		args,
 		host,
 		signal: controller.signal,
+		// Live progress (issue 14): the card reads run.progress while the run
+		// is going — result.progress only lands at settle.
+		onProgress: (entries) => {
+			run.progress.push(...entries);
+		},
 		journal: {
 			...(replay.length > 0 ? { entries: replay } : {}),
 			append: (entry) => appendJournal(journalPath, entry),
@@ -159,6 +191,7 @@ export function startWorkflowRun(options: StartRunOptions): StartedRun {
 		.then((result): WorkflowRunResult => {
 			const finishedAt = (options.now ?? (() => Date.now()))();
 			run.status = result.status;
+			run.endedAt = finishedAt;
 			run.result = result;
 			const notes = (options.load ?? defaultLoad)().notifications;
 			push(completionMessage(run, result, finishedAt - startedAt, notes));

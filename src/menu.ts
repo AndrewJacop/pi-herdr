@@ -21,6 +21,13 @@ import { getAgentKinds } from "./config.js";
 import { herdr } from "./herdr.js";
 import { normalizeAgent } from "./env.js";
 import {
+	liveWorkflowRuns,
+	stopAllWorkflowRuns,
+	stopWorkflowRun,
+	type WorkflowRun,
+} from "./workflow/runs.js";
+import { stats as workflowStats } from "./workflow/progress.js";
+import {
 	SETTING_KEYS,
 	getSettingsPaths,
 	loadSettings,
@@ -52,16 +59,23 @@ export interface MenuDeps {
 	paths?: SettingsPaths;
 	herdrFn?: typeof herdr;
 	kindsFn?: typeof getAgentKinds;
+	/** Live workflow runs (issue 14) — default: the real runs registry. */
+	liveRuns?: () => readonly WorkflowRun[];
+	/** Stop one run — default: stopWorkflowRun (the kill-switch action). */
+	stopRun?: (runId: string) => boolean;
+	/** Stop every run — default: stopAllWorkflowRuns (kill-all's companion). */
+	stopAllRuns?: () => void;
 }
 
 const KILL_ALL_ROW = "Kill all agents";
+const STOP_RUNS_ROW = "Stop workflow run";
 const DONE_ROW = "Done (close menu)";
 const MENU_TITLE = "subagents config";
 
 export function registerSubagentsCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("subagents", {
 		description:
-			"subagents config — settings menu (agent gates, model routing, limits) + Kill all agents",
+			"subagents config — settings menu (agent gates, model routing, limits), stop running workflows, + Kill all agents",
 		handler: async (args, ctx) => {
 			// Bare form and `/subagents config` both open the menu; an unknown
 			// sibling word is answered with a pointer (words can grow later).
@@ -112,6 +126,9 @@ export async function runSettingsMenu(
 	const paths = deps.paths ?? getSettingsPaths(ctx.cwd);
 	const herdrFn = deps.herdrFn ?? herdr;
 	const kindsFn = deps.kindsFn ?? getAgentKinds;
+	const liveRuns = deps.liveRuns ?? (() => [...liveWorkflowRuns().values()]);
+	const stopRun = deps.stopRun ?? stopWorkflowRun;
+	const stopAllRuns = deps.stopAllRuns ?? stopAllWorkflowRuns;
 
 	let lastIssueCount = 0;
 	for (;;) {
@@ -127,17 +144,26 @@ export async function runSettingsMenu(
 		for (const def of SETTING_KEYS) {
 			rowToKey.set(formatSettingRow(def, resolved), def);
 		}
+		const live = liveRuns();
 		const choice = await ctx.ui.select(MENU_TITLE, [
 			...rowToKey.keys(),
+			...(live.length > 0 ? [STOP_RUNS_ROW] : []),
 			KILL_ALL_ROW,
 			DONE_ROW,
 		]);
 		if (!choice || choice === DONE_ROW) return;
 
 		if (choice === KILL_ALL_ROW) {
-			await killAllAgents(ctx, herdrFn);
+			await killAllAgents(ctx, herdrFn, stopAllRuns);
 			continue;
 		}
+
+		if (choice === STOP_RUNS_ROW) {
+			await stopWorkflowRunAction(ctx, live, stopRun);
+			continue;
+		}
+		// (live runs re-read each pass, so the row reflects reality after every
+		// action — hot-reload semantics, same as the settings rows above)
 		const def = rowToKey.get(choice);
 		if (!def) continue;
 		await editSetting(ctx, def, resolved, paths, kindsFn);
@@ -300,6 +326,42 @@ function notifyWrite(
 }
 
 /**
+ * The Stop-workflow action (issue 14, the kill-switch ruling): pick a live
+ * run, confirm, stop it. The runtime terminates the worker and closes the
+ * run's in-flight children host-side (sessions retained, resumable); the
+ * run reports once, stopped.
+ */
+async function stopWorkflowRunAction(
+	ctx: MenuContext,
+	live: readonly WorkflowRun[],
+	stopRun: (runId: string) => boolean,
+): Promise<void> {
+	if (live.length === 0) {
+		ctx.ui.notify("No live workflow runs.", "info");
+		return;
+	}
+	const labels = live.map((run) => {
+		const s = workflowStats(run.progress);
+		return `${run.meta.name} — ${s.done}/${s.total} agents (${run.runId})`;
+	});
+	const picked = await ctx.ui.select("Stop which workflow?", labels);
+	if (picked === undefined) return;
+	const run = live[labels.indexOf(picked)];
+	if (run === undefined) return;
+	const confirmed = await ctx.ui.confirm(
+		`Stop workflow "${run.meta.name}"?`,
+		"Terminates the script and closes its in-flight agents. Sessions are retained for resume.",
+	);
+	if (!confirmed) return;
+	ctx.ui.notify(
+		stopRun(run.runId)
+			? `Workflow "${run.meta.name}" stopped.`
+			: `Workflow "${run.meta.name}" already settled.`,
+		"info",
+	);
+}
+
+/**
  * The separate Kill-all action: confirm, then terminate every running agent
  * pane. This is the only thing here that terminates anything — the
  * agents_kill_switch setting is a gate on new spawns and never stops a
@@ -308,12 +370,18 @@ function notifyWrite(
 async function killAllAgents(
 	ctx: MenuContext,
 	herdrFn: typeof herdr,
+	stopAllRuns: () => void,
 ): Promise<void> {
 	const confirmed = await ctx.ui.confirm(
 		"Kill all agents?",
 		"Terminates every running agent pane. In-flight work is lost. Continue?",
 	);
 	if (!confirmed) return;
+
+	// Live workflow runs die FIRST (issue 14): a still-running script would
+	// just spawn fresh children as their panes close below — kill-all must
+	// not become whack-a-mole.
+	stopAllRuns();
 
 	const r = await herdrFn<{ agents?: JsonObject[] }>(["agent", "list"], {
 		timeoutMs: 10_000,

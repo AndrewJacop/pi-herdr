@@ -4,10 +4,9 @@
  * PORTED from tintinweb/pi-subagents `src/workflow/journal.ts` (MIT; clone at
  * `.scratch/pi-subagents/`, gitignored). Ported near-verbatim — provenance kept
  * in this header per the v0.6 issue-12 honesty ruling; see the README
- * acknowledgement. One pi-herdr trim: no `schema` slot in {@link journalKey} —
- * structured output is issue 14's stretch; if it lands, the slot must be
- * appended conditionally exactly as upstream does, so journals already on disk
- * keep their keys.
+ * acknowledgement. One pi-herdr trim (issue 12) is now reverted: the `schema`
+ * slot in {@link journalKey} arrived with issue 14, appended conditionally
+ * exactly as upstream does, so journals already on disk keep their keys.
  *
  * ## What resume actually buys
  *
@@ -54,6 +53,8 @@
 
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** One settled agent call, as replayed. */
 export interface WorkflowJournalEntry {
@@ -78,6 +79,16 @@ export interface WorkflowJournalEntry {
 }
 
 /**
+ * The scratch directory: `<tmp>/pi-herdr-workflows/` — run scripts, resume
+ * journals and (issue 14) per-agent schema files live here, keyed by run id.
+ * Lives in journal.ts (a leaf) rather than runs.ts so the host can import it
+ * without an import cycle: runs.ts constructs the host.
+ */
+export function workflowScratchDir(): string {
+	return join(tmpdir(), "pi-herdr-workflows");
+}
+
+/**
  * The fields that decide what an agent does.
  *
  * Deliberately not the whole payload: `phaseIndex` and `phaseTitle` move the
@@ -93,6 +104,9 @@ export interface JournalKeyInput {
 	isolation?: string;
 	gate?: string;
 	resume?: string;
+	/** The call's schema, SERIALIZED (issue 14) — the runtime stringifies the
+	 * raw object, so a changed schema changes the key and ends the prefix. */
+	schema?: string;
 }
 
 /** Stable hash of a call's payload. Field order is fixed here, not by the caller. */
@@ -106,6 +120,9 @@ export function journalKey(input: JournalKeyInput): string {
 		input.isolation ?? null,
 		input.gate ?? null,
 		input.resume ?? null,
+		// Appended when issue 14 added it — journals written before then never
+		// carried a schema, and the null keeps their keys byte-identical.
+		...(input.schema !== undefined ? [input.schema] : []),
 	]);
 	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
 }

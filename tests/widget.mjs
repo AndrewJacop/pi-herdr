@@ -373,5 +373,94 @@ console.log("\n[3] fleetWidgetOnce: sink sees the model, empty clears once");
 	eq(deliveredSeen.length, 1, "clear stays cleared (no repeated setWidget)");
 }
 
+// ---------------------------------------------------------------------------
+console.log("\n[4] Workflow rows (issue 14): run-stamped children hidden, one row per live run");
+{
+	const NOW = 2_000_000;
+	const run = (over = {}) => ({
+		runId: "wf_card00001",
+		meta: { name: "review-changes", description: "d" },
+		startedAt: NOW - 60_000,
+		progress: [
+			{ type: "workflow_agent", index: 0, label: "a", state: "done", agentId: "w0", agentType: "t" },
+			{ type: "workflow_agent", index: 1, label: "b", state: "start", agentId: "w1", agentType: "t" },
+			{ type: "workflow_agent", index: 2, label: "c", state: "start", agentId: "w2", agentType: "t" },
+		],
+		...over,
+	});
+
+	// run-stamped records never render as ordinary fleet rows
+	const stamped = wg.buildWidgetModel(
+		[{ name: "wf-child", spawnedAt: NOW - 5_000, kind: "pi", submitted: true, sawWorking: true, workflow: "wf_card00001" }],
+		[{ status: "running" }],
+		NOW,
+		new Map(),
+		[],
+	);
+	eq(stamped.rows.length, 0, "run-stamped records are not fleet rows");
+
+	// one row per live run: name, running, N/M agents, elapsed — counted ACTIVE
+	const withRun = wg.buildWidgetModel(
+		[],
+		[],
+		NOW,
+		new Map(),
+		[run()],
+	);
+	eq(withRun.rows.length, 1, "one row per live run");
+	eq(withRun.rows[0].name, "review-changes", "the row names the workflow");
+	eq(withRun.rows[0].status, "running", "the run renders as running");
+	eq(withRun.rows[0].detail, "1/3 agents", "detail carries the N/M agent counts");
+	eq(withRun.rows[0].elapsedMs, 60_000, "elapsed from the run's start");
+	eq(withRun.active, 1, "the workflow row counts toward ACTIVE");
+	eq(withRun.idle, false, "a live run is not idle");
+
+	// (Settled runs never reach here — liveWorkflowRuns() filters by status,
+	// proven in the runs-registry section of tests/workflow-card.mjs.)
+
+	// fleetWidgetOnce: only workflow children in the registry + a live run →
+	// the table renders the workflow row alone (no clear, no child rows)
+	const liveRuns = () => [run()];
+	const wfChild = {
+		name: "wf-child",
+		paneId: "w1:p9",
+		spawnedAt: NOW - 5_000,
+		startedAt: NOW - 5_000,
+		kind: "pi",
+		submitted: true,
+		sawWorking: true,
+		workflow: "wf_card00001",
+	};
+	const seen = [];
+	await wg.fleetWidgetOnce({
+		registry: () => new Map([["wf-child", wfChild]]),
+		fleet: { ok: true, data: [{ paneId: "w1:p9", agentStatus: "working" }] },
+		readSidecar: () => ({ state: "missing" }),
+		readActivity: () => ({ state: "missing" }),
+		extract: () => null,
+		now: () => NOW,
+		liveRuns,
+		ui: { setWidget: (_k, factory) => seen.push(factory({}, { fg: (_c, s) => s, inverse: (s) => s }).render(120)) },
+	});
+	eq(seen.length, 1, "workflow-only fleet renders the table");
+	assert(seen[0].some((l) => l.includes("review-changes")), "the workflow row renders");
+	assert(!seen[0].some((l) => l.includes("wf-child")), "the workflow child itself does not");
+
+	// no visible records AND no live runs → clears once (unchanged rule)
+	const cleared = [];
+	await wg.fleetWidgetOnce({
+		registry: () => new Map([["wf-child", { ...wfChild, delivery: { kind: "done", at: NOW } }]]),
+		fleet: { ok: true, data: [] },
+		readSidecar: () => ({ state: "missing" }),
+		readActivity: () => ({ state: "missing" }),
+		extract: () => null,
+		now: () => NOW,
+		liveRuns: () => [],
+		ui: { setWidget: (_k, content) => cleared.push(content) },
+	});
+	eq(cleared.length, 1, "no rows + no runs clears the widget");
+	eq(cleared[0], undefined, "clear passes undefined");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

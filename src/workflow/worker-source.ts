@@ -4,8 +4,9 @@
  * PORTED from tintinweb/pi-subagents `src/workflow/worker-source.ts` (MIT;
  * clone at `.scratch/pi-subagents/`, gitignored). Ported near-verbatim with
  * three pi-herdr trims, all marked inline: `schema` is a named refusal until
- * issue 14, the effort list gains pi's `off`, and `budget.spent()` honestly
- * returns `Infinity` until issue 14 wires session-JSONL usage. Provenance per
+ * issue 14 lands the structured-output round trip, budget.spent() mirrors
+ * the host's JSONL-derived tally (issue 14), and the effort list gains pi's
+ * `off`. Provenance per
  * the v0.6 issue-12 honesty ruling; see the README acknowledgement.
  *
  * The host spawns this with `new Worker(WORKER_SOURCE, { eval: true })`, so the
@@ -92,6 +93,16 @@ const PRELUDE = ${JSON.stringify(DETERMINISM_PRELUDE)};
 let nextCallId = 1;
 const pendingCalls = new Map();
 
+/**
+ * The run's spent-output-token tally, mirrored from the host (issue 14).
+ * The host owns the number — it rides every response message as spent — so
+ * there is exactly one tally and the script's budget.spent() cannot drift
+ * from it. Infinity is a legal value: it means the host could not account
+ * for some child's usage, and it is the honest answer rather than a
+ * too-small sum.
+ */
+let spentTokens = 0;
+
 function callHost(method, payload) {
   // Drain first, so the phase() that named this agent reaches the host ahead of
   // the agent entry rather than a tick behind it.
@@ -105,6 +116,7 @@ function callHost(method, payload) {
 
 port.on("message", function (message) {
   if (!message || message.type !== "response") return;
+  if (typeof message.spent === "number") spentTokens = message.spent;
   const waiter = pendingCalls.get(message.callId);
   if (!waiter) return;
   pendingCalls.delete(message.callId);
@@ -322,13 +334,17 @@ const AGENT_OPTIONS = [
   "gate",
   "resume",
   "effort",
+  "schema",
 ];
 
-/** pi-herdr trim: options this runtime does not have YET, and why. */
-const UNSUPPORTED_AGENT_OPTIONS = {
-  schema:
-    "structured output arrives with pi-herdr v0.6 issue 14 (pi has no forced toolChoice, so it would be pressure, not a guarantee)",
-};
+/**
+ * pi-herdr trim (issue 14): empty. schema was the only entry (a named
+ * refusal while the structured-output round trip was pending); it is a
+ * supported option now. Kept as the extension point the validation loop
+ * already consults — a future unsupported option lands here, not as a
+ * special case in the loop.
+ */
+const UNSUPPORTED_AGENT_OPTIONS = {};
 
 /* ------------------------------------------------------------------ *
  * Script globals
@@ -464,6 +480,14 @@ async function agentIn(scope, prompt, opts) {
   if (effort !== undefined && EFFORT_LEVELS.indexOf(effort) === -1) {
     throw new Error("agent() opts.effort must be one of: " + EFFORT_LEVELS.join(", ") + ".");
   }
+  // The schema itself is validated host-side (compileJsonSchema) — an
+  // unusable one fails THAT call with the schema in the message, not this
+  // agent() with a guess. Shape-checked here only far enough to cross the
+  // postMessage boundary as a plain object.
+  const schema = options.schema;
+  if (schema !== undefined && (typeof schema !== "object" || schema === null || Array.isArray(schema))) {
+    throw new Error("agent() opts.schema must be a JSON Schema object.");
+  }
 
   // resume revives a child that already exists, so anything describing how to
   // *start* one is not a thing this call gets to decide — the revived child
@@ -512,6 +536,7 @@ async function agentIn(scope, prompt, opts) {
     gate: gate,
     resume: resume,
     effort: effort,
+    schema: schema,
   });
   if (result === undefined || result === null) return null;
   return result;
@@ -677,15 +702,16 @@ async function workflowIn(scope, nameOrRef, args) {
  * unchanged and take the branch they were written for. Leaving \`budget\`
  * undefined instead would turn a graceful guard into a ReferenceError.
  *
- * pi-herdr trim (issue 12): \`spent()\` returns Infinity — honest "not
- * measurable", not a fake 0. Issue 14 makes it real from the session JSONL
- * where usage is recoverable.
+ * spent() mirrors the host-owned tally (issue 14): lifetime output tokens
+ * recovered from each child's session JSONL, Infinity when any child's usage
+ * was unrecoverable. Issue 12 shipped an unconditional Infinity; the mirror
+ * keeps total null and remaining() exactly as they were.
  */
 function makeBudget() {
   return {
     total: null,
     spent: function () {
-      return Infinity;
+      return spentTokens;
     },
     remaining: function () {
       // Infinity, not a number, because there is no target to subtract from.

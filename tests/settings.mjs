@@ -908,6 +908,77 @@ console.log("\n[18] Schema consistency");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n[16] Menu: stop workflow run (issue 14) + kill-all stops runs");
+{
+	const NOW = 3_000_000;
+	const fakeRun = {
+		runId: "wf_card00001",
+		meta: { name: "review-changes", description: "d" },
+		startedAt: NOW - 30_000,
+		status: "running",
+		progress: [
+			{ type: "workflow_agent", index: 0, label: "a", state: "done", agentId: "w0", agentType: "t" },
+			{ type: "workflow_agent", index: 1, label: "b", state: "start", agentId: "w1", agentType: "t" },
+			{ type: "workflow_agent", index: 2, label: "c", state: "start", agentId: "w2", agentType: "t" },
+		],
+	};
+
+	// live runs present → the menu grows the Stop row, placed before Kill-all
+	const p = pathsFor("m16");
+	const stopped = [];
+	const stoppedAll = [];
+	const { ctx, calls } = scriptedCtx({
+		select: ["Stop workflow run", "review-changes — 1/3 agents (wf_card00001)", DONE],
+		confirm: [true],
+	});
+	await menu.runSettingsMenu(ctx, {
+		paths: p,
+		kindsFn,
+		liveRuns: () => [fakeRun],
+		stopRun: (runId) => {
+			stopped.push(runId);
+			return true;
+		},
+		stopAllRuns: () => {
+			stoppedAll.push(1);
+		},
+	});
+	const first = calls.select[0];
+	assert(
+		first.options.includes("Stop workflow run") &&
+			first.options.indexOf("Stop workflow run") < first.options.indexOf(KILL),
+		"Stop-workflow row shows when runs are live (before Kill-all)",
+	);
+	const picker = calls.select[1];
+	assert(/Stop which workflow/i.test(picker.title), "a picker lists the live runs");
+	assert(
+		picker.options.some((o) => o.includes("review-changes") && o.includes("1/3 agents")),
+		"picker rows carry name + N/M agents",
+	);
+	assert(/review-changes/.test(calls.confirm[0].title), "stopping confirms against the named run");
+	assert(eq(stopped, ["wf_card00001"]), "the picked run id is stopped");
+	assert(calls.notify.some((n) => /stopped/i.test(n.message)), "the stop is acknowledged");
+
+	// no live runs → no Stop row (the default in every other test section)
+	const quiet = scriptedCtx({ select: [DONE] });
+	await menu.runSettingsMenu(quiet.ctx, { paths: p, kindsFn });
+	assert(!quiet.calls.select[0].options.includes("Stop workflow run"), "no live runs → no Stop row");
+
+	// kill-all also stops workflow runs (no whack-a-mole respawns)
+	const herdrMock = herdrRecorder([{ ok: true, data: { agents: [] } }]);
+	const kill = scriptedCtx({ select: [KILL, DONE], confirm: [true] });
+	await menu.runSettingsMenu(kill.ctx, {
+		paths: p,
+		herdrFn: herdrMock.fn,
+		kindsFn,
+		stopAllRuns: () => {
+			stoppedAll.push(2);
+		},
+	});
+	assert(eq(stoppedAll, [2]), "kill-all stops live workflow runs (after confirm)");
+}
+
+// ---------------------------------------------------------------------------
 rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${passed} passed, ${failed} failed (${passed + failed} total)`);
 process.exitCode = failed === 0 ? 0 : 1;

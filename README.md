@@ -420,9 +420,19 @@ script as `<run id>.workflow.jsonl`; re-running with `resumeFromRunId` replays
 the unchanged prefix from that journal — an edited suffix pays only the delta,
 a journaled failure ends the prefix (resuming retries from the failure), and a
 run that used `agent({ resume })` is never replayed. Same session only.
-Stopping a run = the kill-all menu action; `workflows_enabled: false`
-removes the tool from the surface (evaluated at load) and refuses new runs
-after a mid-session toggle.
+While the run is going, a live progress card renders above the editor —
+workflow name, `N/M agents · elapsed`, the phase tree with per-agent rows
+(✔/⟳, label, type, state, tool calls, duration), and `log()` lines beneath —
+and the fleet table shows ONE row for the run instead of a row per child (the
+run reports for them). A schema'd call — `agent(prompt, { schema })` —
+registers a `StructuredOutput` tool in the child and delivers the validated
+payload as the answer (pressure, not guarantee — the runtime re-checks, and
+one retry prompt is sent if the child never called the tool). `budget.spent()`
+returns the run's real output-token usage where the children's session files
+report it, honest `Infinity` when one is unrecoverable; `total` is always
+`null`. Stopping a run = the /subagents “Stop workflow run” action (kill-all
+stops runs too); `workflows_enabled: false` removes the tool from the surface
+(evaluated at load) and refuses new runs after a mid-session toggle.
 
 ### Fleet introspection
 
@@ -645,12 +655,16 @@ The workflow runtime is ported from
 `src/workflow/meta.ts` are near-verbatim ports of its `src/workflow/` core —
 the vm worker bootstrap, the determinism jail, the caps table, the
 un-awaited-launch ruling, and the `meta` pre-parse — with pi-herdr trims
-marked in each file's header (no separate concurrency pool, run control and
-schema deferred to the following tickets). Issue 13 added `src/workflow/journal.ts`
+marked in each file's header (no separate concurrency pool, run control
+deferred post-v0.6). Issue 13 added `src/workflow/journal.ts`
 (the resume journal and prefix replay) and `src/workflow/saved.ts` (saved-workflow
-discovery), ported on the same terms. The host seam, run lifecycle, and
-tool surface are pi-herdr's own. One borrowed error message (the
-un-awaited-launch ruling) is kept verbatim upstream by design.
+discovery), ported on the same terms. Issue 14 added `src/workflow/progress.ts`
+(the progress model), `src/workflow/json-schema.ts` (schema validation), and
+the child-side `StructuredOutput` tool (ported from its `structured-output.ts`);
+the card arrangement follows its `workflow-card.ts`, trimmed. The host seam,
+run lifecycle, card module, and tool surface are pi-herdr's own. One borrowed
+error message (the un-awaited-launch ruling) is kept verbatim upstream by
+design.
 
 ## License
 

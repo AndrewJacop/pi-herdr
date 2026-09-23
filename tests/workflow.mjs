@@ -411,12 +411,13 @@ console.log("\n[8] option validation");
 		bad.status === "failed" && bad.error.includes("opts.wibble is not a recognised option"),
 		"unknown option key rejected by name",
 	);
-	const schema = await runOnce("return await agent('p', { schema: { type: 'object' } })");
+	// Issue 14: schema is a supported option now — the worker shape-checks it
+	// (a non-object is a script error); a usable object compiles host-side and
+	// the structured-output round trip takes over (tests/workflow-card.mjs).
+	const schemaShape = await runOnce("return await agent('p', { schema: 'nope' })");
 	assert(
-		schema.status === "failed" &&
-			schema.error.includes("opts.schema is not supported here") &&
-			schema.error.includes("issue 14"),
-		"schema is a NAMED refusal (issue 14's stretch), not a silent drop",
+		schemaShape.status === "failed" && schemaShape.error.includes("opts.schema must be a JSON Schema object"),
+		"schema shape-checked worker-side (must be an object)",
 	);
 	const effort = await runOnce("return await agent('p', { effort: 'extreme' })");
 	assert(
@@ -517,10 +518,15 @@ console.log("\n[9] parallel / pipeline semantics");
 console.log("\n[10] budget + globals");
 
 {
+	// Issue 14: spent() mirrors the host's JSONL-derived tally — 0 before any
+	// agent settles (upstream's semantics: tokens accrue through agents, and
+	// the script only learns through responses), Infinity when a child's usage
+	// is unrecoverable (pinned by tests/workflow-card.mjs). total/remaining
+	// keep the upstream-verbatim contract.
 	const b = await runOnce(
-		"return [budget.total, budget.spent() === Infinity, budget.remaining() === Infinity]",
+		"return [budget.total, budget.spent() === 0, budget.remaining() === Infinity]",
 	);
-	assert(eq(b.value, [null, true, true]), "budget: total null, spent/remaining honestly Infinity");
+	assert(eq(b.value, [null, true, true]), "budget: total null, spent starts 0, remaining honestly Infinity");
 	const meta = await runOnce("return [typeof meta, meta.name]");
 	assert(eq(meta.value, ["object", "t"]), "meta is a realm object the script can read");
 }

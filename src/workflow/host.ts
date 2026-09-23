@@ -47,6 +47,14 @@ import {
 	type AgentDirs,
 } from "../agentdefs.js";
 import { getAgentResult, type ResultView } from "../tools/result.js";
+import {
+	readExitSidecar,
+	sessionUsage,
+} from "../sessionfile.js";
+import { ENV_SCHEMA } from "../child.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { workflowScratchDir } from "./journal.js";
 import { resumeAgent as resumeMachinery } from "../tools/lifecycle.js";
 import type { RoutingRegistry } from "../launchplan.js";
 import {
@@ -127,8 +135,21 @@ export function createWorkflowHost(deps: WorkflowHostDeps): WorkflowHost {
 	 * `blocked` keeps WAITING (decided): the delivery loop has woken the
 	 * orchestrator, whose model or human can answer via herdr_message_agent;
 	 * the child then returns to work and this loop sees the settle.
+	 *
+	 * On a settle (done OR error) the child's lifetime usage is recovered
+	 * from its session JSONL (issue 14): the runtime's `budget.spent()` sums
+	 * it, and the card row shows the tool-call count. Failed children burned
+	 * tokens too. A child with no readable session file reports no usage —
+	 * the runtime treats the absence as an honest unknown, not a zero.
 	 */
 	async function awaitSettled(handle: string): Promise<WorkflowSpawnResult> {
+		const usage = () => {
+			const rec = records().get(handle);
+			return rec?.sessionPath ? sessionUsage(rec.sessionPath) : undefined;
+		};
+		/** The usage fields every settled result carries (absent = unrecoverable). */
+		const usageFields = (u: ReturnType<typeof usage>) =>
+			u !== undefined ? { outputTokens: u.outputTokens, toolCalls: u.toolCalls } : {};
 		for (;;) {
 			const r = await (deps.result ?? getAgentResult)(
 				{ target: handle, wait: true },
@@ -138,10 +159,17 @@ export function createWorkflowHost(deps: WorkflowHostDeps): WorkflowHost {
 				return { ok: false, error: r.error.message === "aborted" ? "aborted" : r.error.message };
 			}
 			const v: ResultView = r.data;
-			if (v.status === "done") return { ok: true, text: v.result ?? "" };
-			if (v.status === "error") {
+			if (v.status === "done" || v.status === "error") {
+				const u = usage();
+				if (v.status === "done") {
+					return { ok: true, text: v.result ?? "", ...usageFields(u) };
+				}
 				const msg = v.error?.errorMessage ?? "child failed";
-				return { ok: false, error: v.error?.stopReason ? `${v.error.stopReason}: ${msg}` : msg };
+				return {
+					ok: false,
+					error: v.error?.stopReason ? `${v.error.stopReason}: ${msg}` : msg,
+					...usageFields(u),
+				};
 			}
 			if (v.status === "blocked") {
 				await sleep(BLOCK_POLL_MS);
@@ -149,10 +177,59 @@ export function createWorkflowHost(deps: WorkflowHostDeps): WorkflowHost {
 			}
 			// gone: no live pane and no completion on disk. The session file stays
 			// readable/resumable — say so, since the run is abandoning the child.
+			// Usage is still reported when the file has some: a gone child's
+			// burned tokens count toward the run's spent tally all the same.
+			const u = usage();
 			return {
 				ok: false,
 				error: `the pane is gone without completing${v.note ? ` (${v.note})` : ""}`,
+				...(u !== undefined && (u.outputTokens > 0 || u.toolCalls > 0) ? usageFields(u) : {}),
 			};
+		}
+	}
+
+	/**
+	 * Await a schema'd child, then hold its answer to the StructuredOutput
+	 * contract (issue 14).
+	 *
+	 * The child's own tool validated whatever it captured and the validated
+	 * payload rides the done sidecar — that payload IS the delivered answer
+	 * (the assistant text around it is discarded, as the tool's description
+	 * says). A child that answered prose anyway gets ONE resume prompt — the
+	 * backstop upstream's runAgent sends — and if that also lands without a
+	 * captured payload, the call fails honestly for THIS agent. The runtime's
+	 * applySchema remains the last word: it re-checks whatever text comes back.
+	 */
+	async function awaitSettledStructured(handle: string): Promise<WorkflowSpawnResult> {
+		for (let attempt = 0; ; attempt++) {
+			const r = await awaitSettled(handle);
+			if (!r.ok) return r;
+			const rec = records().get(handle);
+			const sc = rec?.sessionPath
+				? readExitSidecar(rec.sessionPath)
+				: ({ state: "missing" } as const);
+			if (sc.state === "ok" && sc.sidecar.type === "done" && sc.sidecar.structured !== undefined) {
+				return { ...r, text: sc.sidecar.structured };
+			}
+			if (attempt > 0) {
+				return {
+					ok: false,
+					error:
+						"The agent never called StructuredOutput with a payload matching the requested schema — its answer was prose, which a schema'd call discards.",
+				};
+			}
+			const resumed = await (deps.resume ?? resumeMachinery)(
+				{
+					target: handle,
+					message:
+						"You did not report your answer through the StructuredOutput tool, so it was not recorded. " +
+						"Call StructuredOutput now with your complete final answer as the tool's arguments. Do not reply with prose.",
+				},
+				engineDeps(),
+			);
+			if (!resumed.ok) {
+				return { ok: false, error: `the structured-output retry could not be sent: ${resumed.error.message}` };
+			}
 		}
 	}
 
@@ -176,6 +253,18 @@ export function createWorkflowHost(deps: WorkflowHostDeps): WorkflowHost {
 			}
 			// Kind pinned at the host: no default_kind drift can put a workflow
 			// child on a non-pi harness.
+			// Structured output (issue 14): write the compiled schema where the
+			// child extension will read it (the workflow scratch dir, keyed by run
+			// id + agent id) and stamp its PATH into the child env — a path, not
+			// inline JSON (Windows env-block limits). The child registers the
+			// StructuredOutput tool from it; this side re-checks on settle.
+			let extraEnv: Record<string, string> | undefined;
+			if (request.schema !== undefined) {
+				mkdirSync(workflowScratchDir(), { recursive: true });
+				const schemaPath = join(workflowScratchDir(), `${deps.runId}-${request.agentId}.schema.json`);
+				writeFileSync(schemaPath, JSON.stringify(request.schema.schema), "utf8");
+				extraEnv = { [ENV_SCHEMA]: schemaPath };
+			}
 			const r = await (deps.spawn ?? spawnEngineAgent)(
 				{
 					prompt: request.prompt,
@@ -185,6 +274,7 @@ export function createWorkflowHost(deps: WorkflowHostDeps): WorkflowHost {
 					...(request.effort !== undefined ? { thinking: request.effort } : {}),
 					...(request.isolation === "worktree" ? { isolated: true } : {}),
 					name: request.label,
+					...(extraEnv !== undefined ? { extraEnv } : {}),
 					wait: false,
 				},
 				engineDeps(),
@@ -203,6 +293,9 @@ export function createWorkflowHost(deps: WorkflowHostDeps): WorkflowHost {
 			const rec = records().get(handle);
 			if (rec) rec.workflow = deps.runId;
 			request.onResolved?.({ recordId: handle });
+			if (request.schema !== undefined) {
+				return awaitSettledStructured(handle);
+			}
 			return awaitSettled(handle);
 		},
 
