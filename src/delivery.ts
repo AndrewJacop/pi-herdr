@@ -28,7 +28,7 @@
 // declared (`agent_done`) or re-armed (idle re-arm, labeled).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { fleetList } from "./herdr.js";
+import { fleetList, herdr } from "./herdr.js";
 import type { NormalizedAgent, Result } from "./env.js";
 import {
 	getSettingsPaths,
@@ -78,6 +78,9 @@ export interface DeliveryDeps {
 	/** A pre-fetched fleet observation (shared with the watchdog so one tick
 	 * costs one `agent list`). When set, `list` is not called. */
 	fleet?: Result<NormalizedAgent[]>;
+	/** Best-effort pane close after a terminal delivery (manual e2e F2) —
+	 * default: `herdr pane close` (the session is retained). */
+	closePane?: (paneId: string) => Promise<unknown>;
 }
 
 // ---- push composition ---------------------------------------------------------
@@ -141,6 +144,14 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 	for (const a of fleet.data) {
 		if (a.paneId && a.agentStatus) statusByPane.set(a.paneId, a.agentStatus);
 	}
+	// Actively live = mid-work or waiting on input — a pane in this state is
+	// never closed under a terminal delivery (guard; also the auto-exit race:
+	// the retry sweep holds until the fleet stops listing the pane).
+	const paneLive = (paneId: string | undefined): boolean => {
+		if (!paneId) return false;
+		const s = statusByPane.get(paneId);
+		return s === "working" || s === "blocked";
+	};
 
 	for (const record of records) {
 		// --- takeover marker → quiet note, once. Sent regardless of the
@@ -159,7 +170,16 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 			}
 		}
 
-		if (record.delivery) continue; // terminal already steered — one push per event
+		if (record.delivery) {
+			// Terminal already steered — one push per event. A pane close skipped
+			// by the live-agent guard (the auto-exit race) retries here: once the
+			// fleet stops listing the pane, the leftover empty pane still closes
+			// (manual e2e F2 — the promise must not lose the race).
+			if (record.paneClosePending && record.paneId && !paneLive(record.paneId)) {
+				attemptPaneClose(deps, record);
+			}
+			continue;
+		}
 
 		// --- never started (a queued record failed in the drain loop, after
 		// the spawn tool had already returned "queued")
@@ -179,7 +199,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 		if (isPi && record.sessionPath) {
 			const sidecar = (deps.readSidecar ?? readExitSidecar)(record.sessionPath);
 			if (sidecar.state === "ok") {
-				deliverSidecar(record, sidecar.sidecar, deps);
+				deliverSidecar(record, sidecar.sidecar, deps, paneLive(record.paneId));
 				continue;
 			}
 		}
@@ -286,6 +306,7 @@ function deliverSidecar(
 	record: SpawnRecord,
 	sidecar: { type: "done"; rearm?: true } | { type: "error"; errorMessage: string; stopReason: string; rearm?: true },
 	deps: DeliveryDeps,
+	paneLive = false,
 ): void {
 	const notes = notifications(deps);
 	const extracted = record.sessionPath
@@ -309,6 +330,7 @@ function deliverSidecar(
 				},
 				wake: terminalWake(notes),
 			},
+			paneLive,
 		);
 		return;
 	}
@@ -328,6 +350,7 @@ function deliverSidecar(
 			},
 			wake: terminalWake(notes),
 		},
+		paneLive,
 	);
 }
 
@@ -337,12 +360,55 @@ function markTerminal(record: SpawnRecord, kind: DeliveryKind, now: () => number
 	record.delivery = { kind, at: now() };
 }
 
+// ---- the pane-close promise (manual e2e F2) ----------------------------------
+
+/** Injectable-seam default: the herdr CLI, same shape as the workflow host's
+ * abort close (best-effort, bounded budget). */
+const defaultClosePane = (paneId: string): Promise<unknown> =>
+	herdr(["pane", "close", paneId], { timeoutMs: 10_000 });
+
+/** Fire the close once and clear the pending flag — never retried after a
+ * failed attempt (best-effort, like the kill-all path). */
+function attemptPaneClose(deps: DeliveryDeps, record: SpawnRecord): void {
+	record.paneClosePending = false;
+	if (!record.paneId) return;
+	void (deps.closePane ?? defaultClosePane)(record.paneId).catch(() => {});
+}
+
+/**
+ * The documented promise, kept at the single choke point (manual e2e F2): a
+ * terminally delivered child's pane closes — the child has exited on every
+ * terminal route (the sidecar IS its exit declaration; sentinel/gone mean the
+ * fleet no longer lists it), so the leftover empty pane goes too. Sessions are
+ * never deleted (issue 04 ruling), so closing loses nothing. Guards: no pane
+ * (queued/never-started), a pane the fleet still reports actively live
+ * (working/blocked — defensive; held as pending and retried on later ticks,
+ * because a dying auto-exit can still be listed when its sidecar lands), and
+ * a taken-over pane that has not re-arm-delivered (the human is driving; only
+ * the re-arm delivery closes it).
+ */
+function closeRecordPane(
+	deps: DeliveryDeps,
+	record: SpawnRecord,
+	rearm: boolean,
+	paneLive: boolean,
+): void {
+	if (!record.paneId) return;
+	if (record.takenOver && !rearm) return;
+	if (paneLive) {
+		record.paneClosePending = true;
+		return;
+	}
+	attemptPaneClose(deps, record);
+}
+
 /**
  * Mark a record's terminal event, then steer it — UNLESS the record belongs to
  * a workflow run (v0.6 issue 12): the RUN reports for its children, so the
  * per-child push is suppressed while the delivery mark (row leaves the fleet,
- * one event per record) still happens. Takeover notes and blocked wakes are
- * NOT routed through here — a blocked workflow child still wakes the
+ * one event per record) still happens — and the run owns its children's panes
+ * (abort closes them; the loop never does). Takeover notes and blocked wakes
+ * are NOT routed through here — a blocked workflow child still wakes the
  * orchestrator, whose answer via herdr_message_agent resumes it.
  */
 function deliverTerminal(
@@ -350,10 +416,12 @@ function deliverTerminal(
 	record: SpawnRecord,
 	kind: DeliveryKind,
 	msg: SteeredMessage,
+	paneLive = false,
 ): void {
 	markTerminal(record, kind, deps.now ?? (() => Date.now()));
 	if (record.workflow) return;
 	pushTerminal(deps, msg, notifications(deps));
+	closeRecordPane(deps, record, msg.details.rearm === true, paneLive);
 }
 
 function notifications(deps: DeliveryDeps): HerdrSettings["notifications"] {

@@ -588,6 +588,12 @@ export interface SpawnRecord {
 	/** Terminal event already steered to the orchestrator (issue 06) —
 	 * one push per terminal event; 07 prunes fleet rows on this. */
 	delivery?: { kind: DeliveryKind; at: number };
+	/** Pane close pending (manual e2e F2): the terminal delivery found the
+	 * pane still listed actively live (the auto-exit race) — the close is
+	 * retried on later ticks once the fleet stops listing it. Never set for
+	 * taken-over panes that have not re-arm-delivered, or workflow children
+	 * (the run owns their panes). */
+	paneClosePending?: boolean;
 	/** A human took the pane over (child-reported <session>.takeover). */
 	takenOver?: boolean;
 	/** Turn cancelled (issue 10): when the parent sent Escape to the pane.

@@ -95,6 +95,15 @@ async function fleetStatus(paneId) {
 	return hit ? (hit.agent_status ?? "live") : "gone";
 }
 
+/** Is the pane still listed by `herdr pane list`? Panes persist after their
+ * agent exits (manual e2e F2) — the delivery loop must close them. */
+async function paneListed(paneId) {
+	const r = await herdr(["pane", "list"], { timeoutMs: 10_000 }).catch(() => null);
+	if (!r?.ok) return "list-failed";
+	const panes = r.data?.panes ?? r.data?.result?.panes ?? [];
+	return panes.some((p) => (p?.pane_id ?? p?.id) === paneId);
+}
+
 const tracked = [];
 
 /** Close every pane this run may have created: the tracked spawn panes plus
@@ -204,6 +213,18 @@ try {
 			after === "gone",
 			`the auto-exited child's pane left the fleet (${after})`,
 		);
+		// Manual e2e F2: the PANE itself must be gone too — the delivery loop
+		// closes the leftover pane after the terminal push (herdr's pane list
+		// may lag the close by a beat, so poll).
+		let listed = d.paneId ? await paneListed(d.paneId) : false;
+		for (let i = 0; i < 15 && listed === true; i++) {
+			await sleep(2_000);
+			listed = d.paneId ? await paneListed(d.paneId) : false;
+		}
+		check(
+			listed === false,
+			`the auto-exited child's PANE is closed after the delivery (${listed})`,
+		);
 		check(
 			d.sessionPath && existsSync(d.sessionPath),
 			"the session file is retained after the pane closed",
@@ -309,6 +330,17 @@ try {
 			endSt = d.paneId ? await fleetStatus(d.paneId) : "gone";
 		}
 		check(endSt === "gone", `the re-armed pane closed (${endSt})`);
+		// Manual e2e F2: same promise on the pane list — the re-arm delivery
+		// closes the pane, not just the fleet row.
+		let endListed = d.paneId ? await paneListed(d.paneId) : false;
+		for (let i = 0; i < 15 && endListed === true; i++) {
+			await sleep(2_000);
+			endListed = d.paneId ? await paneListed(d.paneId) : false;
+		}
+		check(
+			endListed === false,
+			`the re-armed child's PANE is closed after the delivery (${endListed})`,
+		);
 		check(
 			typeof d.sessionPath === "string" && existsSync(d.sessionPath),
 			"the session is retained for resume",
