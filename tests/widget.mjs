@@ -96,6 +96,17 @@ console.log("\n[1] Pure formatting: elapsed, counts, rendering");
 		`right column is state ages: ${ages.join(",")}`,
 	);
 	assert(
+		!row.endsWith("7m 7m"),
+		`no state age duplicated beside an age-bearing detail: ${row}`,
+	);
+	// header-dictated width (natural < headerMin): rows must still span the box
+	const narrowLines = wg.renderWidgetLines(idle, 80);
+	assert(
+		visible(narrowLines[1]).length === visible(narrowLines[0]).length &&
+			narrowLines[1].endsWith("│"),
+		`row spans the box when the header dictates width: ${visible(narrowLines[1])}`,
+	);
+	assert(
 		rendered.some((l) => l.startsWith("╰─")),
 		"box closes with the footer border",
 	);
@@ -123,6 +134,17 @@ console.log("\n[1] Pure formatting: elapsed, counts, rendering");
 		narrow.some((l) => l.includes("…")),
 		"narrow render truncates with an ellipsis",
 	);
+
+	// F11 (manual e2e crash): below headerMin (~35) the old code FLOORED the
+	// box at headerMin — 35-char lines in a 26-col pane crash pi's TUI. Every
+	// width, including sub-floor ones, must render inside the terminal.
+	for (const w of [26, 13]) {
+		const tiny = wg.renderWidgetLines(model, w);
+		assert(
+			tiny.length > 0 && tiny.every((l) => visible(l).length <= w),
+			`width ${w}: every line fits (got max ${Math.max(...tiny.map((l) => visible(l).length))})`,
+		);
+	}
 
 	// blocked callout beneath the box
 	const blockedModel = wg.buildWidgetModel(

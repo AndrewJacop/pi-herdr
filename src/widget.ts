@@ -2,7 +2,7 @@
 // fleet — one row per in-flight agent — rendered above the editor.
 //
 //   ╭─ Subagents ────────────── 1 active · 1 open ─╮
-//   │ 00:23  scout-auth       active · bash 7m  7m │
+//   │ 00:23  scout-auth       active · bash 7m      │
 //   │ 00:45  scout-db               waiting       2m │
 //   ╰───────────────────────────────────────────────╯
 //    ⚠ scout-db BLOCKED 2m "Schema A (wide) or B (tall)?"
@@ -46,6 +46,7 @@ import {
 } from "./status.js";
 import { liveWorkflowRuns, type WorkflowRun } from "./workflow/runs.js";
 import { stats as workflowStats } from "./workflow/progress.js";
+import { layoutWorkflowCards } from "./workflow/card.js";
 import type { NormalizedAgent, Result } from "./env.js";
 
 // ---- the model ---------------------------------------------------------------
@@ -241,7 +242,14 @@ export function renderWidgetLines(
 		name: r.name,
 		left: `${formatElapsed(r.elapsedMs)}  ${r.name}`,
 		mid: r.detail ? `${r.status} · ${r.detail}` : r.status,
-		age: formatAge(r.stateAgeMs),
+		// An activity detail already carries its own age (`streaming 1m`);
+		// repeating the state age beside it reads as a bug when they coincide
+		// (`1m 1m` — the fresh-turn case, i.e. almost always). Keep the right
+		// column for details without an age and for blocked rows (callout).
+		age:
+			r.status !== "blocked" && r.detail && /\s\d+[smh]$/.test(r.detail)
+				? ""
+				: formatAge(r.stateAgeMs),
 		callout: r.status === "blocked",
 		preview: r.blockedPreview,
 	}));
@@ -257,8 +265,12 @@ export function renderWidgetLines(
 	// maxL + maxM + maxA + 5 wide between the bars, +2 with them.
 	const natural = maxL + maxM + maxA + 7;
 	const headerMin = counts.length + 18; // `─ Subagents ─ N active · M open ─`
-	let F = Math.min(Math.max(20, width), Math.max(natural, headerMin));
-	if (F < headerMin) F = headerMin; // absurdly narrow — hard-fit below
+	// Hug the content, cap at the terminal — the widget must NEVER exceed the
+	// supplied width: pi's TUI hard-crashes the session on any overwide line
+	// (manual e2e F11: the old headerMin floor rendered 35-char lines in a
+	// 26-col pane). In a narrow pane the header counts truncate; that is the
+	// right trade for not killing the session.
+	const F = Math.min(Math.max(20, width), Math.max(natural, headerMin), width);
 
 	// Shrink the name column first, then the state column (ages stay honest).
 	let LW = maxL;
@@ -272,17 +284,21 @@ export function renderWidgetLines(
 	const callouts: string[] = [];
 
 	// header: ╭─ Subagents ────── N active · M open ─╮
-	const dashes = F - counts.length - 16; // ≥ 2 given F ≥ headerMin
+	const dashes = Math.max(1, F - counts.length - 16);
 	const headContent = `─ Subagents ${"─".repeat(dashes - 1)} ${counts} ─`;
 	lines.push(style.border("╭") + style.border(hardFit(headContent, F - 2)) + style.border("╮"));
 
 	for (const c of cells) {
+		// hardFit truncates, padEnd fills: a row must ALWAYS span the box. The
+		// header's dashes can make F wider than the row content (short states,
+		// narrow terminals) — unpadded rows floated short of the right border
+		// in exactly those states.
 		const content = hardFit(
 			` ${fit(c.left, LW)}${" ".repeat(Math.max(0, LW - c.left.length))}  ` +
 				`${fit(c.mid, MW)}${" ".repeat(Math.max(0, MW - c.mid.length))} ` +
 				`${c.age.padStart(maxA)} `,
 			F - 2,
-		);
+		).padEnd(F - 2);
 		lines.push(bar + content + bar);
 		if (c.callout) callouts.push(calloutLine(c.name, c.age, c.preview, width, style));
 	}
@@ -292,7 +308,10 @@ export function renderWidgetLines(
 	// The blocked callout sits beneath the whole table — the widget's one
 	// loud alarm (kept v0.5 amendment; the box is the quiet ambient view).
 	lines.push(...callouts);
-	return lines;
+	// The hard contract (F11): every line fits the supplied width, no matter
+	// what the assembly above does. hardFit is ANSI-aware, so this is a pure
+	// safety net — normal widths never hit it.
+	return lines.map((l) => hardFit(l, width));
 }
 
 function hardFit(s: string, n: number): string {
@@ -476,12 +495,22 @@ export async function fleetWidgetOnce(deps: WidgetDeps = {}): Promise<void> {
 	shown = true;
 	const model = buildWidgetModel(records, projections, now(), cache, [...liveRuns]);
 	sink.setWidget(WIDGET_KEY, (_tui, theme) => ({
-		render: (width) =>
-			renderWidgetLines(model, width, {
+		// ONE widget slot for table + workflow card (manual e2e F9): pi re-stacks
+		// widgets on every setWidget (delete + append), so two self-refreshing
+		// widgets flip vertical order forever. The card renders beneath the
+		// table, plain (it never used the theme).
+		render: (width) => [
+			...renderWidgetLines(model, width, {
 				dim: (s) => theme.fg("dim", s),
 				border: (s) => theme.fg(model.idle ? "warning" : "border", s),
 				inverse: (s) => theme.inverse(s),
 			}),
+			// F11: the card's own truncate is length-based (ASCII content); the
+			// ANSI-aware clamp keeps the whole widget inside pi's hard limit.
+			...(liveRuns.length
+				? layoutWorkflowCards(liveRuns, now(), width).map((l) => hardFit(l, width))
+				: []),
+		],
 		invalidate: () => {},
 	}));
 }

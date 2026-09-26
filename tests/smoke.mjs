@@ -148,10 +148,11 @@ assert(
 	"no turn_end footer hook (footer is probe-diagnostics)",
 );
 assert(
-	// session_start consumers: footer probe verdict + fleet widget + workflow
-	// card (issue 14), plus self-report when running inside a herdr pane.
-	events.session_start?.length === (selfReportActive ? 4 : 3),
-	"session_start: probe verdict (footer) + widget + workflow card capture (+self-report in-pane)",
+	// session_start consumers: footer probe verdict + fleet widget (which also
+	// carries the workflow card — F9, one slot), plus self-report when running
+	// inside a herdr pane.
+	events.session_start?.length === (selfReportActive ? 3 : 2),
+	"session_start: probe verdict (footer) + fleet widget slot (+self-report in-pane)",
 );
 assert(
 	commands.some((c) => c.name === "subagents"),

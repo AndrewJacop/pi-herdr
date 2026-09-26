@@ -406,10 +406,12 @@ function closeRecordPane(
  * Mark a record's terminal event, then steer it — UNLESS the record belongs to
  * a workflow run (v0.6 issue 12): the RUN reports for its children, so the
  * per-child push is suppressed while the delivery mark (row leaves the fleet,
- * one event per record) still happens — and the run owns its children's panes
- * (abort closes them; the loop never does). Takeover notes and blocked wakes
- * are NOT routed through here — a blocked workflow child still wakes the
- * orchestrator, whose answer via herdr_message_agent resumes it.
+ * one event per record) still happens. The pane-close promise is fleet-wide
+ * (manual e2e F2/F10): a settled child's pane closes at its terminal mark,
+ * workflow children included — the run's abort close remains as the in-flight
+ * backstop, and a best-effort double close is harmless. Takeover notes and
+ * blocked wakes are NOT routed through here — a blocked workflow child still
+ * wakes the orchestrator, whose answer via herdr_message_agent resumes it.
  */
 function deliverTerminal(
 	deps: DeliveryDeps,
@@ -419,9 +421,9 @@ function deliverTerminal(
 	paneLive = false,
 ): void {
 	markTerminal(record, kind, deps.now ?? (() => Date.now()));
+	closeRecordPane(deps, record, msg.details.rearm === true, paneLive);
 	if (record.workflow) return;
 	pushTerminal(deps, msg, notifications(deps));
-	closeRecordPane(deps, record, msg.details.rearm === true, paneLive);
 }
 
 function notifications(deps: DeliveryDeps): HerdrSettings["notifications"] {

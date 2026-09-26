@@ -863,8 +863,8 @@ console.log("\n[3] Delivery loop — detection routes + wake flags");
 			"a workflow child's terminal sidecar MARKS the record (row prunes) without a per-child push",
 		);
 		assert(
-			w.closes.length === 0,
-			"the loop never closes a workflow child's pane (the run owns its children's panes)",
+			w.closes.includes(child.paneId),
+			"a workflow child's settled pane STILL closes at its terminal mark (F10 — only the push is suppressed)",
 		);
 		// ...and the error sidecar is equally silent
 		const dir2 = mkdtempSync(join(tmpdir(), "pi-herdr-dlv-wf2-"));

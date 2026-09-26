@@ -32,14 +32,7 @@ import {
 	type PhaseGroup,
 	type WorkflowAgentEntry,
 } from "./progress.js";
-import { liveWorkflowRuns, type WorkflowRun } from "./runs.js";
-import type { UiSink, WidgetComponent } from "../widget.js";
-
-/** The card's widget slot (distinct from the fleet table's `herdr-fleet`). */
-export const WORKFLOW_CARD_KEY = "herdr-workflow";
-
-/** Header re-render cadence: the clock is the only thing that moves. */
-const TICK_MS = 1_000;
+import type { WorkflowRun } from "./runs.js";
 
 /** Widest label column before stats stop being aligned and just follow. */
 const LABEL_COLUMN_MAX = 28;
@@ -158,54 +151,8 @@ export function layoutWorkflowCards(
 	return lines;
 }
 
-// ---- the mount -----------------------------------------------------------------
-
-let ui: UiSink | undefined;
-let shown = false;
-let timer: ReturnType<typeof setInterval> | undefined;
-
-/** Capture the orchestrator UI (TUI/RPC only) + run the card clock. */
-export function registerWorkflowCard(pi: {
-	on(event: string, handler: (e: unknown, ctx: { hasUI: boolean; ui: UiSink }) => void): void;
-}): void {
-	pi.on("session_start", (_e, ctx) => {
-		ui = ctx.hasUI ? ctx.ui : undefined;
-		if (timer === undefined) {
-			timer = setInterval(() => {
-				try {
-					workflowCardOnce();
-				} catch {
-					/* best-effort — the card must never break its session */
-				}
-			}, TICK_MS);
-			timer.unref?.();
-		}
-	});
-	pi.on("session_shutdown", () => {
-		ui = undefined;
-		shown = false;
-		if (timer !== undefined) {
-			clearInterval(timer);
-			timer = undefined;
-		}
-	});
-}
-
-/**
- * One card pass: render the live runs, or clear the slot once when none are.
- * In-memory only — safe to call at 1 Hz forever.
- */
-export function workflowCardOnce(sink: UiSink | undefined = ui, now: number = Date.now()): void {
-	if (!sink) return;
-	const live = [...liveWorkflowRuns().values()];
-	if (live.length === 0) {
-		if (shown) sink.setWidget(WORKFLOW_CARD_KEY, undefined);
-		shown = false;
-		return;
-	}
-	shown = true;
-	sink.setWidget(WORKFLOW_CARD_KEY, (_tui: unknown, _theme: unknown): WidgetComponent => ({
-		render: (width: number) => layoutWorkflowCards(live, now, width),
-		invalidate: () => {},
-	}));
-}
+// The card has NO widget slot of its own (manual e2e F9): pi re-stacks
+// widgets on every setWidget (delete + append), so two self-refreshing
+// widgets flip vertical order forever. The fleet widget (src/widget.ts)
+// renders these lines beneath its table on the delivery tick — one slot,
+// one owner. This file stays the pure layout.
