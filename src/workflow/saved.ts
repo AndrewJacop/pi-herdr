@@ -53,8 +53,10 @@ import { MAX_SCRIPT_LENGTH } from "./runtime.js";
 /** Extension a saved workflow file carries. */
 const WORKFLOW_EXTENSION = ".js";
 
-/** True when a name could escape its directory or is not a usable identifier. */
-function isUnsafeName(name: string): boolean {
+/** True when a name could escape its directory or is not a usable identifier.
+ * Exported for runs.ts's inline-script auto-save (manual e2e F15), which
+ * applies the same whitelist before writing a `<name>.js` file. */
+export function isUnsafeName(name: string): boolean {
 	if (!name || name.length > 128) return true;
 	return !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name);
 }

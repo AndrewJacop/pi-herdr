@@ -1181,6 +1181,9 @@ export interface SpawnResultData {
 	/** Set when a queued record's deferred start failed (status reads "gone" —
 	 * the closest terminal in the six-state vocabulary; no pane ever existed). */
 	startError?: string;
+	/** Manual e2e F12: set when the specifier was shape-coerced (agent string →
+	 * type, type object → inline definition) — the receipt surfaces it. */
+	coercedNote?: string;
 }
 
 export type SpawnResult = Result<SpawnResultData>;
@@ -1208,11 +1211,13 @@ function routingResultFields(
 function substrateResultFields(
 	record: SpawnRecord,
 	routing: RoutingResolution,
+	coercedNote?: string,
 ): Partial<SpawnResultData> {
 	return {
 		...routingResultFields(routing, record.session_mode),
 		...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
 		...(record.activityPath ? { activityPath: record.activityPath } : {}),
+		...(coercedNote !== undefined ? { coercedNote } : {}),
 	};
 }
 
@@ -1238,6 +1243,7 @@ export async function spawnAgent(
 	);
 	if (!spec.ok) return spec;
 	const { definition, inline } = spec.data;
+	const coercedNote = spec.data.coerced;
 
 	// 2. settings (read-at-use: gates consult the moment they matter)
 	const settings = (deps.load ?? defaultLoad)();
@@ -1399,7 +1405,7 @@ export async function spawnAgent(
 					depth: record.depth,
 					queued: true,
 					stance: record.stance,
-					...substrateResultFields(record, routing),
+					...substrateResultFields(record, routing, coercedNote),
 				},
 			};
 		}
@@ -1417,7 +1423,7 @@ export async function spawnAgent(
 				stance: record.stance,
 				worktreePath: record.worktreePath,
 				waited: true,
-				...substrateResultFields(record, routing),
+				...substrateResultFields(record, routing, coercedNote),
 				...(record.startError ? { startError: record.startError } : {}),
 			},
 		};
@@ -1463,7 +1469,7 @@ export async function spawnAgent(
 				depth: record.depth,
 				stance: record.stance,
 				worktreePath: record.worktreePath,
-				...substrateResultFields(record, routing),
+				...substrateResultFields(record, routing, coercedNote),
 			},
 		};
 	}
@@ -1480,7 +1486,7 @@ export async function spawnAgent(
 			stance: record.stance,
 			worktreePath: record.worktreePath,
 			waited: true,
-			...substrateResultFields(record, routing),
+			...substrateResultFields(record, routing, coercedNote),
 		},
 	};
 }

@@ -11,6 +11,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	rmdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -1004,26 +1005,29 @@ console.log("\n[18] runs.ts + the tool — background lifecycle, gate, scratch f
 		notifications,
 	});
 
-	// --- startWorkflowRun: scratch file, run id, completion push -------------
+	// --- startWorkflowRun: auto-saved script, run id, completion push -------------
+	// Manual e2e F15: an inline script persists to <cwd>/.pi/workflows/<name>.js
+	// (dedupe on differing content), not an invisible temp scratch copy.
 	{
+		const cwd = mkdtempSync(join(tmpdir(), "pi-herdr-f15-"));
 		const pushes = [];
 		const started = runsMod.startWorkflowRun({
 			script: GOOD,
 			host: stubHost(),
+			cwd,
 			pi: { sendMessage: () => {} },
 			push: (m) => pushes.push(m),
 			load: () => settings("normal"),
 		});
 		assert(/^wf_[a-z0-9]{12}$/.test(started.run.runId), `run id shape wf_<hex> (${started.run.runId})`);
 		assert(
-			started.run.scriptPath.startsWith(runsMod.workflowScratchDir()) &&
-				started.run.scriptPath.endsWith(".workflow.js"),
-			"the script lands in the scratch dir as <runid>.workflow.js (the edit-and-re-run loop)",
+			started.run.scriptPath === join(cwd, ".pi", "workflows", "t.js"),
+			"an inline script auto-saves to <cwd>/.pi/workflows/<meta.name>.js (the edit-and-re-run loop)",
 		);
 		assert(
 			existsSync(started.run.scriptPath) &&
 				readFileSync(started.run.scriptPath, "utf8") === GOOD,
-			"the scratch file carries the verbatim source",
+			"the auto-saved file carries the verbatim source",
 		);
 		assert(started.run.status === "running", "the run starts as running");
 		const result = await started.done;
@@ -1043,6 +1047,7 @@ console.log("\n[18] runs.ts + the tool — background lifecycle, gate, scratch f
 		const quiet = runsMod.startWorkflowRun({
 			script: GOOD,
 			host: stubHost(),
+			cwd,
 			pi: { sendMessage: () => {} },
 			push: (m) => pushes.push(m),
 			load: () => settings(true, "quiet"),
@@ -1052,10 +1057,15 @@ console.log("\n[18] runs.ts + the tool — background lifecycle, gate, scratch f
 			pushes.at(-1).wake === false,
 			"notifications quiet: a completed run delivers without waking",
 		);
+		assert(
+			quiet.run.scriptPath === started.run.scriptPath,
+			"identical re-run REUSES the auto-saved file (no suffix churn)",
+		);
 		// failure always wakes
 		const bad = runsMod.startWorkflowRun({
 			script: script("return Date.now()"),
 			host: stubHost(),
+			cwd,
 			pi: { sendMessage: () => {} },
 			push: (m) => pushes.push(m),
 			load: () => settings(true, "quiet"),
@@ -1065,12 +1075,35 @@ console.log("\n[18] runs.ts + the tool — background lifecycle, gate, scratch f
 			pushes.at(-1).wake === true && pushes.at(-1).content.includes('FAILED'),
 			"a failed run always wakes, naming the error",
 		);
+		assert(
+			bad.run.scriptPath === join(cwd, ".pi", "workflows", "t-2.js") &&
+				existsSync(bad.run.scriptPath),
+			"differing content under the same name → first free -2 suffix",
+		);
+		// unwritable cwd → the temp scratch fallback
+		const blocker = join(cwd, "blocker");
+		writeFileSync(blocker, "not a directory");
+		const fallback = runsMod.startWorkflowRun({
+			script: GOOD,
+			host: stubHost(),
+			cwd: blocker,
+			pi: { sendMessage: () => {} },
+			push: () => {},
+			load: () => settings("normal"),
+		});
+		assert(
+			fallback.run.scriptPath.startsWith(runsMod.workflowScratchDir()) &&
+				fallback.run.scriptPath.endsWith(".workflow.js"),
+			"unwritable cwd falls back to the temp scratch copy",
+		);
+		await fallback.done;
 	}
 
 	// --- the tool: gate, validation, immediate return ------------------------
 	{
+		const toolCwd = mkdtempSync(join(tmpdir(), "pi-herdr-tool-"));
 		const { pi, tools, sent } = mockPi();
-		wfTool.registerWorkflowTool(pi, { load: () => settings(true), host: stubHost() });
+		wfTool.registerWorkflowTool(pi, { load: () => settings(true), host: stubHost(), cwd: toolCwd });
 		const tool = tools[0];
 		assert(tool.name === "herdr_run_workflow", "the tool registers as herdr_run_workflow");
 
@@ -1086,7 +1119,7 @@ console.log("\n[18] runs.ts + the tool — background lifecycle, gate, scratch f
 		// gate at EXECUTE (mid-session toggle): registered while true, refused after
 		const toggle = { ...settings(true) };
 		const togglePi = mockPi();
-		wfTool.registerWorkflowTool(togglePi.pi, { load: () => toggle, host: stubHost() });
+		wfTool.registerWorkflowTool(togglePi.pi, { load: () => toggle, host: stubHost(), cwd: toolCwd });
 		const refused = await togglePi.tools[0].execute("t1", { script: GOOD }, undefined, undefined, undefined);
 		assert(refused.isError !== true, "registered while enabled → the run starts");
 		toggle.workflows_enabled = false;
@@ -1147,6 +1180,127 @@ console.log("\n[18] runs.ts + the tool — background lifecycle, gate, scratch f
 		wfTool.registerWorkflowTool(pi, { load: () => settings(true) });
 		const missing = await tools[0].execute("t6", { scriptPath: "D:/nope/missing.js" }, undefined, undefined, undefined);
 		assert(missing.isError && missing.details.error.message.includes("Could not read workflow script"), "an unreadable scriptPath refuses cleanly");
+	}
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n[3b] F12 args coercion + F14 failure reasons in the summary");
+{
+	// Local imports ([18] keeps its own; same dual-instance caveat applies and
+	// is dodged the same way — no cross-instance registry assertions here).
+	const runsMod = await jiti.import(join(ROOT, "src/workflow/runs.ts"), { parent: ROOT });
+	const wfTool = await jiti.import(join(ROOT, "src/tools/workflow.ts"), { parent: ROOT });
+	const settings = () => ({ workflows_enabled: true, notifications: "normal" });
+	/** Section-local mock pi (same shape as [18]'s) capturing registerTool + sendMessage. */
+	function mockPi() {
+		const tools = [];
+		const sent = [];
+		return {
+			pi: {
+				registerTool: (def) => tools.push(def),
+				sendMessage: (msg, opts) => sent.push({ msg, opts }),
+			},
+			tools,
+			sent,
+		};
+	}
+
+	// F12: a JSON-string args is auto-parsed — the script sees the OBJECT,
+	// and the receipt points at the auto-saved inline script (F15).
+	{
+		const { pi, tools, sent } = mockPi();
+		wfTool.registerWorkflowTool(pi, { load: settings, host: stubHost() });
+		const f12 = `export const meta = { name: 'f12-args-shape', description: 'x' }\nreturn [typeof args, args.n];`;
+		const res = await tools[0].execute(
+			"t1",
+			{ script: f12, args: '{"n": 2}' },
+			undefined,
+			undefined,
+			undefined,
+		);
+		assert(!res.isError, `JSON-string args accepted (${res.isError ? res.content[0].text : "ok"})`);
+		assert(
+			res.details.scriptPath === join(ROOT, ".pi", "workflows", "f12-args-shape.js"),
+			`the inline run's receipt points at the auto-saved file (${res.details.scriptPath})`,
+		);
+		// the background run settles and steers through the mock's sendMessage
+		await new Promise((r) => setTimeout(r, 50));
+		assert(
+			sent.some((s) => s.msg.content.includes('["object",2]')),
+			"args reach the script as the decoded object",
+		);
+		rmSync(res.details.scriptPath, { force: true });
+		try { rmdirSync(join(ROOT, ".pi", "workflows")); } catch {} // only when empty
+	}
+
+	// F12: a string that does NOT parse is a typed refusal naming the fix.
+	{
+		const { pi, tools } = mockPi();
+		wfTool.registerWorkflowTool(pi, { load: settings, host: stubHost() });
+		const res = await tools[0].execute(
+			"t2",
+			{ script: script("return await agent('a', { label: 'one' })"), args: "{files: [nope" },
+			undefined,
+			undefined,
+			undefined,
+			);
+		assert(
+			res.isError === true &&
+				res.details.error.code === "VALIDATION_ERROR" &&
+				res.content[0].text.includes("double-encoded JSON string") &&
+				res.content[0].text.includes("pass the object itself"),
+			"non-JSON string args → typed failure naming the double-encode fix",
+			);
+	}
+
+	// F14: the completed summary carries per-agent failure label + reason.
+	{
+		const pushes = [];
+		const failingHost = {
+			async spawnAgent() {
+				return { ok: false, error: "boom: the schema refused" };
+			},
+			abortAgent() {},
+		};
+		const started = runsMod.startWorkflowRun({
+			script: script("const a = await agent('p1', { label: 'audit-db' }); return 'done';"),
+			host: failingHost,
+			cwd: mkdtempSync(join(tmpdir(), "pi-herdr-f14-")),
+			pi: { sendMessage: () => {} },
+			push: (m) => pushes.push(m),
+			load: settings,
+		});
+		const result = await started.done;
+		assert(result.status === "completed", "a failed agent() does not fail the run");
+		assert(
+			pushes[0].content.includes("— failures: audit-db: boom: the schema refused"),
+			`summary carries "— failures: <label>: <reason>" (${pushes[0].content.split("\n")[0]})`,
+		);
+	}
+
+	// F14: multi-line reasons collapse to the first line, capped ~120 chars.
+	{
+		const pushes = [];
+		const long = "x".repeat(200) + "\nsecond line";
+		const failingHost = {
+			async spawnAgent() {
+				return { ok: false, error: long };
+			},
+			abortAgent() {},
+		};
+		const started = runsMod.startWorkflowRun({
+			script: script("await agent('p1', { label: 'a' }); await agent('p2', { label: 'b' }); return 1;"),
+			host: failingHost,
+			cwd: mkdtempSync(join(tmpdir(), "pi-herdr-f14b-")),
+			pi: { sendMessage: () => {} },
+			push: (m) => pushes.push(m),
+			load: settings,
+		});
+		await started.done;
+		const line = pushes[0].content.split("\n")[0];
+		assert(!line.includes("second line"), "a reason is capped to its first line");
+		const reasons = [...line.matchAll(/: (x{119})…/g)];
+		assert(reasons.length === 2, `each reason capped at ~120 chars (${reasons.length} capped)`);
 	}
 }
 

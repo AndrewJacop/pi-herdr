@@ -46,6 +46,9 @@ export interface WorkflowToolDeps {
 	load?: () => HerdrSettings;
 	/** Override the run's host — default: createWorkflowHost. */
 	host?: import("../workflow/runtime.js").WorkflowHost;
+	/** Passed to startWorkflowRun (manual e2e F15 auto-save location; tests
+	 * point it at a temp dir so the repo's .pi/workflows stays untouched). */
+	cwd?: string;
 }
 
 export function registerWorkflowTool(pi: ExtensionAPI, deps: WorkflowToolDeps = {}): void {
@@ -65,7 +68,10 @@ export function registerWorkflowTool(pi: ExtensionAPI, deps: WorkflowToolDeps = 
 			"Run a scripted multi-agent workflow in the background. `script` is a small JavaScript program " +
 			"(opens with `export const meta = { name, description }`; top-level `await` and `return` allowed) " +
 			"executed in a sandbox — no filesystem, no network, no eval. Its globals: `agent(prompt, opts)` " +
-			"spawns one real pi subagent and resolves to its exact final text (opts: label, phase, agentType, " +
+			"spawns one real pi subagent and resolves to its exact final text (opts: label — becomes the child's spawn name, " +
+			"which must start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' (herdr's agent-name " +
+			"rule: no dots, spaces, or uppercase; sanitize file-derived labels, e.g. `f.toLowerCase().replace(/[^a-z0-9-]+/g,'-')`), " +
+			"phase, agentType, " +
 			"model `provider/model-id` exact, effort minimal|low|medium|high|xhigh|max|off, isolation " +
 			"`worktree`, gate `shell command that must pass`, resume `label`); `pipeline(items, ...stages)` " +
 			"staged fan-out without a barrier; `parallel(thunks)` barrier; `phase(title)`; `log(msg)`; " +
@@ -73,7 +79,10 @@ export function registerWorkflowTool(pi: ExtensionAPI, deps: WorkflowToolDeps = 
 			"as a nested sub-step (one level). Each `agent()` goes through the ordinary spawn gates " +
 			"(kill-switch, depth, parallel cap — over cap it queues). `Date.now()`/`new Date()`/`Math.random()` " +
 			"throw (runs must be replayable). Source: `scriptPath`, `script`, or `name` — a saved `<name>.js` from " +
-			".pi/workflows/, .agents/workflows/ or the agent dir (that precedence). `resumeFromRunId` replays an earlier " +
+			".pi/workflows/, .agents/workflows/ or the agent dir (that precedence). An inline `script` is AUTO-SAVED to " +
+			"<cwd>/.pi/workflows/<meta.name>.js (a differing existing file gets the first free -2/-3 suffix; an unwritable " +
+			"cwd falls back to temp scratch), so the receipt's Script: path resolves again via `name:` — that is how " +
+			"`name:` re-runs work for inline runs. `resumeFromRunId` replays an earlier " +
 			"run's unchanged prefix from its journal — an edited suffix pays only the delta; a failed agent ends the prefix, " +
 			"so resuming retries from the failure. Same session only. Returns immediately with a run id and the script's file path — " +
 			"the aggregated result is pushed to you when the run finishes; do NOT poll or sleep waiting for it. " +
@@ -85,7 +94,8 @@ export function registerWorkflowTool(pi: ExtensionAPI, deps: WorkflowToolDeps = 
 		promptGuidelines: [
 			"Use herdr_run_workflow to fan out over a list discovered at runtime, push items through stages, or verify findings — each agent() spawns a real pi agent.",
 			"The run reports once when finished; edit the script file it reports and re-run with scriptPath (plus resumeFromRunId to replay the unchanged prefix) to iterate. A failed agent() resolves to null — filter(Boolean).",
-			"A script worth running more than once belongs in .pi/workflows/<name>.js with an `export const meta` block; run it with name: \"<name>\" instead of re-sending the source.",
+			"agent() opts.label becomes the child's spawn name: herdr requires it to start with a lowercase letter and contain only lowercase letters, digits, '-' or '_' — no dots, spaces, or uppercase. Sanitize file-derived labels, e.g. `f.toLowerCase().replace(/[^a-z0-9-]+/g,'-')`.",
+			"An inline script auto-saves to .pi/workflows/<meta.name>.js, so the same script can be re-run later with name: (differing content gets a -2/-3 suffix) instead of re-sending the source.",
 		],
 		parameters: Type.Object({
 			script: Type.Optional(
@@ -109,7 +119,7 @@ export function registerWorkflowTool(pi: ExtensionAPI, deps: WorkflowToolDeps = 
 			args: Type.Optional(
 				Type.Any({
 					description:
-						"Handed to the script as the `args` global, verbatim. Must be JSON-shaped.",
+						"Handed to the script as the `args` global, verbatim. Must be JSON-shaped (an object); a JSON string is auto-parsed to the value it encodes — a non-JSON string is refused.",
 				}),
 			),
 			resumeFromRunId: Type.Optional(
@@ -160,10 +170,25 @@ export function registerWorkflowTool(pi: ExtensionAPI, deps: WorkflowToolDeps = 
 			if (!resolved.ok) return fail(resolved.message);
 			const source = resolved.script;
 
+			// Manual e2e F12: the double-encoded-args slip — the model passes the
+			// object as a JSON string. A string that parses becomes the value it
+			// encodes; one that doesn't is refused with the fix in the message.
+			let args: unknown = p.args;
+			if (typeof args === "string") {
+				const trimmed = args.trim();
+				try {
+					args = JSON.parse(trimmed);
+				} catch {
+					return fail(
+						"args looks like a double-encoded JSON string that doesn't parse — pass the object itself, e.g. args: {files: [...]}",
+					);
+				}
+			}
+
 			// Validate BEFORE anything runs: the meta contract, size/control rules,
 			// and the JSON boundary on args. Errors are author-facing refusals.
 			try {
-				assertBoundarySafe(p.args, "args");
+				assertBoundarySafe(args, "args");
 				validateScript(source);
 			} catch (e) {
 				return fail(e instanceof Error ? e.message : String(e));
@@ -171,10 +196,11 @@ export function registerWorkflowTool(pi: ExtensionAPI, deps: WorkflowToolDeps = 
 
 			const started = startWorkflowRun({
 				script: source,
-				args: p.args,
+				args,
 				pi,
 				ctx,
 				...(deps.host !== undefined ? { host: deps.host } : {}),
+				...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
 				...(resumedFrom !== undefined ? { resumeFrom: resumedFrom } : {}),
 				// A named or file-backed run reports ITS file as the scriptPath: the
 				// edit-and-re-run loop then works on the source, and a bare

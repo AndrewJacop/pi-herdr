@@ -96,6 +96,62 @@ console.log("\n[1] `type` xor `agent` — exactly one");
 		agent: { name: "x", thinking: "high", max_turns: 10 },
 	});
 	assert(unknownKeys.ok, "unknown inline keys ignored (cross-dialect no-ops)");
+
+	// Manual e2e F12 boundary coercion: wrong-shape single-side specifiers
+	// coerce instead of refusing — a bare string cannot be an inline def, a
+	// non-string object cannot be a registry name. Both-present still refuses.
+	const coercedType = spawn.resolveSpecifier({ agent: "Explore" });
+	assert(
+		coercedType.ok &&
+			coercedType.data.inline === false &&
+			coercedType.data.definition.name === "Explore" &&
+			coercedType.data.coerced === "specifier coerced — agent string treated as type 'Explore'",
+		"agent string coerces to the registry type, honestly noted",
+	);
+	const coercedInline = spawn.resolveSpecifier({
+		type: { name: "x", system_prompt: "do x" },
+	});
+	assert(
+		coercedInline.ok &&
+			coercedInline.data.inline === true &&
+			coercedInline.data.definition.name === "x" &&
+			coercedInline.data.coerced ===
+				"specifier coerced — type object treated as the inline agent definition",
+		"type object coerces to the inline definition, honestly noted",
+	);
+	const bothWrongShapes = spawn.resolveSpecifier({
+		type: { name: "x" },
+		agent: "Explore",
+	});
+	assert(
+		!bothWrongShapes.ok && /exactly one/i.test(bothWrongShapes.error.message),
+		"both-present refuses BEFORE coercion even when both shapes are wrong",
+	);
+
+	// Engine-level: the coercion lands on the spawn record and the result.
+	reset();
+	const hCo = makeDeps({ env: { HERDR_PANE_ID: "w1:p1" } });
+	const rCo = await spawn.spawnAgent(
+		{ prompt: "search it", agent: "Explore", name: "coerced-scout" },
+		hCo.deps,
+	);
+	assert(rCo.ok, `agent-string spawn ok (${rCo.ok ? "" : rCo.error.message})`);
+	assert(
+		rCo.data.type === "Explore" && rCo.data.coercedNote !== undefined,
+		"engine: agent string treated as type, coercedNote surfaced",
+	);
+	reset();
+	const hIn = makeDeps({ env: { HERDR_PANE_ID: "w1:p1" } });
+	const rIn = await spawn.spawnAgent(
+		{ prompt: "inline it", type: { name: "inl", system_prompt: "p" }, name: "coerced-inline" },
+		hIn.deps,
+	);
+	assert(rIn.ok, `type-object spawn ok (${rIn.ok ? "" : rIn.error.message})`);
+	assert(
+		rIn.data.coercedNote !== undefined && rIn.data.type === "inl",
+		"engine: type object treated as inline definition, coercedNote surfaced",
+	);
+	reset();
 }
 
 // ---------------------------------------------------------------------------

@@ -265,9 +265,12 @@ export function registerAgents(pi: ExtensionAPI): void {
 			const worktree = d.worktreePath
 				? ` Isolated worktree: ${d.worktreePath}`
 				: "";
+			// Manual e2e F12: a fired specifier coercion is surfaced, not silent —
+			// the caller should know the shape it passed was not taken literally.
+			const coerced = d.coercedNote ? ` Note: ${d.coercedNote}.` : "";
 			const text = d.queued
-				? `Spawn accepted as QUEUED: "${d.name}"${type} — fleet is at max_parallel_agents; the pane starts when a slot frees.${stance}`
-				: `Spawned ${d.kind} agent "${d.name}"${type} in ${where}; status: ${d.status}.${stance}${session}${worktree}`;
+				? `Spawn accepted as QUEUED: "${d.name}"${type} — fleet is at max_parallel_agents; the pane starts when a slot frees.${stance}${coerced}`
+				: `Spawned ${d.kind} agent "${d.name}"${type} in ${where}; status: ${d.status}.${stance}${session}${worktree}${coerced}`;
 			return {
 				content: [{ type: "text", text }],
 				details: d,

@@ -458,6 +458,7 @@ process.on("exit", () => rmSync(tmp, { recursive: true, force: true }));
 	const started = runsMod.startWorkflowRun({
 		script: script("await agent('one'); await agent('two'); return 'v'"),
 		host,
+		cwd: tmp, // F15 auto-save lands in the test temp dir, not the repo
 		push: (m) => pushes.push(m),
 		load,
 	});
@@ -492,6 +493,7 @@ process.on("exit", () => rmSync(tmp, { recursive: true, force: true }));
 				aborted.push(id);
 			},
 		},
+		cwd: tmp,
 		push: (m) => pushes.push(m),
 		load,
 	});
@@ -608,8 +610,35 @@ process.on("exit", () => rmSync(tmp, { recursive: true, force: true }));
 		"multiple live runs stack in one card");
 	assert(two.includes(""), "blocks separated by a blank line");
 
-	// the widget key + mount wiring exist
-	assert(card.WORKFLOW_CARD_KEY === "herdr-workflow", "card owns its own widget key");
+	// the card renders inside the ONE fleet widget slot (manual e2e F9: pi
+	// re-stacks widgets on every setWidget — two self-refreshing widgets flip
+	// vertical order forever, which is exactly what the e2e showed). The card
+	// no longer owns a key; the fleet widget renders these lines beneath the
+	// table. Drive fleetWidgetOnce with an empty registry + a seeded live run
+	// and assert ONE setWidget whose render carries BOTH sections.
+	{
+		const widget = await jiti.import(join(ROOT, "src/widget.ts"), { parent: ROOT });
+		const sets = [];
+		const sink = {
+			setWidget: (key, factory) => sets.push({ key, factory }),
+		};
+		await widget.fleetWidgetOnce({
+			registry: () => new Map(),
+			fleet: { ok: true, data: [] },
+			liveRuns: () => [
+				run({ progress: [{ type: "workflow_phase", index: 0, title: "Review" }] }),
+			],
+			now: () => 72_000,
+			ui: sink,
+		});
+		assert(sets.length === 1 && sets[0].key === widget.WIDGET_KEY,
+			"one widget slot carries table + card (F9 — no second, flipping slot)");
+		const rendered = sets[0].factory(null, { fg: (_k, s) => s, inverse: (s) => s }).render(140);
+		assert(rendered.some((l) => l.includes("Subagents")), "table section present");
+		assert(rendered.some((l) => l.includes("Review")), "card section present (phase title only the card renders)");
+		assert(rendered.findIndex((l) => l.includes("Subagents")) < rendered.findIndex((l) => l.includes("Review")),
+			"card renders beneath the table — fixed order, no flip");
+	}
 }
 
 // ---- schema round trip (runtime level) --------------------------------------

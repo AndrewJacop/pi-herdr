@@ -13,7 +13,7 @@
  * session (upstream's journal has the same scoping).
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -31,6 +31,7 @@ import {
 	workflowScratchDir,
 } from "./journal.js";
 import { createWorkflowHost } from "./host.js";
+import { isUnsafeName } from "./saved.js";
 import { makeDeliverySink, terminalWake, type SteeredMessage } from "../push.js";
 import {
 	getSettingsPaths,
@@ -119,6 +120,9 @@ export interface StartRunOptions {
 	 * file rather than the scratch copy. Default: the scratch copy.
 	 */
 	sourcePath?: string;
+	/** The run's working directory (manual e2e F15): where an inline script
+	 * auto-saves (<cwd>/.pi/workflows/). Default: process.cwd(). */
+	cwd?: string;
 }
 
 export interface StartedRun {
@@ -138,16 +142,30 @@ export function startWorkflowRun(options: StartRunOptions): StartedRun {
 
 	const dir = workflowScratchDir();
 	mkdirSync(dir, { recursive: true });
-	const scriptPath = join(dir, `${runId}.workflow.js`);
-	writeFileSync(scriptPath, script, "utf8");
-	// The journal sits beside the script under the same id — what makes a run id
-	// enough to resume from (issue 13; same-session only, like the run itself).
+	// Manual e2e F15: an inline script persists to <cwd>/.pi/workflows/<name>.js
+	// so a `name:` re-run resolves the same file — the temp scratch copy was
+	// invisible to discovery. Identical target content → reuse; differing →
+	// the first free -2/-3 suffix; unwritable cwd or unsafe name → the temp
+	// scratch copy (below), which is what today's behavior already was.
+	const savedPath =
+		options.sourcePath === undefined
+			? persistInlineScript(options.cwd ?? process.cwd(), meta.name, script)
+			: undefined;
+	if (savedPath === undefined) {
+		const scriptPath = join(dir, `${runId}.workflow.js`);
+		writeFileSync(scriptPath, script, "utf8");
+	}
+	// The journal stays run-id-keyed in the scratch dir beside every other
+	// run's journal — what makes a run id enough to resume from (issue 13;
+	// same-session only, like the run itself). Only the SCRIPT file moves.
 	const journalPath = join(dir, `${runId}.workflow.jsonl`);
 
 	const run: WorkflowRun = {
 		runId,
 		meta,
-		...(options.sourcePath !== undefined ? { scriptPath: options.sourcePath } : { scriptPath }),
+		...(options.sourcePath !== undefined
+			? { scriptPath: options.sourcePath }
+			: { scriptPath: savedPath ?? join(dir, `${runId}.workflow.js`) }),
 		journalPath,
 		...(options.resumeFrom !== undefined ? { resumedFrom: options.resumeFrom.runId } : {}),
 		status: "running",
@@ -208,6 +226,36 @@ export function startWorkflowRun(options: StartRunOptions): StartedRun {
 const abortBySession = new Map<string, AbortController>();
 
 /**
+ * Manual e2e F15: persist an inline script to `<cwd>/.pi/workflows/<name>.js`
+ * so a `name:` re-run (same discovery order as ever) resolves the same file.
+ * A target that exists with identical content is reused; one that differs
+ * gets the first free `<name>-2.js`, `-3.js`… suffix. Unwritable cwd or an
+ * unsafe name (path traversal, separators — same whitelist saved discovery
+ * enforces) returns undefined and the run falls back to the temp scratch.
+ */
+function persistInlineScript(
+	cwd: string,
+	name: string,
+	script: string,
+): string | undefined {
+	if (isUnsafeName(name)) return undefined;
+	const dir = join(cwd, ".pi", "workflows");
+	try {
+		mkdirSync(dir, { recursive: true });
+		for (let n = 1; ; n++) {
+			const path = join(dir, n === 1 ? `${name}.js` : `${name}-${n}.js`);
+			if (!existsSync(path)) {
+				writeFileSync(path, script, "utf8");
+				return path;
+			}
+			if (readFileSync(path, "utf8") === script) return path;
+		}
+	} catch {
+		return undefined; // unwritable cwd → today's temp scratch copy
+	}
+}
+
+/**
  * Stop every live run (session_shutdown): terminate the workers and abort the
  * run signal, which closes the in-flight children host-side. Runs already
  * settled are untouched. Runs do not outlive their session.
@@ -237,6 +285,13 @@ function completionMessage(
 		.map((e) => (e as { message: string }).message)
 		.slice(-10);
 	const elapsed = formatElapsed(elapsedMs);
+	// Manual e2e F14: the summary is self-sufficient for diagnosis — every
+	// failed agent's first-line reason rides the report, so a straggler notice
+	// is never the only place a cause appears. Capped per reason.
+	const failures = rows
+		.filter((r) => r.state === "error")
+		.map((r) => `${r.label}: ${failureReason(r.error)}`)
+		.join("; ");
 	// A resume never quietly looks like a run that was simply fast — the count
 	// rides every terminal status, not just the happy one.
 	const replayed =
@@ -249,7 +304,9 @@ function completionMessage(
 	if (result.status === "completed") {
 		const valueJson = safeJson(result.value);
 		content =
-			`Workflow "${run.meta.name}" finished — ${done}/${result.agentCount} agents${replayed} · ${elapsed}.\n` +
+			`Workflow "${run.meta.name}" finished — ${done}/${result.agentCount} agents${replayed} · ${elapsed}` +
+			(failures ? ` — failures: ${failures}` : "") +
+			`.\n` +
 			`Return value: ${valueJson.length > RESULT_PREVIEW_LENGTH ? `${valueJson.slice(0, RESULT_PREVIEW_LENGTH)}…` : valueJson}\n` +
 			`Script: ${run.scriptPath}`;
 		wake = terminalWake(notes); // normal → wake; quiet → next turn; none → sink drops it
@@ -266,6 +323,12 @@ function completionMessage(
 		content += `\nLog:\n${logs.map((l) => `- ${l}`).join("\n")}`;
 	}
 	return { content, details: { kind: "workflow", runId: run.runId, status: result.status }, wake };
+}
+
+/** First line of a failure reason, capped — the summary-line form (F14). */
+function failureReason(error: unknown): string {
+	const line = String(error ?? "unknown").split("\n", 1)[0].trim() || "unknown";
+	return line.length > 120 ? `${line.slice(0, 119)}…` : line;
 }
 
 const safeJson = (v: unknown): string => {

@@ -317,6 +317,7 @@ console.log("\n[4] runs.ts — the journal lands on disk; resumeFromRunId replay
 		const started = runsMod.startWorkflowRun({
 			script: GOOD,
 			host: s.host,
+			cwd: mkdtempSync(join(tmpdir(), "pi-herdr-jnl-")),
 			pi: { sendMessage: () => {} },
 			push: () => {},
 			load: settings,
@@ -351,6 +352,7 @@ console.log("\n[4] runs.ts — the journal lands on disk; resumeFromRunId replay
 		const second = runsMod.startWorkflowRun({
 			script: GOOD,
 			host: s2.host,
+			cwd: mkdtempSync(join(tmpdir(), "pi-herdr-jnl-")),
 			pi: { sendMessage: () => {} },
 			push: (m) => pushes.push(m),
 			load: settings,
@@ -381,6 +383,7 @@ console.log("\n[4] runs.ts — the journal lands on disk; resumeFromRunId replay
 				},
 				abortAgent() {},
 			},
+			cwd: mkdtempSync(join(tmpdir(), "pi-herdr-jnl-")),
 			pi: { sendMessage: () => {} },
 			push: () => {},
 			load: settings,
