@@ -958,6 +958,86 @@ console.log("\n[16] Tool registration surface");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n[17] Golden-spiral pane layout (nextSplit + start-time wiring)");
+{
+	reset();
+	// pure decision: #1 → spawner's pane right; #2 → child #1 down; #3 → child
+	// #2 right; no live sibling → the spawner's pane again; ratio favors the
+	// EXISTING pane (verified: herdr --ratio is the source pane's share).
+	const s1 = spawn.nextSplit({ spawnerPane: "w1:p1", liveChildCount: 0 });
+	assert(
+		s1.targetPaneId === "w1:p1" &&
+			s1.direction === "right" &&
+			s1.ratio === 0.6,
+		"spawn #1: spawner's pane, right, ratio 0.6",
+	);
+	const s2 = spawn.nextSplit({
+		spawnerPane: "w1:p1",
+		lastChildPane: "w1:p1A",
+		liveChildCount: 1,
+	});
+	assert(
+		s2.targetPaneId === "w1:p1A" && s2.direction === "down",
+		"spawn #2: previous child's pane, down",
+	);
+	const s3 = spawn.nextSplit({
+		spawnerPane: "w1:p1",
+		lastChildPane: "w1:p1B",
+		liveChildCount: 2,
+	});
+	assert(
+		s3.targetPaneId === "w1:p1B" && s3.direction === "right",
+		"spawn #3: previous child's pane, right (alternates)",
+	);
+	assert(
+		spawn.nextSplit({ spawnerPane: "w1:p1", liveChildCount: 0 })
+			.targetPaneId === "w1:p1",
+		"no live sibling → the spawner's pane (fallback)",
+	);
+	assert(
+		spawn.nextSplit({ liveChildCount: 0 }).targetPaneId === undefined,
+		"spawner not in a pane → undefined target (--current)",
+	);
+
+	// wiring: three engine spawns — target/direction thread into the split
+	// call, resolved at START time against live siblings (registry order).
+	const h = makeDeps({ env: { HERDR_PANE_ID: "w9:p1" } });
+	for (const name of ["ga", "gb", "gc"]) {
+		const r = await spawn.spawnAgent(
+			{ prompt: "x", type: "Explore", name },
+			h.deps,
+		);
+		assert(r.ok, `spawn ${name} ok (${r.ok ? "" : r.error?.message})`);
+	}
+	const [sA, sB, sC] = h.calls.start;
+	assert(
+		sA.splitFrom === "w9:p1" && sA.split === "right" && sA.ratio === 0.6,
+		"#1 splits the spawner's pane right at 0.6",
+	);
+	assert(
+		sB.splitFrom === "p1" && sB.split === "down",
+		"#2 splits child #1's pane (p1) down",
+	);
+	assert(
+		sC.splitFrom === "p2" && sC.split === "right",
+		"#3 splits child #2's pane (p2) right",
+	);
+
+	// fallback: every child exited (fleet list empty) → the spawner's pane.
+	h.live.length = 0;
+	const rd = await spawn.spawnAgent(
+		{ prompt: "x", type: "Explore", name: "gd" },
+		h.deps,
+	);
+	assert(rd.ok, `fallback spawn ok (${rd.ok ? "" : rd.error?.message})`);
+	const sD = h.calls.start[3];
+	assert(
+		sD.splitFrom === "w9:p1" && sD.split === "right",
+		"all children exited → the spawner's pane again, right",
+	);
+}
+
+// ---------------------------------------------------------------------------
 console.log(
 	`\n${failed === 0 ? "✅ ALL PASS" : "❌ SOME FAILED"} (${passed}/${passed + failed})`,
 );

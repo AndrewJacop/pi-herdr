@@ -17,7 +17,9 @@
 //   - children carry PI_HERDR_SPAWN_DEPTH (incremented) and
 //     PI_HERDR_ORCHESTRATOR_PANE (ticket 11: the spawning pane's
 //     HERDR_PANE_ID — set only when this session itself runs in a pane).
-//   - no layout params (charter item 2): panes split right in the current tab;
+//   - no layout params (charter item 2): panes split in an alternating
+//     right/down spiral from the previous pane; the spawner keeps the larger
+//     share (ratio 0.6);
 //     layout/tab/worktree tools are off the model surface entirely (v0.6
 //     surface cut) — the worktree MACHINERY stays for `isolated`.
 //
@@ -120,6 +122,78 @@ export function spawnErr(
 	details?: unknown,
 ): Err {
 	return { ok: false, error: { code, message, details } };
+}
+
+// ---- golden-spiral pane layout ------------------------------------------------
+
+/** The EXISTING pane's share of a split (owner-approved "golden ratio curve").
+ * Verified against herdr 0.9.1: `--ratio 0.6` gives the SOURCE pane ~0.6 of
+ * the split area and the new pane ~0.4, for both right and down. */
+export const SPLIT_RATIO = 0.6;
+
+export interface SplitPlan {
+	/** Pane to split; undefined → `--current` (the caller's own pane). */
+	targetPaneId?: string;
+	direction: "right" | "down";
+	ratio: number;
+}
+
+/**
+ * The golden-spiral layout decision (pure): spawn #1 splits the spawner's
+ * pane; spawn #2+ splits the PREVIOUS child's pane, alternating right → down.
+ * No live sibling → the spawner's pane again. `liveChildCount` is the number
+ * of the spawner's live children BEFORE this spawn, so #1 (0) → right,
+ * #2 (1) → down, #3 (2) → right.
+ */
+export function nextSplit(opts: {
+	spawnerPane?: string;
+	lastChildPane?: string;
+	liveChildCount: number;
+}): SplitPlan {
+	return {
+		targetPaneId: opts.lastChildPane ?? opts.spawnerPane,
+		direction: opts.liveChildCount % 2 === 0 ? "right" : "down",
+		ratio: SPLIT_RATIO,
+	};
+}
+
+/**
+ * The plan for THIS start, resolved at start time: registry candidates with a
+ * pane are checked against the live fleet (a queued spawn that drains later
+ * uses whatever is live then, and an exited sibling's pane can't be split
+ * from); the most recent live sibling is the split target. No candidates, no
+ * live siblings, or a failed fleet observation → the spawner's pane (spawn-#1
+ * case). Spawner pane unknown (session not running in a pane) → undefined,
+ * which startHerdrAgent renders as `--current`.
+ */
+async function nextSplitFor(
+	record: SpawnRecord,
+	deps: SpawnDeps,
+): Promise<SplitPlan> {
+	const fallback = () =>
+		nextSplit({ spawnerPane: record.orchestratorPane, liveChildCount: 0 });
+	const candidates = [...spawnRegistry.values()].filter(
+		(r) => r !== record && r.paneId,
+	);
+	if (!candidates.length) return fallback();
+	try {
+		const live = await (deps.list ?? defaultList)();
+		const livePanes = new Set(
+			live.map((a) => a.paneId).filter((p): p is string => Boolean(p)),
+		);
+		const liveSiblings = candidates.filter((r) => {
+			if (!r.paneId) return false;
+			return livePanes.has(r.paneId);
+		});
+		return nextSplit({
+			spawnerPane: record.orchestratorPane,
+			lastChildPane: liveSiblings.at(-1)?.paneId,
+			liveChildCount: liveSiblings.length,
+		});
+	} catch {
+		// fleet unobservable → the spawner's pane is always a safe target
+		return fallback();
+	}
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -966,12 +1040,20 @@ export async function startRecordNow(
 		Object.assign(childEnv, record.extraEnv);
 	}
 	const start = deps.start ?? startHerdrAgent;
+	// Golden-spiral layout, resolved at START time (not accept time): a queued
+	// spawn that drains later uses whatever is live then; an exited sibling's
+	// pane can't be split from. Spawn #1 splits the spawner's pane, #2+ the
+	// previous child's, alternating right → down.
+	const splitPlan = await nextSplitFor(record, deps);
 	const startR = await start({
 		name: record.name,
 		agent: record.kind,
 		agentArgs: record.launchPlan,
 		cwd,
 		env: childEnv,
+		split: splitPlan.direction,
+		splitFrom: splitPlan.targetPaneId,
+		ratio: splitPlan.ratio,
 		signal,
 	});
 	if (!startR.ok) return startR;

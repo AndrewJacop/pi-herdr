@@ -76,7 +76,8 @@ const DESCRIPTION =
 	"`isolated: true` runs the agent in a fresh auto-created herdr-side git worktree " +
 	"(worktree stays after the agent — remove it yourself with `herdr worktree remove` or git). " +
 	"Gates, checked in order before any side effect: kill-switch, spawn depth, parallel cap. " +
-	"No layout parameters — panes split right in the current tab.";
+	"No layout parameters — panes split in an alternating right/down spiral " +
+		"from the previous pane; the spawner keeps the larger share.";
 
 /** The inline `agent: {…}` definition schema — shared by spawn_agent and save_agent. */
 const AGENT_DEF_SCHEMA = Type.Object({
