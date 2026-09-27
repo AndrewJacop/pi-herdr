@@ -158,42 +158,62 @@ export function nextSplit(opts: {
 }
 
 /**
- * The plan for THIS start, resolved at start time: registry candidates with a
- * pane are checked against LIVE PANES (`pane list` — a booting sibling's pane
- * already exists and is a valid split target, which the agent list misses for
- * the whole boot window; an exited sibling's pane is gone). Candidates scope
- * to the same spawner pane. No candidates, no live siblings, or a failed
- * observation → the spawner's pane (spawn-#1 case). Spawner pane unknown
- * (session not running in a pane) → undefined, which startHerdrAgent renders
- * as `--current`.
+ * The plan for THIS start, resolved at start time. Siblings scope to the same
+ * spawner pane and order by accept-time spawnOrdinal, so a PARALLEL batch
+ * still spirals: the predecessor may be mid-start (no pane yet) — we wait
+ * briefly for its pane rather than falling back to the spawner. Walk back
+ * over predecessors whose pane is already gone (exited + closed); no live
+ * predecessor → the spawner's pane. Direction is MY ordinal's parity — it
+ * must not depend on which siblings happen to still be alive. Spawner pane
+ * unknown (session not running in a pane) → undefined, which startHerdrAgent
+ * renders as `--current`.
  */
 async function nextSplitFor(
 	record: SpawnRecord,
 	deps: SpawnDeps,
 ): Promise<SplitPlan> {
 	const fallback = () =>
-		nextSplit({ spawnerPane: record.orchestratorPane, liveChildCount: 0 });
-	const candidates = [...spawnRegistry.values()].filter(
-		(r) =>
-			r !== record &&
-			r.paneId &&
-			r.orchestratorPane === record.orchestratorPane,
-	);
-	if (!candidates.length) return fallback();
-	try {
-		const livePanes = new Set(await (deps.paneList ?? defaultPaneList)());
-		const liveSiblings = candidates.filter(
-			(r) => r.paneId && livePanes.has(r.paneId),
-		);
-		return nextSplit({
+		nextSplit({
 			spawnerPane: record.orchestratorPane,
-			lastChildPane: liveSiblings.at(-1)?.paneId,
-			liveChildCount: liveSiblings.length,
+			liveChildCount: record.spawnOrdinal ?? 0,
 		});
+	const sibs = [...spawnRegistry.values()]
+		.filter(
+			(r) =>
+				r !== record &&
+				r.orchestratorPane === record.orchestratorPane &&
+				(r.spawnOrdinal ?? 0) < (record.spawnOrdinal ?? 0),
+		)
+		.sort((a, b) => (b.spawnOrdinal ?? 0) - (a.spawnOrdinal ?? 0));
+	if (!sibs.length) return fallback();
+	let paneIds = new Set<string>();
+	try {
+		for (let i = 0; i < sibs.length; i++) {
+			const sib = sibs[i];
+			// the immediate predecessor may be mid-start — give its pane up to
+			// ~2s to appear (a real split+start lands in ~0.5s); older siblings
+			// get one look (they had their chance). Queued siblings (no pane,
+			// not started) burn the full wait — bounded, and they'll chain off
+			// us when they drain.
+			const deadline = Date.now() + (i === 0 ? 2_000 : 0);
+			for (;;) {
+				if (i === 0) paneIds = new Set(await (deps.paneList ?? defaultPaneList)());
+				if (sib.paneId && paneIds.has(sib.paneId)) {
+					return nextSplit({
+						spawnerPane: record.orchestratorPane,
+						lastChildPane: sib.paneId,
+						liveChildCount: record.spawnOrdinal ?? 0,
+					});
+				}
+				if (sib.paneId || sib.startError || Date.now() >= deadline) break;
+				await sleep(150);
+			}
+		}
 	} catch {
-		// fleet unobservable → the spawner's pane is always a safe target
+		// panes unobservable → the spawner's pane is always a safe target
 		return fallback();
 	}
+	return fallback();
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -630,6 +650,9 @@ export interface SpawnRecord {
 	cwd?: string;
 	/** PI_HERDR_ORCHESTRATOR_PANE stamped when the spawner runs in a pane. */
 	orchestratorPane?: string;
+	/** Accept-time ordinal among this spawner's children — the split spiral's
+	 * direction parity and sibling order. Set once at record creation. */
+	spawnOrdinal?: number;
 	paneId?: string;
 	spawnedAt: number;
 	startedAt?: number;
@@ -1479,6 +1502,9 @@ export async function spawnAgent(
 		// definition's — the worktree IS the cwd choice at spawn level
 		cwd: params.cwd ?? (params.isolated ? undefined : merged.cwd),
 		orchestratorPane: env.HERDR_PANE_ID,
+		spawnOrdinal: [...spawnRegistry.values()].filter(
+			(r) => r.orchestratorPane === env.HERDR_PANE_ID,
+		).length,
 		spawnedAt: Date.now(),
 		submitted: false,
 		sawWorking: false,

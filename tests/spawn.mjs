@@ -543,6 +543,8 @@ function makeDeps(opts = {}) {
 			paneList: async () =>
 				panesBox.current ?? live.filter((a) => a.paneId).map((a) => a.paneId),
 			start: async (input) => {
+				if (opts.startDelayMs)
+						await new Promise((r) => setTimeout(r, opts.startDelayMs));
 				calls.start.push(input);
 				const paneId = `p${calls.start.length}`;
 				live.push({ name: input.name, paneId, agent_status: "idle" });
@@ -1036,8 +1038,8 @@ console.log("\n[17] Golden-spiral pane layout (nextSplit + start-time wiring)");
 	assert(rd.ok, `fallback spawn ok (${rd.ok ? "" : rd.error?.message})`);
 	const sD = h.calls.start[3];
 	assert(
-		sD.splitFrom === "w9:p1" && sD.split === "right",
-		"all children exited → the spawner's pane again, right",
+		sD.splitFrom === "w9:p1" && sD.split === "down",
+		"all children exited → the spawner's pane again (direction by ordinal parity)",
 	);
 
 	// regression (parallel batch): siblings still BOOTING are invisible to the
@@ -1062,11 +1064,32 @@ console.log("\n[17] Golden-spiral pane layout (nextSplit + start-time wiring)");
 		{ prompt: "x", type: "Explore", name: "gf" },
 		h.deps,
 	);
+	assert(rf.ok, `gf fallback spawn ok (${rf.ok ? "" : rf.error?.message})`);
 	const sF = h.calls.start[5];
 	assert(
-		sF.splitFrom === "w9:p1" && sF.split === "right",
-		"closed sibling panes are skipped → the spawner's pane",
+		sF.splitFrom === "w9:p1" && sF.split === "down",
+		"closed sibling panes are skipped → the spawner's pane, direction by ordinal parity",
 	);
+
+	// parallel batch: the predecessor may be MID-START (no paneId yet) — the
+	// spiral waits for its pane instead of falling back to the spawner.
+	const hp = makeDeps({ env: { HERDR_PANE_ID: "w9:p1" }, startDelayMs: 400 });
+	const pending = spawn.spawnAgent(
+		{ prompt: "x", type: "Explore", name: "ha" },
+		hp.deps,
+	);
+	await new Promise((r) => setTimeout(r, 120)); // ha mid-start, no paneId yet
+	const rhb = await spawn.spawnAgent(
+		{ prompt: "x", type: "Explore", name: "hb" },
+		hp.deps,
+	);
+	const sHb = hp.calls.start[1];
+	assert(
+		sHb.splitFrom === "p1" && sHb.split === "down",
+		`parallel: mid-start predecessor is awaited and targeted (down) (${JSON.stringify(sHb)})`,
+	);
+	assert(rhb.ok, `hb spawn ok (${rhb.ok ? "" : rhb.error?.message})`);
+	await pending;
 }
 
 // ---------------------------------------------------------------------------
