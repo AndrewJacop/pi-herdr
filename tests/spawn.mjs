@@ -528,9 +528,11 @@ console.log("\n[8] Gate order — kill-switch before depth before cap");
 function makeDeps(opts = {}) {
 	const calls = { start: [], submit: [], worktree: [] };
 	const live = opts.live ?? []; // [{name, paneId, agent_status}]
+	const panesBox = { current: opts.panes ?? null }; // [paneId,...] — null → derive from live
 	return {
 		calls,
 		live,
+		panes: panesBox,
 		deps: {
 			load: () => ({ ...settingsMod.DEFAULT_SETTINGS, ...opts.settings }),
 			kinds: async () => opts.kinds ?? ["pi", "claude", "codex", "gemini"],
@@ -538,6 +540,8 @@ function makeDeps(opts = {}) {
 				live
 					.filter((a) => a.paneId)
 					.map((a) => ({ name: a.name, paneId: a.paneId })),
+			paneList: async () =>
+				panesBox.current ?? live.filter((a) => a.paneId).map((a) => a.paneId),
 			start: async (input) => {
 				calls.start.push(input);
 				const paneId = `p${calls.start.length}`;
@@ -1034,6 +1038,34 @@ console.log("\n[17] Golden-spiral pane layout (nextSplit + start-time wiring)");
 	assert(
 		sD.splitFrom === "w9:p1" && sD.split === "right",
 		"all children exited → the spawner's pane again, right",
+	);
+
+	// regression (parallel batch): siblings still BOOTING are invisible to the
+	// agent list but their panes exist — split targeting reads the pane list,
+	// not the agent list, or every parallel spawn falls back to the spawner.
+	h.live.length = 0; // fleet detects no agents yet (all booting)
+	h.panes.current = ["w9:p1", "p1", "p2", "p3", "p4"]; // ...but every pane exists
+	const re = await spawn.spawnAgent(
+		{ prompt: "x", type: "Explore", name: "ge" },
+		h.deps,
+	);
+	assert(re.ok, `booting-sibling spawn ok (${re.ok ? "" : re.error?.message})`);
+	const sE = h.calls.start[4];
+	assert(
+		sE.splitFrom === "p4" && sE.split === "right",
+		"booting sibling's pane (p4) is the split target — pane list, not agent list",
+	);
+
+	// a CLOSED sibling pane is gone from the pane list → spawner fallback
+	h.panes.current = ["w9:p1"];
+	const rf = await spawn.spawnAgent(
+		{ prompt: "x", type: "Explore", name: "gf" },
+		h.deps,
+	);
+	const sF = h.calls.start[5];
+	assert(
+		sF.splitFrom === "w9:p1" && sF.split === "right",
+		"closed sibling panes are skipped → the spawner's pane",
 	);
 }
 

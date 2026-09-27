@@ -159,12 +159,13 @@ export function nextSplit(opts: {
 
 /**
  * The plan for THIS start, resolved at start time: registry candidates with a
- * pane are checked against the live fleet (a queued spawn that drains later
- * uses whatever is live then, and an exited sibling's pane can't be split
- * from); the most recent live sibling is the split target. No candidates, no
- * live siblings, or a failed fleet observation → the spawner's pane (spawn-#1
- * case). Spawner pane unknown (session not running in a pane) → undefined,
- * which startHerdrAgent renders as `--current`.
+ * pane are checked against LIVE PANES (`pane list` — a booting sibling's pane
+ * already exists and is a valid split target, which the agent list misses for
+ * the whole boot window; an exited sibling's pane is gone). Candidates scope
+ * to the same spawner pane. No candidates, no live siblings, or a failed
+ * observation → the spawner's pane (spawn-#1 case). Spawner pane unknown
+ * (session not running in a pane) → undefined, which startHerdrAgent renders
+ * as `--current`.
  */
 async function nextSplitFor(
 	record: SpawnRecord,
@@ -173,18 +174,17 @@ async function nextSplitFor(
 	const fallback = () =>
 		nextSplit({ spawnerPane: record.orchestratorPane, liveChildCount: 0 });
 	const candidates = [...spawnRegistry.values()].filter(
-		(r) => r !== record && r.paneId,
+		(r) =>
+			r !== record &&
+			r.paneId &&
+			r.orchestratorPane === record.orchestratorPane,
 	);
 	if (!candidates.length) return fallback();
 	try {
-		const live = await (deps.list ?? defaultList)();
-		const livePanes = new Set(
-			live.map((a) => a.paneId).filter((p): p is string => Boolean(p)),
+		const livePanes = new Set(await (deps.paneList ?? defaultPaneList)());
+		const liveSiblings = candidates.filter(
+			(r) => r.paneId && livePanes.has(r.paneId),
 		);
-		const liveSiblings = candidates.filter((r) => {
-			if (!r.paneId) return false;
-			return livePanes.has(r.paneId);
-		});
 		return nextSplit({
 			spawnerPane: record.orchestratorPane,
 			lastChildPane: liveSiblings.at(-1)?.paneId,
@@ -738,6 +738,10 @@ export interface SpawnDeps {
 	kinds?: () => Promise<string[]>;
 	/** Live agents (fleet) — default: `herdr agent list`. */
 	list?: () => Promise<{ name?: string; paneId?: string }[]>;
+	/** Live pane ids (ANY pane — booting included) — default: `herdr pane
+	 * list`. Split targeting reads THIS, not `list`: a just-split pane won't
+	 * be an agent for seconds. */
+	paneList?: () => Promise<string[]>;
 	/** Live agents, Result-wrapped — default: the shared fleetList(). Resume
 	 * (issue 10) reads the fleet through THIS seam: a FAILED observation is
 	 * never absence evidence, so the gone-check must see the failure. */
@@ -799,6 +803,22 @@ const defaultList = async (): Promise<{ name?: string; paneId?: string }[]> => {
 	});
 	if (!r.ok) return [];
 	return (r.data?.agents ?? []).map(normalizeAgent);
+};
+
+/** Every live pane id — panes, not agents: a split pane exists the moment it
+ * is created (pi boots seconds later), so split targeting must not gate on
+ * agent detection. Mirrors the pane shape `herdr pane list` returns. */
+const defaultPaneList = async (): Promise<string[]> => {
+	const r = await herdr<{ panes?: unknown[] }>(["pane", "list"], {
+		timeoutMs: 10_000,
+	});
+	if (!r.ok) return [];
+	const panes = ((r.data?.panes ??
+		(r.data as { result?: { panes?: unknown[] } } | undefined)?.result
+		?.panes ?? []) as { pane_id?: string; id?: string }[]);
+	return panes
+		.map((p) => p.pane_id ?? p.id ?? "")
+		.filter((p) => p !== "");
 };
 
 const defaultBoot = (
