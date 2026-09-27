@@ -190,12 +190,15 @@ async function nextSplitFor(
 	try {
 		for (let i = 0; i < sibs.length; i++) {
 			const sib = sibs[i];
-			// the immediate predecessor may be mid-start — give its pane up to
-			// ~2s to appear (a real split+start lands in ~0.5s); older siblings
-			// get one look (they had their chance). Queued siblings (no pane,
-			// not started) burn the full wait — bounded, and they'll chain off
-			// us when they drain.
-			const deadline = Date.now() + (i === 0 ? 2_000 : 0);
+			// in-flight predecessor (start began, pane not back yet): the chain
+			// serializes — pc waited for pb, who waited for pa — so a later
+			// sibling's predecessor can legitimately take >10s. Wait up to 30s.
+			const inFlight =
+				sib.startBeganAt !== undefined &&
+				sib.paneId === undefined &&
+				sib.startError === undefined;
+			const deadline =
+				Date.now() + (i === 0 && inFlight ? 30_000 : 0);
 			for (;;) {
 				if (i === 0) paneIds = new Set(await (deps.paneList ?? defaultPaneList)());
 				if (sib.paneId && paneIds.has(sib.paneId)) {
@@ -653,6 +656,10 @@ export interface SpawnRecord {
 	/** Accept-time ordinal among this spawner's children — the split spiral's
 	 * direction parity and sibling order. Set once at record creation. */
 	spawnOrdinal?: number;
+	/** When this record's start actually began (startRecordNow entry) — lets
+	 * split targeting distinguish an in-flight predecessor (worth waiting for)
+	 * from a queued one (no pane coming until it drains; skip). */
+	startBeganAt?: number;
 	paneId?: string;
 	spawnedAt: number;
 	startedAt?: number;
@@ -1014,6 +1021,7 @@ export async function startRecordNow(
 	record: SpawnRecord,
 	deps: SpawnDeps = {},
 ): Promise<Result<{ paneId: string }>> {
+	record.startBeganAt = Date.now();
 	const signal = deps.signal;
 
 	// 1. isolated → herdr-side worktree (auto branch+path via the existing
