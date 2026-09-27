@@ -6,7 +6,7 @@ panes** running in [herdr](https://herdr.dev). It exposes pi's model a small,
 deliberate tool surface that spawns background agents (`pi`, `claude`, `codex`,
 `gemini`, …) each running in its own terminal pane — plus a quartet of raw-pane
 tools for logs, builds, and test suites. This is the user-facing reference for
-the **9 tools** the extension registers (12 once the v0.6 tickets land).
+the **twelve tools** the extension registers.
 
 > **Not bundled here:** herdr itself. Install and run it from <https://herdr.dev>.
 

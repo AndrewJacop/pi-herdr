@@ -12,9 +12,9 @@ works, wait for it to finish, and harvest its response — all from your pi
 session. Each spawned agent is an independent CLI process you can watch, attach
 to, and intervene in while pi coordinates them.
 
-The v0.6 surface is deliberately small: **one surface, ten tools today**
-(spawn, save, result, message, list, run_workflow, and the pane quartet),
-converging to **twelve** as the remaining v0.6 tickets land. Everything
+The v0.6 surface is deliberately small: **one surface, twelve tools**
+(spawn, save, result, message, interrupt, resume, list, run_workflow, and
+the pane quartet). Everything
 else — layout, tab/workspace CRUD, worktrees, fleet introspection — is
 machinery you never have to switch to: the herdr UI stays the human's surface
 for that.
@@ -230,8 +230,7 @@ output without spawning an agent for it.
 
 ## Tools
 
-`pi-herdr` exposes **one surface of ten tools** (twelve when the remaining v0.6
-tickets land). Every agent-surface tool accepts `target` as a **pane id**
+`pi-herdr` exposes **one surface of twelve tools**. Every agent-surface tool accepts `target` as a **pane id**
 (`w1:p3`), **agent name**, or **label**.
 
 ### The agent registry

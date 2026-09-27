@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-23
+
+### Fixed
+
+E2E hardening round (manual live scenarios + the findings ledger in
+`.scratch/v0.6/E2E-FINDINGS.md`):
+
+- **Prompt-only spawn.** A bare `{ prompt, name }` — the most natural call —
+  was a VALIDATION_ERROR demanding registry jargon. It now resolves the
+  built-in `general-purpose` through the ordinary registry chain, and the
+  specifier boundary coerces-or-refuses instead of leaking shape rules:
+  an agent-string specifier coerces to `type`, a type-object to an inline
+  definition; only `type`+`agent` together still refuses.
+- **Workflow `args` validation.** A double-encoded JSON string passed
+  `Type.Any` and died mid-sandbox (`args.files.map` on undefined). Args are
+  now JSON-shaped object-or-coerced-string at the boundary, enforce-or-error
+  before the run starts.
+- **Run summaries carry failures.** A run's completion summary no longer
+  races its own per-agent failure notices and no longer reports a bare
+  `0/4 agents · 0s` with null results — it embeds `— failures: <label>:
+  <reason>` so the caller's model stops theorizing.
+- **Workflow label naming rule documented where the model looks** — spawn
+  names are `[a-z][a-z0-9-]*`; a `review-calc.js`-derived label now fails
+  with a nameable error, not four silent 0s spawn refusals.
+- **Created workflows auto-save to `.pi/workflows/<meta.name>.js`** (dedupe
+  suffix `-2`/`-3`), so an inline script is re-runnable by `name:` instead of
+  being lost with its temp scratch dir.
+- **Fleet-wide pane-close promise.** Autonomous children's panes close at
+  their terminal delivery mark (done push, typed error, rearm auto-delivery,
+  gone note) — previously only workflow-abort closed anything. Workflow
+  children close at their own terminal mark too; only their push stays
+  suppressed (the run reports for them). Never-started and
+  taken-over-until-rearm records are guarded; a sidecar-vs-exit race gets a
+  short `paneClosePending` retry.
+- **Fleet widget: one slot, honest widths.** The workflow progress card now
+  renders beneath the table inside ONE widget — pi's `setExtensionWidget`
+  delete+appends on every set, so two self-refreshing widgets leapfrogged
+  forever. Duplicated age tokens (`active · streaming 1m 1m`) are suppressed
+  when the detail carries its own age; rows pad to the header width; and the
+  overwide-line overflow that could hard-crash pi on narrow terminals is
+  capped (header counts truncate) with an ANSI-aware hard clamp over every
+  rendered line — the widget can no longer exceed the pane width, ever.
+
+### Changed
+
+- **Golden-spiral pane layout.** The first spawn splits the orchestrator's
+  pane right at ratio 0.6; each subsequent spawn splits the previous child's
+  pane, alternating down/right by accept-time ordinal — the orchestrator
+  keeps the largest share of the screen and children spiral away from it.
+  Engine-internal only; no new tool-surface parameters.
+
 ## [Unreleased]
 
 ### Added
