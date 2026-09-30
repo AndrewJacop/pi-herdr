@@ -59,6 +59,7 @@ import {
 	buildIdentityBlock,
 	buildLaunchPlan,
 	buildModeHintBlock,
+	buildNonPiPreamble,
 	buildTaskPrompt,
 	composePromptFlags,
 	type ParentRouting,
@@ -1057,6 +1058,20 @@ export async function startRecordNow(
 			record.prompt = task.data.prompt;
 			record.taskArtifactPath = task.data.artifactPath;
 		}
+	} else {
+		// A non-pi child has no injected extension and cannot be handed a pi
+		// prompt flag (buildAgentArgs composes those for `pi` alone), so nothing
+		// would ever tell it who spawned it or that it can report back — it
+		// simply finished and went quiet. Its identity + the report-back line
+		// therefore ride the typed prompt as a three-line preamble ahead of the
+		// task. Nothing else about the prompt changes: no session file, no task
+		// artifact (a non-pi record has no sessionPath), and the steer watermark
+		// below stays pi-only.
+		record.prompt = `${buildNonPiPreamble({
+			name: record.name,
+			type: record.type,
+			orchestratorPane: record.orchestratorPane,
+		})}\n\n${record.prompt}`;
 	}
 	record.launchPlan = buildLaunchPlan({
 		kind: record.kind,

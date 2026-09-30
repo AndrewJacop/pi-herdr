@@ -17,7 +17,10 @@
 //     session file and referenced by a one-line prompt (argv/typing-length
 //     safe; the artifact must outlive the pane so resume works).
 //   - identity + mode-hint blocks are appended to every pi child's system
-//     prompt (lean wording; see the builders below).
+//     prompt (lean wording; see the builders below); a NON-pi child cannot
+//     be handed a pi prompt flag and has no injected extension, so its
+//     identity + report-back ride the typed prompt as a short preamble
+//     (buildNonPiPreamble, folded in by the spawn engine).
 //   - frontmatter `args:` (definition agent_args) and spawn-level agent_args
 //     append last-wins — the sanctioned raw-CLI escape hatch.
 
@@ -262,6 +265,34 @@ export function buildModeHintBlock(child: {
 	if (child.sessionMode === "lineage-only" || child.sessionMode === "fork") {
 		lines.push(
 			"Your session was seeded from a parent conversation; treat earlier turns as context, not your own actions.",
+		);
+	}
+	return lines.join("\n");
+}
+
+/**
+ * The preamble a NON-pi child gets at the top of its typed prompt. A non-pi
+ * kind cannot be handed a pi prompt flag (`buildAgentArgs` composes those for
+ * `pi` alone, and `composePromptFlags` above is only reached there) and has no
+ * injected child extension, so the two things it needs — who spawned it, and
+ * how to reach the orchestrator — have to ride the prompt text itself. The
+ * report-back is the `herdr` CLI verb because that is the one channel a non-pi
+ * child can drive from its own shell; `PI_HERDR_ORCHESTRATOR_PANE` is stamped
+ * into its env by the spawn engine at start time. Kept to three lines: it
+ * precedes the task, and a spawner preamble is not the place for prose. No
+ * orchestrator pane (a session not running in a pane) → identity only, because
+ * a report-back instruction with no address is worse than none.
+ */
+export function buildNonPiPreamble(child: {
+	name: string;
+	type?: string;
+	orchestratorPane?: string;
+}): string {
+	const lines = [buildIdentityBlock({ name: child.name, type: child.type })];
+	if (child.orchestratorPane) {
+		lines.push(
+			"When your task is complete, report back to the orchestrator with:",
+			`herdr agent prompt "$PI_HERDR_ORCHESTRATOR_PANE" "<short summary + the path to your full output>"`,
 		);
 	}
 	return lines.join("\n");
