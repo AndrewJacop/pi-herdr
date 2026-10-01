@@ -996,5 +996,54 @@ try {
 	/* best-effort */
 }
 
+// --- watchdog: a finished session is not a stall (sidecar-less vanish) ---
+{
+	const delivery = await jiti.import(join(ROOT, "src/delivery.ts"), {
+		parent: ROOT,
+	});
+	const finished = {
+		name: "wd-fin",
+		kind: "pi",
+		prompt: "",
+		agentArgs: [],
+		depth: 1,
+		isolated: false,
+		spawnedAt: 0,
+		submitted: true,
+		sawWorking: true,
+		stance: "autonomous",
+		paneId: "w1:wd-fin",
+		sessionPath: join(tmpdir(), "wd-fin.jsonl"),
+	};
+	const missing = { ...finished, name: "wd-miss", paneId: "w1:wd-miss", sessionPath: join(tmpdir(), "wd-miss.jsonl") };
+	const pushes = [];
+	await delivery.watchdogOnce({
+		registry: () => new Map([["wd-fin", finished], ["wd-miss", missing]]),
+		fleet: { ok: true, data: [] },
+		push: (m) => pushes.push(m),
+		readSidecar: () => ({ state: "missing" }),
+		extract: (p) =>
+			p.includes("wd-fin")
+				? {
+						text: "done",
+						message: {
+							role: "assistant",
+							stopReason: "stop",
+							content: [{ type: "text", text: "done" }],
+						},
+					}
+				: null,
+		now: () => 1_000_000,
+	});
+	assert(
+		!pushes.some((m) => m.details?.name === "wd-fin"),
+		"a vanished pane whose session already shows a finished run is NOT stalled",
+	);
+	assert(
+		pushes.some((m) => m.details?.kind === "stalled" && m.details?.name === "wd-miss"),
+		"a vanished pane with no finish evidence still stalls",
+	);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
