@@ -484,5 +484,46 @@ console.log("\n[4] Workflow rows (issue 14): run-stamped children hidden, one ro
 	eq(cleared[0], undefined, "clear passes undefined");
 }
 
+console.log("\n[4] narrow terminal: no line exceeds the given width");
+{
+	const narrowModel = wg.buildWidgetModel(
+		[
+			{ name: "scout-auth", spawnedAt: 0, kind: "pi", submitted: true, sawWorking: true },
+			{ name: "reviewer-db", spawnedAt: 0, kind: "pi", submitted: true, sawWorking: true },
+		],
+		[
+			{ status: "blocked", detail: "ask_user" },
+			{ status: "active", detail: "bash 7m" },
+		],
+		10_000,
+		new Map(),
+	);
+	narrowModel.rows[0].blockedPreview = "Which schema, A or B?";
+	for (const width of [32, 20, 80]) {
+		const lines = wg.renderWidgetLines(narrowModel, width).map(visible);
+		assert(lines.length >= 4, `width ${width} still renders a box`);
+		for (const line of lines) {
+			assert(
+				line.length <= width,
+				`width ${width}: line is ${line.length} cols (${JSON.stringify(line)})`,
+			);
+		}
+	}
+	// with a real SGR style (the shapes pi themes emit), the narrow callout
+	// keeps the alarm word, the age, and closes the inverse (no style bleed)
+	const styled = {
+		dim: (s) => `\x1b[2m${s}\x1b[22m`,
+		border: (s) => `\x1b[38;5;245m${s}\x1b[39m`,
+		inverse: (s) => `\x1b[7m${s}\x1b[27m`,
+	};
+	const styledLines = wg.renderWidgetLines(narrowModel, 20, styled);
+	const styledCallout = styledLines.find((l) => l.includes("BLOCKED"));
+	assert(styledCallout !== undefined, "width 20 (SGR): the BLOCKED callout still renders");
+	assert(
+		styledCallout.includes("\x1b[27m"),
+		"width 20 (SGR): the inverse style is closed (no style bleed)",
+	);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
