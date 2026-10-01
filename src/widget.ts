@@ -328,10 +328,14 @@ function calloutLine(
 	width: number,
 	style: WidgetStyle,
 ): string {
-	const head = ` ⚠ ${fit(name, Math.max(8, width / 3))} BLOCKED `;
-	let line = style.inverse(head) + ` ${age} `;
+	const prefix = " ⚠ ";
+	const suffix = " BLOCKED ";
+	const agePart = ` ${age} `;
+	const nameBudget = Math.max(1, width - prefix.length - suffix.length - agePart.length);
+	const head = `${prefix}${fit(name, nameBudget)}${suffix}`;
+	let line = `${style.inverse(head)}${agePart}`;
 	if (preview) {
-		const budget = width - visibleLen(head) - age.length - 6;
+		const budget = width - visibleLen(head) - agePart.length - 2;
 		if (budget >= 8) line += style.dim(`"${fit(preview, budget)}"`);
 	}
 	return line;
