@@ -462,6 +462,8 @@ export interface WatchdogDeps {
 	readSidecar?: (sessionPath: string) => ReadSidecarResult;
 	/** Activity-sidecar read — default: readActivityFile (src/status.ts). */
 	readActivity?: (activityPath?: string) => ActivityRead;
+	/** Session-JSONL extraction — default: extractSessionResult. */
+	extract?: (sessionPath: string) => ExtractedResult | null;
 	/** The steer sink — default: pi.sendMessage into THIS session. */
 	push?: (msg: SteeredMessage) => void;
 	now?: () => number;
@@ -527,7 +529,17 @@ export async function watchdogOnce(deps: WatchdogDeps = {}): Promise<void> {
 				?.agentStatus;
 			let problem = false;
 
-			if (!present && !sidecarOk) {
+			// A vanished pane whose session already shows a finished run is not a
+			// broken substrate: the child settled (stop/error) but never wrote a
+			// sidecar (or its sidecar write raced the exit). The session is the
+			// stronger evidence — don't stall it.
+			const settled = record.sessionPath
+				? (deps.extract ?? extractSessionResult)(record.sessionPath)
+				: null;
+			const stop = (settled?.message as { stopReason?: unknown } | undefined)?.stopReason;
+			const finished = stop === "stop" || stop === "error";
+
+			if (!present && !sidecarOk && !finished) {
 				stalled = true;
 				reason = "the pane vanished without a completion sidecar";
 			} else if (
