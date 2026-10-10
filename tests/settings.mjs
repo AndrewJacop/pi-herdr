@@ -21,6 +21,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+// The settings test loads the extension entry point as a herdr-managed session.
+process.env.HERDR_ENV = "1";
 const jiti = createJiti(import.meta.url);
 
 let passed = 0;

@@ -35,6 +35,10 @@ import {
 } from "./version.js";
 
 export default function (pi: ExtensionAPI): void {
+	if (process.env.HERDR_ENV !== "1") {
+		return;
+	}
+
 	// Push this pi's own state to herdr so agent_status is reliable for everyone
 	// (fixes herdr's working -> idle detection misses). No-op outside herdr.
 	registerSelfReport(pi);
