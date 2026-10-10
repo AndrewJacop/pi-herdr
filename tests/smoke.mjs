@@ -33,6 +33,23 @@ function eq(a, b) {
 console.log("\n[1] Extension load + tool registration (AC1, AC7)");
 const ext = await jiti.import(join(ROOT, "src/index.ts"), { parent: ROOT });
 
+// The extension must be inert outside a herdr-managed session.
+const inheritedHerdrEnv = process.env.HERDR_ENV;
+delete process.env.HERDR_ENV;
+let guardedRegistrations = 0;
+const guardedPi = {
+	registerTool: () => guardedRegistrations++,
+	registerCommand: () => guardedRegistrations++,
+	on: () => guardedRegistrations++,
+	events: { on: () => guardedRegistrations++, emit: () => {} },
+};
+await ext.default(guardedPi);
+assert(guardedRegistrations === 0, "no extension registrations when HERDR_ENV is unset");
+if (inheritedHerdrEnv === undefined) delete process.env.HERDR_ENV;
+else process.env.HERDR_ENV = inheritedHerdrEnv;
+
+// Normal extension-surface tests explicitly opt into herdr mode.
+process.env.HERDR_ENV = "1";
 const tools = [];
 const commands = [];
 const events = {};
