@@ -109,6 +109,22 @@ server. If herdr is missing or not running, every tool returns a clean
 > env injection on the v0.6 surface, so a minimal-PATH server can't be worked around
 > from a spawn — run herdr from your terminal.
 
+#### Or: the Herdr app (herdr-core)
+
+pi-herdr also runs inside the [Herdr app](https://herdr.dev), which keeps its
+terminals in herdr-core (`hc`) and has no `herdr` server. When pi runs in one of
+its terminals (`HC_TERMINAL_ID` set, no `HERDR_PANE_ID`), every herdr call is
+translated to `hc` (and `herdr-app` for pane splits) by `src/hc.ts`:
+
+- Spawned agents open as panes next to the spawner, or, without the app, as
+  sub-agent terminals of this one. A pane id is an `hc` terminal address (`t7`).
+- pi, Claude Code and Codex report their own status to the core, so completion
+  waits need no self-report.
+- Isolated spawns make their worktree with git in `~/.herdr/worktrees/<repo>/<branch>`,
+  where the app's worktree dialog puts them.
+- `herdr_run_command` and `herdr_message_agent` always press Enter: `hc` can't
+  type text without submitting it.
+
 ### 3. This extension
 
 ```bash
@@ -495,6 +511,8 @@ self-report (e.g. `claude`/`codex`), the poll catches the settled state too.
 | --- | --- | --- |
 | `HERDR_BIN` | `herdr` (resolved via `PATH`/`PATHEXT`) | Override the herdr binary path. |
 | `PI_HERDR_NO_SELF_REPORT` | unset | Set to `1` to disable self-report in this pi. |
+| `PI_HERDR_BACKEND` | detected | `hc` or `herdr`: force the herdr-core or the herdr backend. |
+| `HC_BIN` / `HERDR_APP_BIN` | `~/.local/bin/…`, else `PATH` | Override the `hc` / `herdr-app` binaries. |
 
 ## Settings (`/subagents config`)
 
