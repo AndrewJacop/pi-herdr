@@ -1416,8 +1416,10 @@ export async function spawnAgent(
 	// model/thinking onto it, so a fallback-path resume re-runs the chain
 	// against CURRENT settings instead of replaying the dead run's pins.
 	const definitionSnapshot: SpawnSpec = { ...merged };
+	// The parent's model is a pi provider/model id: only a pi child can use
+	// it. Other agents (claude, codex, …) keep their own configured model.
 	merged.model =
-		routing.modelSource === "parent" && !kindCaps(merged.kind).model
+		routing.modelSource === "parent" && merged.kind.toLowerCase() !== "pi"
 			? undefined
 			: routing.model;
 	merged.thinking = routing.thinking;
