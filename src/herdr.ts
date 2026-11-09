@@ -10,6 +10,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveHerdrBin } from "./config.js";
+import { hcHerdr, useHc } from "./hc.js";
 import type { HerdrErrorCode, NormalizedAgent, Result } from "./env.js";
 import { normalizeAgent } from "./env.js";
 import { floorError, parseVersion, type HerdrProbe } from "./version.js";
@@ -52,11 +53,15 @@ let cachedProbe: Promise<HerdrProbe> | null = null;
  */
 export function probeHerdr(): Promise<HerdrProbe> {
 	if (cachedProbe) return cachedProbe;
-	cachedProbe = runHerdr<string>(["--version"], {
-		textOk: true,
-		timeoutMs: 3_000,
-		skipFloorGate: true,
-	}).then((r) => {
+	// On herdr-core this is hc's version: the herdr floor doesn't apply to it.
+	const version = useHc()
+		? hcHerdr<string>(["--version"], { timeoutMs: 3_000 })
+		: runHerdr<string>(["--version"], {
+				textOk: true,
+				timeoutMs: 3_000,
+				skipFloorGate: true,
+			});
+	cachedProbe = version.then((r) => {
 		if (!r.ok) return { state: "missing" }; // HERDR_UNAVAILABLE / spawn fail
 		const v = parseVersion(typeof r.data === "string" ? r.data : "");
 		return v ? { state: "ok", version: v } : { state: "unknown" };
@@ -94,6 +99,8 @@ export function herdr<T = unknown>(
 	args: string[],
 	opts: HerdrOpts = {},
 ): Promise<Result<T>> {
+	// Inside the Herdr app: herdr-core answers instead (src/hc.ts).
+	if (useHc()) return hcHerdr<T>(args, opts);
 	if (opts.skipFloorGate) return runHerdr<T>(args, opts);
 	return (async () => {
 		const gate = await floorGate();

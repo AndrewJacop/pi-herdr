@@ -27,6 +27,7 @@ import { registerFleetWidget } from "./widget.js";
 import { registerSelfReport } from "./selfreport.js";
 import { registerSubagentsCommand } from "./menu.js";
 import { refreshHerdrProbe } from "./herdr.js";
+import { useHc } from "./hc.js";
 import {
 	floorError,
 	formatVersion,
@@ -82,6 +83,15 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("session_start", (e, ctx) => {
 		if (e.reason !== "startup" && e.reason !== "reload") return;
 		refreshHerdrProbe().then((probe) => {
+			if (useHc()) {
+				ctx.ui.setStatus(
+					"pi-herdr",
+					probe.state === "ok"
+						? `herdr-core ${formatVersion(probe.version)}`
+						: "herdr-core: hc not found",
+				);
+				return;
+			}
 			// Diagnostics-only footer (v0.6 issue 11): the fleet widget carries
 			// the agent counts; the footer keeps the version tag + failure
 			// verdicts. Set from the probe verdict — no fleet polling here.

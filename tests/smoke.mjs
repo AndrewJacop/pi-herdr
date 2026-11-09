@@ -12,6 +12,9 @@ import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NODE = process.execPath;
+// These fake the herdr binary: keep the herdr backend even when run inside a
+// herdr-core terminal (the Herdr app), where src/hc.ts would answer instead.
+process.env.PI_HERDR_BACKEND = "herdr";
 const jiti = createJiti(import.meta.url);
 
 let passed = 0;
