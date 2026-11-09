@@ -30,6 +30,7 @@
 
 import { getAgentKinds } from "./config.js";
 import { herdr } from "./herdr.js";
+import { selfPaneId } from "./hc.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1509,9 +1510,9 @@ export async function spawnAgent(
 		// spawn cwd > definition cwd (frontmatter `cwd`); `isolated` ignores the
 		// definition's — the worktree IS the cwd choice at spawn level
 		cwd: params.cwd ?? (params.isolated ? undefined : merged.cwd),
-		orchestratorPane: env.HERDR_PANE_ID,
+		orchestratorPane: selfPaneId(env),
 		spawnOrdinal: [...spawnRegistry.values()].filter(
-			(r) => r.orchestratorPane === env.HERDR_PANE_ID,
+			(r) => r.orchestratorPane === selfPaneId(env),
 		).length,
 		spawnedAt: Date.now(),
 		submitted: false,

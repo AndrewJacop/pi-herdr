@@ -29,6 +29,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { herdr } from "../herdr.js";
+import { selfPaneId } from "../hc.js";
 import { sendAgentPrompt } from "./orchestration.js";
 import { spawnRecords, type SpawnRecord } from "../spawn.js";
 import { writeSteerWatermark } from "../sessionfile.js";
@@ -155,7 +156,7 @@ export async function senderLabel(
 	const env = deps.env ?? process.env;
 	const declared = env.PI_HERDR_AGENT_LABEL ?? env.PI_HERDR_NAME;
 	if (declared) return declared;
-	const paneId = env.HERDR_PANE_ID;
+	const paneId = selfPaneId(env);
 	if (paneId) {
 		const v = await (deps.agentGet ?? defaultAgentGet)(paneId, deps.signal);
 		return v.ok && v.data.name ? v.data.name : paneId;
