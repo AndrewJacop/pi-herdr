@@ -297,12 +297,14 @@ export async function messageAgent(
 	params: MessageParams,
 	deps: MessageDeps = {},
 ): Promise<Result<MessageReceipt>> {
+	// Finish sender lookup before sampling the target's delivery state: it
+	// may become blocked while the sender's own agent lookup is pending.
+	const from = await senderLabel(deps);
 	const resolved = await resolveTarget(params.target, deps);
 	if (resolved.kind === "err") return { ok: false, error: resolved.error };
 
 	const submit = params.submit !== false;
 	const blocked = resolved.state === "blocked";
-	const from = await senderLabel(deps);
 	const payload = blocked
 		? params.text
 		: envelope(from, resolved.to, params.text);

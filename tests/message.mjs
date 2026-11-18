@@ -285,6 +285,31 @@ console.log("\n[5] Physics-adaptive delivery");
 		"blocked payload is the raw text — no envelope",
 	);
 
+	// The target can block while the sender's own name lookup is pending.
+	// Resolve its delivery state after that lookup, not from an older snapshot.
+	let targetState = "working";
+	let releaseLabel;
+	let labelLookupStarted;
+	const labelStarted = new Promise((resolve) => labelLookupStarted = resolve);
+	const delayedSend = recorder();
+	const delayed = msg.messageAgent(
+		{ target: "scout", text: "yes, proceed" },
+		DEPS({
+			env: { HERDR_PANE_ID: "parent:p1" },
+			send: delayedSend,
+			agentGet: async (target) => target === "parent:p1"
+				? new Promise((resolve) => { releaseLabel = resolve; labelLookupStarted(); })
+				: { ok: true, data: { paneId: "w1:p1", name: "scout", status: targetState } },
+		}),
+	);
+	await labelStarted;
+	targetState = "blocked";
+	releaseLabel({ ok: true, data: { paneId: "parent:p1", name: "parent", status: "working" } });
+	const afterLookup = await delayed;
+	assert(afterLookup.ok && afterLookup.data.state === "blocked" && afterLookup.data.delivery === "answer" &&
+		afterLookup.data.from === "parent" && delayedSend.calls.length === 1 && delayedSend.calls[0].text === "yes, proceed",
+		"target blocking during sender lookup receives a raw answer, not a stale working-state envelope");
+
 	// submit plumbing
 	const withSub = await msg.messageAgent(
 		{ target: "scout", text: "x", submit: false },
