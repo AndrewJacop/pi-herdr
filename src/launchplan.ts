@@ -246,8 +246,8 @@ export function buildIdentityBlock(child: {
 
 /**
  * How the child runs: the settle contract for autonomous stance, and the
- * seeded-lineage note for fork/lineage-only sessions. Interactive + standalone
- * children need no hint (empty string → no flag is emitted).
+ * keep-open task contract for persistent children, and the seeded-lineage
+ * note for fork/lineage-only sessions.
  */
 export function buildModeHintBlock(child: {
 	stance: "autonomous" | "interactive";
@@ -258,6 +258,8 @@ export function buildModeHintBlock(child: {
 		lines.push(
 			"When your task is complete, write your full final summary as a normal message; settling ends your run (agent_done declares it).",
 		);
+	} else {
+		lines.push("When submitted work is complete, write your full final summary as a normal message and settle; the result is reported automatically and this session stays open. agent_done explicitly closes the session — do not use it just to finish a task.");
 	}
 	if (child.sessionMode === "lineage-only" || child.sessionMode === "fork") {
 		lines.push(

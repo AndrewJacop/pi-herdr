@@ -28,13 +28,14 @@
 // pane with a TUI-detected lifecycle, nothing else — hence the strict
 // capability table below (verified in wayfinder/research/capability-matrix.md).
 
+import { randomUUID } from "node:crypto";
 import { getAgentKinds } from "./config.js";
 import { herdr } from "./herdr.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { seedSessionFile, writeSteerWatermark } from "./sessionfile.js";
+import { matchTaskSidecar, readExitSidecar, seedSessionFile, writeSteerWatermark } from "./sessionfile.js";
 import {
 	type Err,
 	type HerdrErrorCode,
@@ -290,6 +291,9 @@ export function uniqueHandle(base: string, taken: ReadonlySet<string>): string {
 
 /** Whether a child pane closes itself when its work settles. */
 export type Stance = "autonomous" | "interactive";
+
+/** Per-task completion delivery, independent of whether the pane persists. */
+export type NotifyPolicy = "wake" | "quiet" | "none";
 
 /**
  * Derive the stance from the definition's `auto_exit` / `interactive` fields:
@@ -679,6 +683,11 @@ export interface SpawnRecord {
 	launchPlan?: string[];
 	/** Whether the pane closes itself on settle. */
 	stance: Stance;
+	/** Unset inherits the live notifications setting; normal maps to wake. */
+	notify?: NotifyPolicy;
+	/** One outstanding submitted task in a persistent Pi child. Mid-work
+	 * messages steer this task; the next task starts only after delivery. */
+	task?: { id: string };
 	/** How the child session begins (issue 09 consumes; rides the plan here). */
 	session_mode?: SessionMode;
 	/** Resolved model/thinking + the supplying routing level (issue 08). */
@@ -910,6 +919,8 @@ export async function currentStatus(
 	deps: SpawnDeps,
 ): Promise<SpawnStatus> {
 	if (!record.paneId) return record.startError ? "gone" : "queued";
+	if (record.task && record.sessionPath &&
+		matchTaskSidecar(readExitSidecar(record.sessionPath), record.task.id).state === "ok") return "done";
 	const statusOf = deps.status ?? getAgentStatus;
 	const r = await statusOf(record.paneId);
 	if (!r.ok) {
@@ -920,6 +931,7 @@ export async function currentStatus(
 		return "working"; // transient — keep the last-known-live view
 	}
 	record.lastStatus = r.data;
+	if (record.task && (r.data === "idle" || r.data === "done")) return "working";
 	return deriveStatus(record, r.data);
 }
 
@@ -1164,13 +1176,15 @@ async function submitRecordPrompt(
 	if (!record.paneId) return;
 	const submit = deps.submit ?? defaultSubmit;
 	const deadline = Date.now() + SUBMIT_CHUNK_MS;
+	if (record.kind.toLowerCase() === "pi" && record.stance === "interactive")
+		record.task = { id: randomUUID() };
 	for (let attempt = 0; attempt < 2; attempt++) {
 		if (attempt > 0) await sleep(2_000);
 		// Steer watermark (issue 06), stamped PER ATTEMPT: the exact text about
 		// to be typed. The child matches its input event against it so the
 		// parent's own steering is never mistaken for a human takeover — and a
 		// re-submit after a lost turn re-stamps, so the retry is not misread.
-		if (record.sessionPath) writeSteerWatermark(record.sessionPath, record.prompt);
+		if (record.sessionPath) writeSteerWatermark(record.sessionPath, record.prompt, record.task?.id);
 		const r = await submit(record.paneId, record.prompt, deadline, deps.signal);
 		if (r.ok || r.error.message !== "NOT_STARTED") break; // only retry lost turns
 	}
@@ -1285,6 +1299,7 @@ export interface SpawnParams {
 	 * the env-contract discipline; merged after the built-ins. */
 	extraEnv?: Record<string, string>;
 	wait?: boolean | number;
+	notify?: NotifyPolicy;
 }
 
 export interface SpawnResultData {
@@ -1436,6 +1451,8 @@ export async function spawnAgent(
 	if (routingError) return routingError;
 	const enforcement = validateKindEnforcement(merged);
 	if (enforcement) return enforcement;
+	if (params.notify !== undefined && !isPiKind(merged.kind))
+		return spawnErr("VALIDATION_ERROR", "notify requires a Pi child; other kinds have no completion push protocol.");
 
 	// 4. fleet snapshot (read-only) — feeds the cap count + handle uniquify
 	const env = deps.env ?? process.env;
@@ -1517,6 +1534,7 @@ export async function spawnAgent(
 		submitted: false,
 		sawWorking: false,
 		stance: deriveStance(merged),
+		notify: params.notify,
 		session_mode: merged.session_mode,
 		routing,
 		deniedTools: merged.exclude_tools,

@@ -27,6 +27,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Isolate child-extension fixtures from an enclosing herdr worker.
+for (const key of Object.keys(process.env)) if (key.startsWith("PI_HERDR_")) delete process.env[key];
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 

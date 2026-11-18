@@ -340,8 +340,9 @@ export function minedAssistantError(message: unknown): {
 // `<session>.exit` — written by the injected child extension: `{type:"done"}`
 // on declared/settled completion, `{type:"error", errorMessage, stopReason}`
 // when the final turn failed. The parent treats it as the child's typed
-// terminal declaration (checked BEFORE pane status: an auto-exited pane is
-// already gone when its sidecar lands).
+// completion declaration (checked BEFORE pane status: an auto-exited pane is
+// already gone when its sidecar lands). Persistent tasks carry taskId,
+// keepOpen, and their frozen final assistant message instead of declaring exit.
 
 /**
  * Usage recovered from a child's session JSONL (issue 14): lifetime output
@@ -408,9 +409,16 @@ export function sidecarPathFor(sessionPath: string): string {
  * the delivery "auto-delivered after user steer". `structured` (issue 14)
  * carries the validated StructuredOutput payload of a schema'd workflow
  * child — canonical JSON, captured child-side, verbatim here. */
-export type ExitSidecar =
+export type ExitSidecar = (
 	| { type: "done"; rearm?: true; structured?: string }
-	| { type: "error"; errorMessage: string; stopReason: string; rearm?: true };
+	| { type: "error"; errorMessage: string; stopReason: string; rearm?: true }
+) & {
+	/** A submitted task in a persistent child, not necessarily a process exit. */
+	taskId?: string;
+	keepOpen?: true;
+	/** Frozen at settle so later conversation cannot replace this task's result. */
+	message?: Record<string, unknown>;
+};
 
 /** Parse sidecar text. Anything malformed or of an unknown shape is invalid. */
 export function parseExitSidecar(
@@ -431,8 +439,15 @@ export function parseExitSidecar(
 	// child extension writes it: a JSON string of the validated payload.
 	const structured =
 		typeof o.structured === "string" ? { structured: o.structured } : {};
+	const task = {
+		...(typeof o.taskId === "string" ? { taskId: o.taskId } : {}),
+		...(o.keepOpen === true ? { keepOpen: true as const } : {}),
+		...(o.message && typeof o.message === "object" && !Array.isArray(o.message) &&
+			(o.message as { role?: unknown }).role === "assistant"
+			? { message: o.message as Record<string, unknown> } : {}),
+	};
 	if (o.type === "done")
-		return { ok: true, sidecar: { type: "done", ...rearm, ...structured } };
+		return { ok: true, sidecar: { type: "done", ...rearm, ...structured, ...task } };
 	if (o.type === "error") {
 		const message =
 			typeof o.errorMessage === "string" && o.errorMessage.trim()
@@ -441,7 +456,7 @@ export function parseExitSidecar(
 		const stopReason = typeof o.stopReason === "string" ? o.stopReason : "error";
 		return {
 			ok: true,
-			sidecar: { type: "error", errorMessage: message, stopReason, ...rearm },
+			sidecar: { type: "error", errorMessage: message, stopReason, ...rearm, ...task },
 		};
 	}
 	return { ok: false };
@@ -483,9 +498,9 @@ export function readTakeoverMarker(sessionPath: string): ReadTakeoverResult {
 
 /** Parent-side: stamp the exact text about to be typed into the child.
  * Best-effort — worst case the child reads a stale watermark. */
-export function writeSteerWatermark(sessionPath: string, text: string): void {
+export function writeSteerWatermark(sessionPath: string, text: string, taskId?: string): void {
 	try {
-		writeFileSync(steerPathFor(sessionPath), text);
+		writeFileSync(steerPathFor(sessionPath), taskId ? JSON.stringify({ text, taskId }) : text);
 	} catch {
 		/* best-effort */
 	}
@@ -493,8 +508,20 @@ export function writeSteerWatermark(sessionPath: string, text: string): void {
 
 /** Child-side: read (peek, no delete) the current steer watermark. */
 export function readSteerWatermark(sessionPath: string): string | null {
+	return readSteerSubmission(sessionPath)?.text ?? null;
+}
+
+/** The existing steer watermark also carries task identity for persistent Pi.
+ * Legacy plain-text watermarks remain valid steering, but create no task. */
+export function readSteerSubmission(sessionPath: string): { text: string; taskId?: string } | null {
 	try {
-		return readFileSync(steerPathFor(sessionPath), "utf8");
+		const raw = readFileSync(steerPathFor(sessionPath), "utf8");
+		try {
+			const value = JSON.parse(raw);
+			if (typeof value?.text === "string" && typeof value?.taskId === "string")
+				return { text: value.text, taskId: value.taskId };
+		} catch { /* legacy text */ }
+		return { text: raw };
 	} catch {
 		return null;
 	}
@@ -528,6 +555,19 @@ export type ReadSidecarResult =
 	| { state: "missing" }
 	| { state: "ok"; sidecar: ExitSidecar }
 	| { state: "invalid" };
+
+/** Never mistake a previous persistent task's completion for current work. */
+export function matchTaskSidecar(read: ReadSidecarResult, taskId?: string): ReadSidecarResult {
+	return taskId && read.state === "ok" && read.sidecar.taskId !== taskId
+		? { state: "missing" } : read;
+}
+
+/** Prefer the frozen task result; legacy exit sidecars still use the JSONL. */
+export function sidecarResult(sidecar: ExitSidecar, extract: () => ExtractedResult | null): ExtractedResult | null {
+	return sidecar.message
+		? { message: sidecar.message, text: assistantText(sidecar.message) }
+		: extract();
+}
 
 /**
  * Drop the previous run's sidecars before a resume relaunch (issue 10).

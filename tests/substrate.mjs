@@ -20,6 +20,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// These fixtures register child extensions; never let their mock agent_done
+// write a completion marker for the real herdr child running this test.
+for (const key of Object.keys(process.env)) if (key.startsWith("PI_HERDR_")) delete process.env[key];
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 
@@ -404,19 +408,8 @@ console.log("\n[7] Child extension — registration against a mock pi");
 		const settle = registered.handlers.agent_settled?.[0];
 		assert(!!settle, "agent_settled wired (the definitive idle signal)");
 
-		// agent_done: writes {type:"done"} + shuts down
-		let shut = 0;
-		await done.execute("t1", {}, undefined, undefined, {
-			shutdown: () => shut++,
-		});
-		assert(
-			JSON.parse(readFileSync(`${sess}.exit`, "utf8")).type === "done",
-			"agent_done wrote the typed done sidecar",
-		);
-		assert(shut === 1, "agent_done exits the session");
-
 		// auto-exit on settle: agent_end holds messages, settle writes + exits
-		shut = 0;
+		let shut = 0;
 		await registered.handlers.agent_end[0]({
 			type: "agent_end",
 			messages: [{ role: "assistant", stopReason: "stop" }],
@@ -446,6 +439,11 @@ console.log("\n[7] Child extension — registration against a mock pi");
 			shut === 0 && sidecarDuringGrace.type === "done",
 			"error settle does NOT exit immediately nor overwrite the sidecar (retry grace window)",
 		);
+		await settle({ aborted: true }, { shutdown: () => shut++ });
+		await sleep(80);
+		assert(shut === 0 && sf.readExitSidecar(sess).sidecar.type === "done",
+			"aborted settle cancels a pending error timer even without a new run");
+		await settle({}, { shutdown: () => shut++ });
 		// a new run (pi retrying) within the window cancels the pending exit
 		await registered.handlers.agent_start[0]({ type: "agent_start" });
 		await sleep(80);
@@ -479,6 +477,11 @@ console.log("\n[7] Child extension — registration against a mock pi");
 		await settle({}, { shutdown: () => shut++ });
 		await sleep(80);
 		assert(shut === 0, "aborted run does NOT auto-exit");
+
+		// agent_done remains an explicit session close, not a keep-open task finish.
+		await done.execute("t1", {}, undefined, undefined, { shutdown: () => shut++ });
+		assert(shut === 1 && sf.readExitSidecar(sess).sidecar.type === "done",
+			"agent_done writes done and closes the session");
 	} finally {
 		delete process.env.PI_HERDR_SESSION;
 		delete process.env.PI_HERDR_NAME;
@@ -512,7 +515,7 @@ console.log("\n[7] Child extension — registration against a mock pi");
 		await pi2.h.agent_settled({}, { shutdown: () => shut++ });
 		assert(
 			shut === 0 && !existsSync(`${sess2}.exit`),
-			"interactive children never auto-close nor write a settle sidecar",
+			"interactive idle without a parent-submitted task never closes or reports completion",
 		);
 	} finally {
 		delete process.env.PI_HERDR_SESSION;
@@ -565,12 +568,13 @@ console.log("\n[8] Launch plan — --session + -e injection and registry growth"
 		{
 			prompt: "task",
 			agent: { name: "scout", kind: "pi", exclude_tools: ["write"] },
+			notify: "quiet",
 		},
 		deps,
 	);
 	assert(r.ok, `spawn accepted (${r.ok ? "" : r.error.message})`);
 	const rec = spawnMod.spawnRecords().get("scout");
-	assert(rec.stance === "autonomous", "stance recorded on the registry");
+	assert(rec.stance === "autonomous" && rec.notify === "quiet", "stance and notify are recorded independently");
 	assert(rec.sessionPath === join(dir, "seeded.jsonl"), "sessionPath recorded");
 	assert(
 		rec.activityPath === `${join(dir, "seeded.jsonl")}.activity.json`,
@@ -618,8 +622,9 @@ console.log("\n[8] Launch plan — --session + -e injection and registry growth"
 		"interactive stance derived from the definition",
 	);
 	assert(
-		started[0].env.PI_HERDR_AUTO_EXIT === "0",
-		"interactive child gets AUTO_EXIT=0 (never auto-closes)",
+		started[0].env.PI_HERDR_AUTO_EXIT === "0" && !!rec2.task?.id &&
+			sf.readSteerSubmission(rec2.sessionPath)?.taskId === rec2.task.id,
+		"interactive spawn arms its first submitted task through the steer watermark",
 	);
 	spawnMod.clearSpawnRegistry();
 	await spawnMod.spawnAgent(
@@ -631,6 +636,11 @@ console.log("\n[8] Launch plan — --session + -e injection and registry growth"
 		!rec3.sessionPath && eq(rec3.launchPlan, ["--model", "prov/m"]),
 		"non-pi kinds: no session substrate, plain argv launch plan",
 	);
+	const startsBeforeNotify = started.length;
+	const unsupportedNotify = await spawnMod.spawnAgent({ prompt: "x", agent: { kind: "claude" }, notify: "wake" }, deps);
+	assert(!unsupportedNotify.ok && unsupportedNotify.error.code === "VALIDATION_ERROR" &&
+		unsupportedNotify.error.message.includes("notify") && started.length === startsBeforeNotify,
+		"non-Pi explicit notify refuses before creating a pane");
 
 	// isolated pi spawns seed under the WORKTREE cwd (the final child cwd),
 	// not the parent's
@@ -933,6 +943,8 @@ console.log("\n[10] Registration — surface convergence");
 		tools.some((t) => t.name === "herdr_get_agent_result"),
 		"herdr_get_agent_result registered",
 	);
+	const spawnTool = tools.find((t) => t.name === "herdr_spawn_agent");
+	assert(eq(spawnTool.parameters.properties.notify.enum, ["wake", "quiet", "none"]), "spawn schema exposes wake/quiet/none");
 	const get = tools.find((t) => t.name === "herdr_get_agent_result");
 	assert(
 		!!get.parameters.properties.wait && !!get.parameters.properties.target,

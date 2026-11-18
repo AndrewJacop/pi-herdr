@@ -178,8 +178,11 @@ Hand a self-contained task to a fresh agent and collect the result.
 **What happens:** `herdr_spawn_agent` splits a pane, launches the agent, submits
 the task, and returns a handle. Pi children run **autonomous** by default: when
 the work settles they write their typed completion sidecar, close their pane,
-and the result lives on in the retained session file — pass `interactive: true`
-to keep the pane open for follow-ups instead. Passing `wait: 180000` (ms) folds
+and the result lives on in the retained session file — pass `agent: { interactive: true }`
+to keep the pane open for follow-ups instead. Persistence and completion delivery
+are independent: `notify: "wake"` delivers the final and wakes the parent,
+`"quiet"` queues it for the next turn, and `"none"` is pull-only. Omit `notify`
+to inherit the configured policy. Passing `wait: 180000` (ms) folds
 the timing into the spawn call: it blocks until the terminal status.
 
 ### Example 2 — Parallel fan-out (do N things at once)
@@ -337,11 +340,14 @@ file whatever its lineage.
 
 ### Push delivery, takeover, and idle re-arm
 
-You never have to poll. When a spawned pi child finishes — by settling
-autonomously or by calling its injected `agent_done` — the child's **full
-final message is steered straight into your session**: the push carries the
-letter, not a doorbell. Detection is triply redundant: the child's typed
-completion sidecar first, then the session JSONL's last message when a child
+With completion notifications enabled, you never have to poll. When a spawned
+Pi child's submitted work settles, the child's **full final message is delivered
+straight into your session**: the push carries the letter, not a doorbell.
+Autonomous children exit; persistent children (`interactive: true` or
+`auto_exit: false` in the agent definition) report once and stay open.
+`agent_done` remains an explicit completion-and-close tool, not a keep-open
+finish. Detection is triply redundant: the child's typed completion sidecar
+first, then the session JSONL's last message when a child
 died without one (typed error if it died failing), then an honest gone note
 after a bounded grace when a pane vanished. Transient herdr hiccups never
 fake a completion. Each terminal event is pushed exactly once, and a **blocked**
@@ -350,7 +356,22 @@ child always wakes you (answer via `herdr_message_agent`) regardless of settings
 The `notifications` setting governs the wake: `normal` steers the result in
 and wakes you immediately; `quiet` delivers it on your next natural turn
 without waking; `none` pushes nothing — pull with `herdr_get_agent_result`
-whenever you want (blocked still always wakes).
+whenever you want (blocked still always wakes). The `notify` parameter on
+`herdr_spawn_agent` and `herdr_message_agent` overrides this per task:
+`wake` maps to configured `normal`, alongside `quiet` and `none`. Explicit
+overrides require a Pi child spawned by this session; peer/raw and non-Pi
+panes have no supervised completion channel.
+
+**Persistent tasks are sequential.** After the previous completion has been
+processed by the delivery loop (also under `none`), a submitted message to the
+idle child starts the next task with its own policy; omission inherits settings,
+not the previous override. Messages during outstanding work steer/coalesce into
+that task, and an explicit `notify` updates its policy. `submit: false` only types
+text: it cannot arm a task or set `notify`. Concurrent sends from this parent are
+refused; independent parents and humans are not serialized. Completion uses
+`agent_settled`, not intermediate assistant/tool messages or transient idle;
+aborts stay open without reporting success. If a tracked task dies before
+settling, it reports gone rather than replaying an earlier task's final.
 
 **User takeover** splits two effects. If *you* type into a running child's
 pane, its auto-exit is disabled — a pane never slams shut on a human — while
@@ -364,9 +385,9 @@ drives the pane), so `herdr_message_agent` never fakes a takeover.
 **Idle re-arm** is the headless plug: after a takeover, once the child
 settles and stays quiet for `idle_rearm_minutes` (default 15; any keystroke
 resets the timer), its latest final message auto-delivers — honestly labeled
-*auto-delivered after user steer* — the pane closes, and the session file is
-retained for resume. SSH in, steer, log out: the result still arrives, no
-orphan panes.
+*auto-delivered after user steer*. Autonomous panes close and retain their
+session for resume; persistent panes report only outstanding submitted work
+and remain open. SSH in, steer, log out: the result still arrives.
 
 `herdr_get_agent_result` stays pure inspection: mid-flight snapshot, bounded
 wait, re-read — never a mandatory second step after spawn.
@@ -525,8 +546,8 @@ key (and per agent name for `models.agents`):
 | `models.agents.<name>` | `{}` | Per-agent model pins (routing level 3): agent name → model id. Entries merge across both files, project winning per name. |
 | `max_parallel_agents` | `3` | Concurrency cap; spawns beyond it are queued until a slot frees. |
 | `max_spawn_depth` | `2` | Guard against runaway recursive fleets. |
-| `notifications` | `"normal"` | Wake behavior when a spawned agent completes: `normal` = the full result is steered in and the session wakes; `quiet` = delivered on the next natural turn, no wake; `none` = no pushes at all (pull-only). A blocked agent always wakes, whatever this is set to. |
-| `idle_rearm_minutes` | `15` | After a user takeover, minutes of quiet (any keystroke resets) before the agent's latest final message auto-delivers — labeled *auto-delivered after user steer* — and its pane closes. The timer starts on settle, never mid-work; the session file is retained for resume. |
+| `notifications` | `"normal"` | Default completion delivery when `notify` is omitted: `normal` = full result + wake (`notify: "wake"`); `quiet` = next natural turn, no wake; `none` = pull-only. Independent of persistence. A blocked agent always wakes. |
+| `idle_rearm_minutes` | `15` | After a user takeover, minutes of quiet (any keystroke resets) before the agent's latest final message auto-delivers — labeled *auto-delivered after user steer* — and an autonomous pane closes. Persistent panes report outstanding submitted work but stay open. The timer starts on settle, never mid-work; the session file is retained for resume. |
 | `workflows_enabled` | `true` | `false` removes `herdr_run_workflow` from the surface (evaluated at load) and refuses new runs after a mid-session toggle — never stops one in flight. |
 
 Every key is read at the moment it matters, so menu edits take effect on the

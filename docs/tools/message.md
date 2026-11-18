@@ -15,7 +15,8 @@ task prompts.
 |-------|------|----------|-------|
 | `target` | string | yes | Always explicit: pane id → herdr name → spawn-registry handle → reserved `orchestrator` role. Real names win over the reserved role. |
 | `text` | string | yes | Message text to deliver. |
-| `submit` | boolean | no | Press Enter after typing (default `true`). |
+| `submit` | boolean | no | Press Enter after typing (default `true`). `false` creates no task and cannot set `notify`. |
+| `notify` | `"wake" \| "quiet" \| "none"` | no | Completion delivery: final + wake parent, final on next turn, or pull-only. New tasks inherit configured policy when omitted (`normal` maps to `wake`). Requires a submitted message to a Pi child this session spawned. |
 
 ## Resolution chain
 
@@ -43,8 +44,22 @@ yet) spawn has nothing to deliver to and errors the same way.
 ## Receipt (fire-and-forget)
 
 `{delivered: true, target: <resolved pane-id>, to, from, state, delivery:
-"message" | "answer", name?, submit}` — no state gates (text to a working
-child queues natively), no `wait` (that is `herdr_get_agent_result(wait)`),
+"message" | "answer", name?, submit, taskId?, notify?}` — no `wait`
+(that is `herdr_get_agent_result(wait)`),
 and no read receipt: **delivered to the pane ≠ consumed by the model**.
 Replies arrive as injected `<agent-message>` text or the next completion
 notification.
+
+## Persistent tasks
+
+A persistent Pi child reports settled submitted work once without closing.
+After the delivery loop processes its completion (including pull-only `none`),
+a submitted message to the idle child starts the next task. A just-settled
+completion awaiting delivery refuses a new submission; retry after the next
+delivery tick. Mid-work steering and blocked answers coalesce into the current
+task; an explicit `notify` changes that task's policy, not a separate reply.
+`submit: false` changes neither task nor policy.
+
+One outstanding task per child, one send in flight from this parent. This is
+not a broker: other parents and human input are not serialized. Explicit
+`notify` on peer/raw or non-Pi panes is refused rather than silently ignored.

@@ -6,7 +6,8 @@
 //
 // Completion detection is triply redundant (research §3):
 //   1. exit sidecar (`<session>.exit`, typed done/error, optional rearm) —
-//      the child's own terminal declaration (auto-settle or `agent_done`);
+//      the child's own completion declaration (auto-settle or `agent_done`);
+//      taskId + keepOpen distinguishes persistent task completion from exit;
 //   2. terminal sentinel — the agent vanished with no sidecar: after a
 //      bounded grace, the session JSONL's last assistant message is the
 //      delivered letter (typed error when stopReason=error) — a death the
@@ -39,6 +40,9 @@ import {
 	extractSessionResult,
 	minedAssistantError,
 	readExitSidecar,
+	matchTaskSidecar,
+	sidecarResult,
+	type ExitSidecar,
 	readTakeoverMarker,
 	type ExtractedResult,
 	type ReadSidecarResult,
@@ -187,7 +191,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 			deliverTerminal(deps, record, "start-error", {
 				content: `Agent "${record.name}" never started: ${record.startError}`,
 				details: { name: record.name, kind: "start-error" },
-				wake: terminalWake(notifications(deps)),
+				wake: terminalWake(notifications(deps, record)),
 			});
 			continue;
 		}
@@ -197,7 +201,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 		// terminal declaration wins over anything the fleet says.
 		const isPi = record.kind.toLowerCase() === "pi" && Boolean(record.sessionPath);
 		if (isPi && record.sessionPath) {
-			const sidecar = (deps.readSidecar ?? readExitSidecar)(record.sessionPath);
+			const sidecar = matchTaskSidecar((deps.readSidecar ?? readExitSidecar)(record.sessionPath), record.task?.id);
 			if (sidecar.state === "ok") {
 				deliverSidecar(record, sidecar.sidecar, deps, paneLive(record.paneId));
 				continue;
@@ -214,7 +218,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 				continue;
 			}
 			if (now() - record.goneAt < graceMs) continue; // still in grace
-			if (isPi && record.sessionPath) {
+			if (isPi && record.sessionPath && !record.task) {
 				const extracted = (deps.extract ?? extractSessionResult)(
 					record.sessionPath,
 				);
@@ -236,7 +240,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 									message: extracted.message,
 									sessionPath: record.sessionPath,
 								},
-								wake: terminalWake(notifications(deps)),
+								wake: terminalWake(notifications(deps, record)),
 							},
 						);
 					} else {
@@ -253,7 +257,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 									message: extracted.message,
 									sessionPath: record.sessionPath,
 								},
-								wake: terminalWake(notifications(deps)),
+								wake: terminalWake(notifications(deps, record)),
 							},
 						);
 					}
@@ -268,7 +272,7 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 				{
 					content: goneContent(record),
 					details: { name: record.name, kind: "gone" },
-					wake: terminalWake(notifications(deps)),
+					wake: terminalWake(notifications(deps, record)),
 				},
 			);
 			continue;
@@ -304,14 +308,14 @@ export async function deliverOnce(deps: DeliveryDeps = {}): Promise<void> {
 
 function deliverSidecar(
 	record: SpawnRecord,
-	sidecar: { type: "done"; rearm?: true } | { type: "error"; errorMessage: string; stopReason: string; rearm?: true },
+	sidecar: ExitSidecar,
 	deps: DeliveryDeps,
 	paneLive = false,
 ): void {
-	const notes = notifications(deps);
-	const extracted = record.sessionPath
+	const notes = notifications(deps, record);
+	const extracted = sidecarResult(sidecar, () => record.sessionPath
 		? (deps.extract ?? extractSessionResult)(record.sessionPath)
-		: null;
+		: null);
 	const rearm = sidecar.rearm === true;
 	if (sidecar.type === "done") {
 		deliverTerminal(
@@ -323,6 +327,8 @@ function deliverSidecar(
 				details: {
 					name: record.name,
 					kind: "done",
+					...(sidecar.taskId ? { taskId: sidecar.taskId } : {}),
+					...(sidecar.keepOpen ? { keepOpen: true } : {}),
 					...(rearm ? { rearm: true } : {}),
 					result: extracted?.text,
 					...(extracted ? { message: extracted.message } : {}),
@@ -343,6 +349,8 @@ function deliverSidecar(
 			details: {
 				name: record.name,
 				kind: "error",
+				...(sidecar.taskId ? { taskId: sidecar.taskId } : {}),
+				...(sidecar.keepOpen ? { keepOpen: true } : {}),
 				...(rearm ? { rearm: true } : {}),
 				error: { stopReason: sidecar.stopReason, errorMessage: sidecar.errorMessage },
 				...(extracted ? { message: extracted.message } : {}),
@@ -377,9 +385,9 @@ function attemptPaneClose(deps: DeliveryDeps, record: SpawnRecord): void {
 
 /**
  * The documented promise, kept at the single choke point (manual e2e F2): a
- * terminally delivered child's pane closes — the child has exited on every
- * terminal route (the sidecar IS its exit declaration; sentinel/gone mean the
- * fleet no longer lists it), so the leftover empty pane goes too. Sessions are
+ * terminally delivered EXIT closes its pane. Persistent task completions
+ * bypass this function entirely (keepOpen). For sentinel/gone routes the
+ * fleet no longer lists the child, so the leftover empty pane goes too. Sessions are
  * never deleted (issue 04 ruling), so closing loses nothing. Guards: no pane
  * (queued/never-started), a pane the fleet still reports actively live
  * (working/blocked — defensive; held as pending and retried on later ticks,
@@ -421,13 +429,15 @@ function deliverTerminal(
 	paneLive = false,
 ): void {
 	markTerminal(record, kind, deps.now ?? (() => Date.now()));
-	closeRecordPane(deps, record, msg.details.rearm === true, paneLive);
+	if (msg.details.keepOpen !== true)
+		closeRecordPane(deps, record, msg.details.rearm === true, paneLive);
 	if (record.workflow) return;
-	pushTerminal(deps, msg, notifications(deps));
+	pushTerminal(deps, msg, notifications(deps, record));
 }
 
-function notifications(deps: DeliveryDeps): HerdrSettings["notifications"] {
-	return (deps.load ?? defaultLoad)().notifications;
+function notifications(deps: DeliveryDeps, record: SpawnRecord): HerdrSettings["notifications"] {
+	return record.notify === "wake" ? "normal"
+		: record.notify ?? (deps.load ?? defaultLoad)().notifications;
 }
 
 /**
@@ -520,7 +530,7 @@ export async function watchdogOnce(deps: WatchdogDeps = {}): Promise<void> {
 			const sidecarOk =
 				isSubstrateChild(record) &&
 				record.sessionPath &&
-				(deps.readSidecar ?? readExitSidecar)(record.sessionPath).state ===
+				matchTaskSidecar((deps.readSidecar ?? readExitSidecar)(record.sessionPath), record.task?.id).state ===
 					"ok";
 			const present = fleet.data.some((a) => a.paneId === record.paneId);
 			const live = fleet.data.find((a) => a.paneId === record.paneId)

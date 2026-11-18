@@ -15,7 +15,8 @@
 //   - auto-exit on `agent_settled` for autonomous-stance children —
 //     `agent_settled`, NOT `agent_end`, is the definitive idle signal (pi may
 //     auto-retry/compact/continue after agent_end; mapping matches
-//     src/selfreport.ts). Interactive children never auto-close.
+//     src/selfreport.ts). Persistent children instead report parent-submitted
+//     tasks on settle with taskId + keepOpen, leaving the session open.
 //   - the identity/tools strip (`[scout] — 12 tools · 4 denied (Ctrl+H)`)
 //     above the child's editor — a human walking into the pane sees what
 //     they're in; Ctrl+H expands the full tool list. (The prior art used
@@ -33,7 +34,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import {
 	clearSteerWatermark,
 	inputMatchesSteer,
-	readSteerWatermark,
+	readSteerSubmission,
 	takeoverPathFor,
 } from "./sessionfile.js";
 import { compileJsonSchema, type CompiledSchema } from "./workflow/json-schema.js";
@@ -55,8 +56,8 @@ export const ENV_DENIED_TOOLS = "PI_HERDR_DENIED_TOOLS";
 export const ENV_ACTIVITY_FILE = "PI_HERDR_ACTIVITY_FILE";
 /** Idle re-arm window in ms (v0.6 issue 06), stamped by the parent from the
  * `idle_rearm_minutes` setting. After a human takeover: settle + this much
- * quiet → the final message auto-delivers (rearm-labeled) and the pane
- * closes. Unset = the 15-minute default. */
+ * quiet → the final message auto-delivers (rearm-labeled). Autonomous panes
+ * close; persistent panes stay open. Unset = the 15-minute default. */
 export const ENV_IDLE_REARM_MS = "PI_HERDR_IDLE_REARM_MS";
 
 /** Schema file for a structured-output child (issue 14): the workflow host
@@ -147,6 +148,12 @@ export interface AgentMessageLike {
 	stopReason?: unknown;
 	errorMessage?: unknown;
 	[k: string]: unknown;
+}
+
+function latestAssistant(messages: AgentMessageLike[] | undefined): AgentMessageLike | undefined {
+	if (messages) for (let i = messages.length - 1; i >= 0; i--)
+		if (messages[i]?.role === "assistant") return messages[i];
+	return undefined;
 }
 
 /**
@@ -436,6 +443,10 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 	let expanded = false;
 
 	const sidecarPath = `${sessionFile}.exit`;
+	// Only parent-submitted work earns a persistent task completion. Human
+	// conversation, startup idle, and tool/compaction boundaries do not.
+	let taskId: string | undefined;
+	let declaredDone = false;
 
 	/** Write the completion sidecar. Best-effort: a failed write must not
 	 * break the exit path (the session JSONL remains the readable truth).
@@ -446,6 +457,7 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 			| { type: "done" }
 			| { type: "error"; errorMessage: string; stopReason: string },
 		rearm = false,
+		keepOpen = false,
 	): void {
 		try {
 			// A schema'd child's captured payload rides the done sidecar (issue
@@ -456,12 +468,14 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 					: {};
 			writeFileSync(
 				sidecarPath,
-				JSON.stringify(
-					rearm
-						? { ...payload, ...structuredField, rearm: true }
-						: { ...payload, ...structuredField },
-				),
+				JSON.stringify({
+					...payload, ...structuredField,
+					...(rearm ? { rearm: true } : {}),
+					...(taskId ? { taskId } : {}),
+					...(keepOpen ? { keepOpen: true, message: latestAssistant(latestMessages) } : {}),
+				}),
 			);
+			if (keepOpen) taskId = undefined;
 		} catch {
 			/* best-effort */
 		}
@@ -506,6 +520,9 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 			"Never call it mid-task.",
 		parameters: Type.Object({}),
 		async execute(_id, _params, _signal, _onUpdate, ctx) {
+			declaredDone = true;
+			cancelErrorExit();
+			cancelRearm();
 			writeSidecar({ type: "done" });
 			ctx.shutdown();
 			return {
@@ -571,9 +588,13 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 	 * watermark the parent stamps before driving this pane — herdr's agent
 	 * prompt and a human's typing are otherwise indistinguishable). */
 	function isHumanInput(event: { source?: unknown; text?: unknown }): boolean {
-		const watermark = readSteerWatermark(session);
+		const submission = readSteerSubmission(session);
 		const text = typeof event.text === "string" ? event.text : undefined;
-		if (inputMatchesSteer(text, watermark)) {
+		if (inputMatchesSteer(text, submission?.text ?? null)) {
+			if (submission?.taskId && submission.taskId !== taskId) {
+				taskId = submission.taskId;
+				latestMessages = undefined;
+			}
 			clearSteerWatermark(session);
 			return false; // our orchestrator steering itself
 		}
@@ -585,6 +606,7 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("agent_start", () => {
+		latestMessages = undefined;
 		// pi started (re)running — a retry survived the grace window decision,
 		// and a taken-over pane has new work; any pending re-arm is moot.
 		cancelErrorExit();
@@ -606,7 +628,33 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 		cancelRearm();
 	});
 
-	pi.on("agent_settled", (_event, ctx) => {
+	pi.on("agent_settled", (event, ctx) => {
+		if (declaredDone || (event as { aborted?: boolean }).aborted) {
+			cancelErrorExit();
+			cancelRearm();
+			return;
+		}
+		if (!autoExit) {
+			cancelErrorExit();
+			cancelRearm();
+			const last = latestAssistant(latestMessages);
+			if (!taskId || !last || last.stopReason === "aborted" || last.stopReason === "toolUse") return;
+			// Same retry/takeover protection as autonomous children, but the
+			// completion is task-scoped and NEVER closes a persistent pane.
+			const complete = () => {
+				cancelErrorExit();
+				cancelRearm();
+				writeSidecar(buildCompletionSidecar(latestMessages), takenOver, true);
+			};
+			if (takenOver) {
+				rearmTimer = setTimeout(complete, idleRearmMs());
+				rearmTimer.unref?.();
+			} else if (findLatestAssistantError(latestMessages)) {
+				errorExitTimer = setTimeout(complete, errorExitGraceMs());
+				errorExitTimer.unref?.();
+			} else complete();
+			return;
+		}
 		if (takenOver) {
 			// A human has this pane: never slam it shut, whatever the stance or
 			// the settle's mood. The idle re-arm window governs the exit (and
@@ -624,7 +672,6 @@ export function registerChildExtension(pi: ExtensionAPI): void {
 			rearmTimer.unref?.();
 			return;
 		}
-		if (!autoExit) return; // interactive stance — the pane stays open
 		if (!shouldAutoExitOnSettle(latestMessages)) {
 			// aborted → open for inspection (and no stale error-exit pending)
 			cancelErrorExit();

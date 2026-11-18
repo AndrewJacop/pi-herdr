@@ -31,6 +31,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	extractSessionResult,
 	readExitSidecar,
+	matchTaskSidecar,
 	type ExtractedResult,
 	type ReadSidecarResult,
 } from "./sessionfile.js";
@@ -475,7 +476,7 @@ export async function fleetWidgetOnce(deps: WidgetDeps = {}): Promise<void> {
 			sidecar: Boolean(
 				isSubstrateChild(record) &&
 					record.sessionPath &&
-					readSidecar(record.sessionPath).state === "ok",
+					matchTaskSidecar(readSidecar(record.sessionPath), record.task?.id).state === "ok",
 			),
 			activity,
 			now: now(),

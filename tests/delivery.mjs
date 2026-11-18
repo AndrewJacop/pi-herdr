@@ -24,6 +24,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Child lifecycle mocks must not touch the enclosing real worker's sidecars.
+for (const key of Object.keys(process.env)) if (key.startsWith("PI_HERDR_")) delete process.env[key];
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const jiti = createJiti(import.meta.url);
 
@@ -359,7 +362,7 @@ console.log("\n[2] Child extension — takeover + idle re-arm");
 		}
 	}
 
-	// --- interactive stance + takeover: re-arm still applies ---------------
+	// --- persistent work: abort/error grace + takeover never closes --------
 	{
 		const dir = mkdtempSync(join(tmpdir(), "pi-herdr-rearm-int-"));
 		const sess = join(dir, "s.jsonl");
@@ -367,24 +370,38 @@ console.log("\n[2] Child extension — takeover + idle re-arm");
 		process.env.PI_HERDR_SESSION = sess;
 		process.env.PI_HERDR_AUTO_EXIT = "0";
 		process.env.PI_HERDR_IDLE_REARM_MS = "60";
+		process.env.PI_HERDR_ERROR_EXIT_GRACE_MS = "30";
 		const { mockPi, registered } = makePi();
 		child.registerChildExtension(mockPi);
 		try {
-			await registered.handlers.input[0]({
-				type: "input",
-				text: "human here",
-				source: "interactive",
-			});
+			sf.writeSteerWatermark(sess, "task", "persistent-task");
+			await registered.handlers.input[0]({ text: "task", source: "interactive" });
 			shuts = 0;
+			await runTo(registered, "error");
+			assert(sidecar(sess) === undefined, "persistent error waits through the retry grace");
+			await registered.handlers.agent_settled[0]({ aborted: true }, { shutdown: () => shuts++ });
+			await sleep(60);
+			assert(shuts === 0 && sidecar(sess) === undefined, "persistent aborted settle cancels pending error completion");
+			await runTo(registered, "error");
+			await registered.handlers.agent_start[0]({});
+			await sleep(60);
+			assert(sidecar(sess) === undefined, "persistent retry start cancels pending error completion");
+			await runTo(registered, "error");
+			await sleep(60);
+			assert(shuts === 0 && sidecar(sess)?.type === "error" && sidecar(sess)?.keepOpen,
+				"persistent retry exhaustion reports a typed error without closing");
+			// Next submitted work, then a human takeover: hold delivery until re-arm.
+			sf.writeSteerWatermark(sess, "next", "taken-task");
+			await registered.handlers.input[0]({ text: "next", source: "interactive" });
+			await registered.handlers.input[0]({ text: "human here", source: "interactive" });
 			await runTo(registered, "stop");
+			assert(sidecar(sess)?.taskId === "persistent-task", "takeover holds back the new task's early completion");
 			await sleep(100);
 			const s = sidecar(sess);
-			assert(
-				shuts === 1 && s && s.type === "done" && s.rearm === true,
-				"taken-over INTERACTIVE pane re-arms too (stance-independent)",
-			);
+			assert(shuts === 0 && s?.taskId === "taken-task" && s.rearm && s.keepOpen,
+				"taken-over persistent work re-arm-delivers but keeps its pane open");
 		} finally {
-			for (const k of ["PI_HERDR_SESSION", "PI_HERDR_AUTO_EXIT", "PI_HERDR_IDLE_REARM_MS"])
+			for (const k of ["PI_HERDR_SESSION", "PI_HERDR_AUTO_EXIT", "PI_HERDR_IDLE_REARM_MS", "PI_HERDR_ERROR_EXIT_GRACE_MS"])
 				delete process.env[k];
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -971,6 +988,116 @@ console.log("\n[3] Delivery loop — detection routes + wake flags");
 			"the held close retries once the fleet stops listing the pane",
 		);
 		rmSync(dir, { recursive: true, force: true });
+	}
+
+	// --- persistent child: two submitted tasks, two reports, no pane close --
+	{
+		const child = await jiti.import(join(ROOT, "src/child.ts"), { parent: ROOT });
+		const message = await jiti.import(join(ROOT, "src/tools/message.ts"), { parent: ROOT });
+		const result = await jiti.import(join(ROOT, "src/tools/result.ts"), { parent: ROOT });
+		const sess = join(tmp, "persistent.jsonl");
+		writeSession(sess, [assistantMsg("old conversation")]);
+		process.env.PI_HERDR_SESSION = sess;
+		process.env.PI_HERDR_AUTO_EXIT = "0";
+		const handlers = {}, tools = [];
+		child.registerChildExtension({
+			on: (event, handler) => handlers[event] = handler,
+			registerTool: (tool) => tools.push(tool), registerShortcut: () => {},
+		});
+		delete process.env.PI_HERDR_SESSION;
+		delete process.env.PI_HERDR_AUTO_EXIT;
+		let shuts = 0;
+		const ctx = { shutdown: () => shuts++ };
+		const r = rec("persistent", { sessionPath: sess, stance: "interactive" });
+		const w = world([r], { notifications: "none", fleet: [{ paneId: r.paneId, status: "idle" }] });
+		const deps = {
+			registry: w.deps.registry, env: {},
+			agentGet: async () => ({ ok: true, data: { paneId: r.paneId, status: "idle" } }),
+			send: async (_pane, text, opts) => {
+				if (opts.submit) await handlers.input({ text, source: "interactive" });
+				return { ok: true, data: true };
+			},
+		};
+		const end = (text, stopReason = "stop") => handlers.agent_end({ messages: [assistantMsg(text, { stopReason })] });
+		await end("startup idle");
+		await handlers.agent_settled({}, ctx);
+		assert(!existsSync(`${sess}.exit`), "startup idle cannot invent a persistent task");
+
+		const first = await message.messageAgent({ target: r.name, text: "first task", notify: "wake" }, deps);
+		await handlers.agent_start({});
+		await end("intermediate tool request", "toolUse");
+		await handlers.agent_settled({}, ctx);
+		await w.tick();
+		assert(first.ok && w.pushes.length === 0 && !existsSync(`${sess}.exit`),
+			"intermediate assistant/tool boundary cannot report completion");
+		await handlers.agent_start({}); // compaction/retry/continuation keeps the task identity
+		await end("FIRST FINAL");
+		await w.tick();
+		assert(w.pushes.length === 0, "agent_end alone is not task completion");
+		await handlers.agent_settled({}, ctx);
+		const earlyFollowup = await message.messageAgent({ target: r.name, text: "too soon" }, deps);
+		assert(!earlyFollowup.ok && earlyFollowup.error.message.includes("awaiting delivery"),
+			"an undelivered completion refuses another task instead of overwriting its result/policy");
+		writeSession(sess, [assistantMsg("later conversation must not replace the settled result")]);
+		await w.tick();
+		await w.tick();
+		assert(w.pushes.length === 1 && w.pushes[0].wake && w.pushes[0].details.result === "FIRST FINAL" &&
+			shuts === 0 && w.closes.length === 0, "first task reports its frozen final exactly once, wakes despite configured none, and stays open");
+
+		const taskId = r.task.id;
+		await message.messageAgent({ target: r.name, text: "draft only", submit: false }, deps);
+		assert(r.task.id === taskId && !!r.delivery && sf.readSteerSubmission(sess) === null,
+			"submit:false neither arms a task nor resets delivery or the steer watermark");
+		const second = await message.messageAgent({ target: r.name, text: "second task", notify: "quiet" }, deps);
+		await handlers.agent_settled({}, ctx); // stale idle before this input actually runs
+		await w.tick();
+		const pending = await result.getAgentResult({ target: r.name }, {
+			registry: deps.registry, status: async () => ({ ok: true, data: "idle" }),
+		});
+		assert(second.ok && r.task.id !== taskId && w.pushes.length === 1 && pending.data.interim,
+			"next task ignores the old sidecar/result and transient idle before agent_start");
+		await handlers.agent_start({});
+		const steer = await message.messageAgent({ target: r.name, text: "supplement" }, {
+			...deps, agentGet: async () => ({ ok: true, data: { paneId: r.paneId, status: "working" } }),
+		});
+		assert(steer.data.taskId === second.data.taskId && r.notify === "quiet", "mid-work steering coalesces into the same task and preserves its policy");
+		await end("SECOND FINAL");
+		await handlers.agent_settled({}, ctx);
+		await w.tick();
+		await w.tick();
+		assert(w.pushes.length === 2 && !w.pushes[1].wake && w.pushes[1].details.result === "SECOND FINAL" &&
+			shuts === 0 && w.closes.length === 0, "second task reports once on next turn and the same persistent child is still open");
+		await tools.find((t) => t.name === "agent_done").execute("done", {}, undefined, undefined, ctx);
+		await handlers.agent_settled({}, ctx);
+		await handlers.session_shutdown({});
+		w.setFleet([]);
+		w.advance(20_000);
+		await w.tick();
+		assert(shuts === 1 && w.pushes.length === 2, "explicit agent_done still closes; eventual exit never re-delivers either task");
+	}
+
+	// --- configured defaults and per-call overrides share existing routing --
+	{
+		const sess = join(tmp, "notify.jsonl");
+		writeSession(sess, [assistantMsg("final")]);
+		writeFileSync(`${sess}.exit`, '{"type":"done"}');
+		let correct = true;
+		for (const configured of ["normal", "quiet", "none"]) {
+			for (const override of [undefined, "wake", "quiet", "none"]) {
+				const r = rec("routing", { sessionPath: sess, notify: override });
+				const w = world([r], { notifications: configured, fleet: [{ paneId: r.paneId, status: "idle" }] });
+				await w.tick();
+				const effective = override ?? configured;
+				correct &&= !!r.delivery && w.pushes.length === (effective === "none" ? 0 : 1) &&
+					(effective === "none" || w.pushes[0].wake === (effective !== "quiet"));
+			}
+		}
+		assert(correct, "normal/quiet/none defaults and all wake/quiet/none overrides route independently of stance");
+		const r = rec("pending", { sessionPath: sess, stance: "interactive", task: { id: "new-task" } });
+		const w = world([r], { goneGraceMs: 0 });
+		await w.tick();
+		await w.tick();
+		assert(w.pushes[0]?.details.kind === "gone", "death before task settle cannot replay a previous task's JSONL final");
 	}
 
 	// --- registration smoke: sink maps wake → sendMessage flags ------------
