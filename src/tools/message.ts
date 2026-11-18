@@ -17,8 +17,9 @@
 //     answer); everything else is enveloped
 //     `<agent-message from to>` — spawner-declared identity, never verified,
 //     no child-side parsing (the receiving MODEL recognizes the tag);
-//   - no state gates (text to a working child queues natively), no `wait`
-//     (fire-and-forget — get_agent_result(wait) covers waiting), and a
+//   - active steering coalesces into outstanding work (no task queue); new
+//     persistent tasks require the previous delivery and an idle pane. No
+//     `wait` (get_agent_result(wait) covers waiting), and a
 //     `gone` target errors naming the handle, pointing at herdr_list_agents.
 //
 // This file is the engine + thin pi registration; the send machinery lives in
@@ -28,10 +29,12 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import { herdr } from "../herdr.js";
 import { sendAgentPrompt } from "./orchestration.js";
-import { spawnRecords, type SpawnRecord } from "../spawn.js";
-import { writeSteerWatermark } from "../sessionfile.js";
+import { spawnRecords, type NotifyPolicy, type SpawnRecord } from "../spawn.js";
+import { clearSteerWatermark, matchTaskSidecar, readExitSidecar, writeSteerWatermark } from "../sessionfile.js";
 import {
 	normalizeAgent,
 	type HerdrErrorCode,
@@ -56,6 +59,7 @@ export interface MessageParams {
 	target: string;
 	text: string;
 	submit?: boolean;
+	notify?: NotifyPolicy;
 }
 
 /** Structured receipt (tool `details`). */
@@ -73,6 +77,9 @@ export interface MessageReceipt {
 	/** Registry handle when the target is one of this session's spawns. */
 	name?: string;
 	submit: boolean;
+	/** Present only for supervised submitted work. */
+	taskId?: string;
+	notify?: NotifyPolicy;
 }
 
 /** Injectable seams (offline red-green; defaults hit herdr + disk). */
@@ -289,10 +296,12 @@ async function resolveTarget(
 
 // ---- the engine ----------------------------------------------------------------
 
-/**
- * message_agent, end to end: resolve → physics branch → inject → receipt.
- * Fire-and-forget by design; no state gates.
- */
+// One sender in this parent at a time per tracked pane. This is NOT a
+// cross-process broker; independent parents/human input cannot be serialized.
+const sending = new WeakSet<SpawnRecord>();
+
+/** Resolve → physics branch → inject → receipt. Persistent children have
+ * one outstanding task; mid-work messages coalesce into that settled work. */
 export async function messageAgent(
 	params: MessageParams,
 	deps: MessageDeps = {},
@@ -307,36 +316,74 @@ export async function messageAgent(
 		? params.text
 		: envelope(from, resolved.to, params.text);
 
-	const send = deps.send ?? sendAgentPrompt;
-	// Steer watermark (issue 06): the exact text about to be typed into a
-	// registry child. The child matches its input event against it so the
-	// orchestrator's own follow-up is never mistaken for a human takeover.
-	// A delivery to a registry record is also NEW WORK (issue 10): it ends
-	// the interrupted state — stop-and-redirect in one live flow.
-	if (resolved.kind === "live" && resolved.record) {
-		resolved.record.interruptedAt = undefined;
-		if (resolved.record.sessionPath)
-			writeSteerWatermark(resolved.record.sessionPath, payload);
-	}
-	const r = await send(resolved.paneId, payload, {
-		submit,
-		signal: deps.signal,
-	});
-	if (!r.ok) return r;
+	const record = resolved.record;
+	const supervised = record?.kind.toLowerCase() === "pi" && Boolean(record.sessionPath);
+	if (params.notify !== undefined && (!submit || !supervised))
+		return { ok: false, error: err("VALIDATION_ERROR", "notify requires submit:true and a Pi child spawned by this session; peer/raw panes have no supervised completion channel.") };
+	if (record && sending.has(record))
+		return { ok: false, error: err("VALIDATION_ERROR", "another message to this child is in flight; retry after its receipt.") };
+	if (record) sending.add(record);
+	try {
+		// Check task/delivery AFTER the last await: target/identity lookups
+		// can let outstanding work settle and be delivered. Keep these gates
+		// atomic with task arming and the per-record send lock.
+		const persistent = supervised && record?.stance === "interactive";
+		if (submit && persistent && record.task && !record.delivery &&
+			matchTaskSidecar(readExitSidecar(record.sessionPath!), record.task.id).state === "ok")
+			return { ok: false, error: err("VALIDATION_ERROR", "the previous task's completion is awaiting delivery; retry after the next delivery tick.") };
+		const newTask = submit && persistent && (!record.task || Boolean(record.delivery));
+		if (newTask && resolved.state !== "idle" && resolved.state !== "done")
+			return { ok: false, error: err("VALIDATION_ERROR", "a new persistent task requires an idle pane; active messages only steer an outstanding task.") };
 
-	return {
-		ok: true,
-		data: {
-			delivered: true,
-			target: resolved.paneId,
-			to: resolved.to,
-			from,
-			state: resolved.state ?? "unknown",
-			delivery: blocked ? "answer" : "message",
-			...(resolved.name ? { name: resolved.name } : {}),
+		// Arm BEFORE sending: a fast child can settle before the CLI returns.
+		// Unsubmitted text changes neither task identity nor its policy.
+		const previous = record && {
+			task: record.task, delivery: record.delivery, notify: record.notify,
+			interruptedAt: record.interruptedAt, goneAt: record.goneAt,
+			blockedNotified: record.blockedNotified, paneClosePending: record.paneClosePending,
+		};
+		if (record && submit) {
+			record.interruptedAt = undefined;
+			if (newTask) {
+				record.task = { id: randomUUID() };
+				record.delivery = undefined;
+				record.notify = params.notify; // omission inherits config, not the previous task
+				record.goneAt = undefined;
+				record.blockedNotified = false;
+				record.paneClosePending = false;
+			} else if (params.notify !== undefined) record.notify = params.notify;
+			if (record.sessionPath)
+				writeSteerWatermark(record.sessionPath, payload, record.task?.id);
+		}
+		const r = await (deps.send ?? sendAgentPrompt)(resolved.paneId, payload, {
 			submit,
-		},
-	};
+			signal: deps.signal,
+		});
+		if (!r.ok) {
+			if (record && previous && submit) {
+				Object.assign(record, previous);
+				if (record.sessionPath) clearSteerWatermark(record.sessionPath);
+			}
+			return r;
+		}
+
+		return {
+			ok: true,
+			data: {
+				delivered: true,
+				target: resolved.paneId,
+				to: resolved.to,
+				from,
+				state: resolved.state ?? "unknown",
+				delivery: blocked ? "answer" : "message",
+				...(resolved.name ? { name: resolved.name } : {}),
+				submit,
+				...(submit && supervised ? { taskId: record?.task?.id, notify: record?.notify } : {}),
+			},
+		};
+	} finally {
+		if (record) sending.delete(record);
+	}
 }
 
 // ---- registration --------------------------------------------------------------
@@ -350,7 +397,10 @@ const DESCRIPTION =
 	"for option-list questions use herdr_send_keys instead, typed text never reaches option rows. Any other state " +
 	"gets the text wrapped as <agent-message from=\"…\" to=\"…\">…</agent-message> — when YOU receive that tag it is a " +
 	"message from another agent (identity is spawner-declared, never verified); reply in kind or in conversation. " +
-	"No state gates: text to a working child queues natively. Fire-and-forget: the receipt reports " +
+	"Text to working children steers/coalesces into the outstanding task, not an independently tracked task. " +
+	"Persistent Pi children support one outstanding task: after its completion is delivered, an idle submitted follow-up starts the next. " +
+	"On mid-work steering, an explicit notify updates the current task. submit:false only types text, never arms a task. " +
+	"Concurrent sends from this parent are refused; other parents/humans are not serialized. Fire-and-forget: the receipt reports " +
 	"{delivered, target, state, delivery: \"message\"|\"answer\"}, but delivered-to-the-pane ≠ consumed-by-the-model — " +
 	"there is no read receipt. Replies arrive as injected <agent-message> text or the next completion notification " +
 	"(herdr_get_agent_result(wait) is the wait). A gone target errors naming the handle — see herdr_list_agents; " +
@@ -373,6 +423,9 @@ export function registerMessageTool(pi: ExtensionAPI): void {
 					'Pane id (w1:p3), herdr name, spawn-registry handle, or the reserved role "orchestrator".',
 			}),
 			text: Type.String({ description: "Message text to deliver." }),
+			notify: Type.Optional(StringEnum(["wake", "quiet", "none"] as const, {
+				description: "Completion: wake = final + wake parent, quiet = final on next turn, none = pull-only. Omit to inherit settings for a new task. Only submit:true to this session's Pi children.",
+			})),
 			submit: Type.Optional(
 				Type.Boolean({
 					description:
@@ -382,7 +435,7 @@ export function registerMessageTool(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, p, signal) {
 			const r = await messageAgent(
-				{ target: p.target, text: p.text, submit: p.submit },
+				{ target: p.target, text: p.text, submit: p.submit, notify: p.notify },
 				{ signal },
 			);
 			if (!r.ok) return fail(r.error);

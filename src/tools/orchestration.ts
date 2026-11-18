@@ -25,7 +25,7 @@ import {
 	type ToolReturn,
 } from "../env.js";
 import { spawnRecords, type SpawnRecord } from "../spawn.js";
-import { readExitSidecar, type ReadSidecarResult } from "../sessionfile.js";
+import { matchTaskSidecar, readExitSidecar, type ReadSidecarResult } from "../sessionfile.js";
 import {
 	isSubstrateChild,
 	projectStatus,
@@ -574,7 +574,7 @@ function projectedLabel(
 	const sidecarOk = Boolean(
 		isSubstrateChild(record) &&
 			record.sessionPath &&
-			(deps.readSidecar ?? readExitSidecar)(record.sessionPath).state === "ok",
+			matchTaskSidecar((deps.readSidecar ?? readExitSidecar)(record.sessionPath), record.task?.id).state === "ok",
 	);
 	const proj = projectStatus(record, {
 		live,

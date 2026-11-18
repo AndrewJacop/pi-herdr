@@ -382,8 +382,8 @@ console.log("\n[7] Receipt shape + registration");
 	assert(
 		!!tool.parameters.properties.target &&
 			!!tool.parameters.properties.text &&
-			!!tool.parameters.properties.submit,
-		"schema: required target+text, optional submit",
+			!!tool.parameters.properties.submit && eq(tool.parameters.properties.notify.enum, ["wake", "quiet", "none"]),
+		"schema: required target+text, optional submit and notify",
 	);
 	// the description teaches receiving models the envelope tag
 	assert(
@@ -396,7 +396,75 @@ console.log("\n[7] Receipt shape + registration");
 	);
 }
 
-console.log("\n[8] Registry contract — spawnRecords stays the shared home");
+console.log("\n[8] Supervised completion overrides and bounded submissions");
+{
+	const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+	const { tmpdir } = await import("node:os");
+	const dir = mkdtempSync(join(tmpdir(), "pi-herdr-message-"));
+	try {
+		const send = recorder();
+		const foreign = await msg.messageAgent({ target: "peer", text: "x", notify: "wake" }, DEPS({ send }));
+		const unsubmitted = await msg.messageAgent({ target: "peer", text: "x", submit: false, notify: "quiet" }, DEPS({ send }));
+		const nonPi = await msg.messageAgent({ target: "scout", text: "x", notify: "none" }, DEPS({ send,
+			registry: registryWith([record({ kind: "claude", sessionPath: join(dir, "cc.jsonl") })]),
+			agentGet: okGet("w1:p9", "scout", "idle"),
+		}));
+		assert([foreign, unsubmitted, nonPi].every((r) => !r.ok && r.error.code === "VALIDATION_ERROR") && send.calls.length === 0,
+			"unsupported explicit notify (peer/non-Pi/unsubmitted) refuses before sending");
+		const r = record({ sessionPath: join(dir, "s.jsonl"), task: { id: "old" }, notify: "wake", delivery: { kind: "done", at: 1 } });
+		const deps = DEPS({ registry: registryWith([r]), agentGet: okGet(r.paneId, r.name, "idle") });
+		const next = await msg.messageAgent({ target: r.name, text: "next" }, deps);
+		assert(next.ok && r.task.id !== "old" && r.notify === undefined && !r.delivery,
+			"new submitted task omission inherits config instead of the previous override");
+		const activeTask = r.task;
+		const answer = await msg.messageAgent({ target: r.name, text: "yes", notify: "quiet" }, {
+			...deps, agentGet: okGet(r.paneId, r.name, "blocked"),
+		});
+		assert(answer.ok && answer.data.delivery === "answer" && r.task === activeTask && r.notify === "quiet",
+			"blocked raw answer steers the existing task and can update its completion policy");
+		r.delivery = { kind: "done", at: 2 };
+		const before = { ...r };
+		const failed = await msg.messageAgent({ target: r.name, text: "lost", notify: "none" }, {
+			...deps, send: async () => ({ ok: false, error: { code: "TIMEOUT", message: "send failed" } }),
+		});
+		assert(!failed.ok && r.task === before.task && r.delivery === before.delivery && r.notify === before.notify,
+			"failed submission restores task, delivery and notification policy");
+		let release;
+		const pending = msg.messageAgent({ target: r.name, text: "serial" }, {
+			...deps, send: () => new Promise((resolve) => release = resolve),
+		});
+		await new Promise(setImmediate);
+		const concurrent = await msg.messageAgent({ target: r.name, text: "racing" }, deps);
+		release({ ok: true, data: true });
+		await pending;
+		assert(!concurrent.ok && concurrent.error.message.includes("in flight"), "concurrent sends from this parent refuse rather than overwrite task identity");
+		// Feature-owned task gates: complete work inside the identity lookup
+		// seam, after a yield but before it returns. Pending delivery must block
+		// steering; delivered work needs an idle pane for a new task. This keeps
+		// task-state coverage without duplicating the blocked-answer delay fixture.
+		for (const delivered of [false, true]) {
+			const race = record({ sessionPath: join(dir, "race.jsonl"), task: { id: `race-${delivered}` }, notify: "wake" });
+			const send = recorder();
+			const outcome = await msg.messageAgent({ target: race.name, text: "late steer" }, DEPS({
+				registry: registryWith([race]), send, env: { HERDR_PANE_ID: "parent:p1" },
+				agentGet: async (target) => {
+					if (target !== "parent:p1")
+						return { ok: true, data: { paneId: race.paneId, status: "working" } };
+					await Promise.resolve();
+					writeFileSync(`${race.sessionPath}.exit`, JSON.stringify({ type: "done", taskId: race.task.id, keepOpen: true }));
+					if (delivered) race.delivery = { kind: "done", at: 3 };
+					return { ok: true, data: { paneId: "parent:p1", name: "parent", status: "working" } };
+				},
+			}));
+			const expectedGate = delivered ? "requires an idle pane" : "awaiting delivery";
+			assert(!outcome.ok && outcome.error.code === "VALIDATION_ERROR" && outcome.error.message.includes(expectedGate) &&
+				send.calls.length === 0 && race.notify === "wake" && race.task.id === `race-${delivered}` && Boolean(race.delivery) === delivered,
+				`task completion ${delivered ? "delivered" : "pending"} during lookup enforces its gate without mutating task or policy`);
+		}
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+console.log("\n[9] Registry contract — spawnRecords stays the shared home");
 {
 	spawnMod.clearSpawnRegistry();
 	assert(

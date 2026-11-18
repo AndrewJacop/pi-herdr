@@ -310,12 +310,12 @@ console.log("\n[4] identity + mode-hint blocks — lean, golden strings");
 		"autonomous mode-hint golden",
 	);
 	assert(
-		lp.buildModeHintBlock({ stance: "interactive", sessionMode: "standalone" }) === "",
-		"interactive + standalone → no mode hint",
+		lp.buildModeHintBlock({ stance: "interactive", sessionMode: "standalone" }).includes("session stays open"),
+		"persistent mode hint teaches automatic task reporting without agent_done",
 	);
 	assert(
-		lp.buildModeHintBlock({ stance: "interactive", sessionMode: "fork" }) ===
-			"Your session was seeded from a parent conversation; treat earlier turns as context, not your own actions.",
+		lp.buildModeHintBlock({ stance: "interactive", sessionMode: "fork" }).endsWith(
+			"Your session was seeded from a parent conversation; treat earlier turns as context, not your own actions."),
 		"fork mode-hint golden",
 	);
 	assert(

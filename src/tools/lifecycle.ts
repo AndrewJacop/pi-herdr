@@ -384,6 +384,9 @@ export async function resumeAgent(
 	record.interruptedAt = undefined;
 	record.lastStatus = undefined;
 	record.taskArtifactPath = undefined;
+	record.task = undefined;
+	record.notify = undefined;
+	record.paneClosePending = false;
 	clearSidecars(record.sessionPath);
 
 	// 7. start now, or re-enter the queue when the fleet is at cap.

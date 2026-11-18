@@ -43,6 +43,8 @@ import {
 	extractSessionResult,
 	minedAssistantError,
 	readExitSidecar,
+	matchTaskSidecar,
+	sidecarResult,
 	type ExtractedResult,
 	type ReadSidecarResult,
 } from "../sessionfile.js";
@@ -210,13 +212,13 @@ async function inspectRecord(
 	const base = viewBase(target, record);
 	const isPi = record.kind.toLowerCase() === "pi" && Boolean(record.sessionPath);
 	const extract = deps.extract ?? extractSessionResult;
-	const readSidecar = deps.readSidecar ?? readExitSidecar;
+	const readSidecar = (path: string) => matchTaskSidecar((deps.readSidecar ?? readExitSidecar)(path), record.task?.id);
 
 	// 1. typed sidecar — the child's own terminal declaration.
 	if (isPi && record.sessionPath) {
 		const sidecar = readSidecar(record.sessionPath);
 		if (sidecar.state === "ok") {
-			const extracted = extract(record.sessionPath);
+			const extracted = sidecarResult(sidecar.sidecar, () => extract(record.sessionPath!));
 			if (sidecar.sidecar.type === "done") {
 				return {
 					...base,
@@ -269,7 +271,7 @@ async function inspectRecord(
 			if (isPi && record.sessionPath) {
 				const sidecar = readSidecar(record.sessionPath);
 				if (sidecar.state === "ok" && sidecar.sidecar.type === "done") {
-					const extracted = extract(record.sessionPath);
+					const extracted = sidecarResult(sidecar.sidecar, () => extract(record.sessionPath!));
 					return {
 						...base,
 						status: "done",
@@ -297,7 +299,7 @@ async function inspectRecord(
 				...base,
 				status: "gone",
 				lastKnown: lastKnownOf(record),
-				...(isPi && record.sessionPath
+				...(isPi && record.sessionPath && !record.task
 					? (() => {
 							// The pane died without a sidecar. If its last word was a
 							// failed attempt, that failure IS the terminal answer —
@@ -340,6 +342,12 @@ async function inspectRecord(
 	if (live.data === "blocked") return { ...base, status: "blocked" };
 
 	if (live.data === "idle" || live.data === "done") {
+		if (record.task && isPi) {
+			// A coarse idle may be a retry/compaction gap or the old result
+			// before the new input starts. Only this task's sidecar is final.
+			return { ...base, ...interimProjection(record, deps, live.data), interim: true,
+				note: "awaiting this submitted task's settled completion" };
+		}
 		const settled = record.submitted || record.sawWorking;
 		if (!settled) return { ...base, status: "starting" };
 		// settled with an unconsumed result — pi children: read the JSONL.
@@ -366,8 +374,8 @@ async function inspectRecord(
 					};
 				}
 				if (mined) {
-					// Interactive children never write a sidecar and never
-					// auto-exit: a settled error is final for them.
+					// Legacy/untracked interactive work has no task-sidecar
+					// contract; retain its coarse settled-error fallback.
 					return {
 						...base,
 						status: "error",

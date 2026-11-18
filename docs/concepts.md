@@ -86,8 +86,8 @@ The commands the tools use (all current-surface, no legacy fallbacks):
   identity, never verified; no child-side parsing — the receiving model
   recognizes the tag).
 - **`herdr_get_agent_result`** — reads the child's session JSONL (the exact
-  last assistant message) and `<session>.exit` (the typed completion sidecar)
-  directly; `agent read` only as the pane-tail fallback for panes this session
+  last assistant message) and `<session>.exit` (the typed completion sidecar,
+  including a frozen final message for persistent submitted tasks) directly; `agent read` only as the pane-tail fallback for panes this session
   did not spawn. `wait` races nothing: it polls sidecar → pane status until a
   terminal state.
 

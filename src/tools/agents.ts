@@ -70,7 +70,9 @@ const DESCRIPTION =
 	"2000 chars are written to `<session>.task.md` and delivered as a one-line reference. Raw CLI flags " +
 	"ride `agent_args` (spawn level, appended after the definition's `args:` — last-wins). Stance (v0.6): " +
 	"autonomous by default (auto-exit on settle; pane closes, session retained), `interactive: true` or " +
-	"`auto_exit: false` keeps the pane open. Background by default; `wait: true` blocks until " +
+	"`auto_exit: false` keeps the pane open. Persistent Pi children report each submitted task once at settle without closing; " +
+	"after delivery, an idle herdr_message_agent follow-up starts the next task. Mid-work steering coalesces into the current task. " +
+	"The optional notify policy is independent of stance. Background by default; `wait: true` blocks until " +
 	"done-or-blocked, `wait: <ms>` returns the current state on expiry. At max_parallel_agents the " +
 	"spawn is accepted queued (no pane until a slot frees; wait waits through the queue). " +
 	"`isolated: true` runs the agent in a fresh auto-created herdr-side git worktree " +
@@ -164,6 +166,9 @@ export function registerAgents(pi: ExtensionAPI): void {
 			prompt: Type.String({
 				description: "Task for the agent (its first prompt).",
 			}),
+			notify: Type.Optional(StringEnum(["wake", "quiet", "none"] as const, {
+				description: "Completion: wake = final + wake parent, quiet = final on next turn, none = pull-only. Omit to inherit settings, independently of persistence. Pi children only.",
+			})),
 			type: Type.Optional(
 				Type.String({
 					description:
@@ -231,6 +236,7 @@ export function registerAgents(pi: ExtensionAPI): void {
 			const r = await spawnAgent(
 				{
 					prompt: p.prompt,
+					notify: p.notify,
 					fork: p.fork,
 					type: p.type,
 					agent: p.agent,
